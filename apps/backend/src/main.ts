@@ -12,9 +12,6 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { User } from './users/entities/user.entity';
-import { Product } from './products/entities/product.entity';
-import { Order } from './orders/entities/order.entity';
-import { OrderItem } from './orders/entities/order-item.entity';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -42,13 +39,8 @@ async function seedDatabase(app: any) {
 
   // 获取repositories
   const userRepo = dataSource.getRepository(User);
-  const productRepo = dataSource.getRepository(Product);
-  const orderRepo = dataSource.getRepository(Order);
-  const orderItemRepo = dataSource.getRepository(OrderItem);
 
   const userCount = await userRepo.count();
-  const productCount = await productRepo.count();
-  const orderCount = await orderRepo.count();
 
   if (userCount === 0) {
     // 创建加密密码
@@ -79,84 +71,6 @@ async function seedDatabase(app: any) {
     ]);
     console.log('用户种子数据已创建（默认密码：123456）');
   }
-
-  if (productCount === 0) {
-    await productRepo.save([
-      {
-        name: 'iPhone 14',
-        price: 5999,
-        category: '手机',
-        description: 'Apple最新款手机',
-        stock: 100,
-      },
-      {
-        name: 'MacBook Pro',
-        price: 12999,
-        category: '电脑',
-        description: '专业人士的首选',
-        stock: 50,
-      },
-      {
-        name: 'iPad Air',
-        price: 4399,
-        category: '平板',
-        description: '轻薄强大的平板电脑',
-        stock: 75,
-      },
-    ]);
-    console.log('商品种子数据已创建');
-  }
-
-  if (orderCount === 0) {
-    // 创建示例订单
-    const orders = await orderRepo.save([
-      {
-        userId: 1,
-        totalAmount: 5999,
-        status: 'paid',
-        address: '北京市朝阳区XX街道',
-      },
-      {
-        userId: 2,
-        totalAmount: 12999,
-        status: 'shipped',
-        address: '上海市浦东新区XX路',
-      },
-      {
-        userId: 1,
-        totalAmount: 8798,
-        status: 'pending',
-        address: '北京市朝阳区XX街道',
-      },
-    ]);
-
-    // 为每个订单创建订单项
-    await orderItemRepo.save([
-      {
-        productId: 1,
-        name: 'iPhone 14',
-        price: 5999,
-        quantity: 1,
-        order: orders[0],
-      },
-      {
-        productId: 2,
-        name: 'MacBook Pro',
-        price: 12999,
-        quantity: 1,
-        order: orders[1],
-      },
-      {
-        productId: 3,
-        name: 'iPad Air',
-        price: 4399,
-        quantity: 2,
-        order: orders[2],
-      },
-    ]);
-
-    console.log('订单种子数据已创建');
-  }
 }
 
 async function bootstrap() {
@@ -174,22 +88,17 @@ async function bootstrap() {
   ensureUploadDirectory(configService.get<string>('upload.dest'));
 
   // 使用Winston作为默认logger
-  app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
+  const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
+  app.useLogger(logger);
 
-  // 安全中间件配置
-  app.use(
-    helmet({
-      contentSecurityPolicy:
-        configService.get<string>('nodeEnv') === 'production' ? undefined : false,
-      crossOriginEmbedderPolicy: false, // 允许Swagger UI正常工作
-    }),
-  );
+  // 安全头
+  app.use(helmet());
 
   // 启用响应压缩
   app.use(compression());
 
-  // 全局异常过滤器（注入i18n服务）
-  app.useGlobalFilters(new GlobalExceptionFilter(i18nService));
+  // 全局异常过滤器（注入i18n服务和logger）
+  app.useGlobalFilters(new GlobalExceptionFilter(i18nService as any, logger as any));
 
   // 全局响应拦截器
   app.useGlobalInterceptors(new ResponseInterceptor());
@@ -211,13 +120,11 @@ async function bootstrap() {
     }),
   );
 
-  // 启用CORS（根据配置）
-  const corsOrigin = configService.get<string>('security.corsOrigin');
+  // 允许跨域
   app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(','),
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Lang'],
   });
 
   // 设置API文档

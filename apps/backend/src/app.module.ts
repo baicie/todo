@@ -15,10 +15,10 @@ import {
 import { APP_GUARD } from '@nestjs/core';
 import { diskStorage } from 'multer';
 import { UsersModule } from './users/users.module';
-import { ProductsModule } from './products/products.module';
-import { OrdersModule } from './orders/orders.module';
 import { AuthModule } from './auth/auth.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { ListsModule } from './lists/lists.module';
+import { TasksModule } from './tasks/tasks.module';
 import { HealthModule } from './health/health.module';
 import { LanguageModule } from './language/language.module';
 import { winstonConfig } from './common/config/logger.config';
@@ -114,10 +114,10 @@ import { AuditLog } from './common/entities/audit-log.entity';
     }),
     // 业务模块
     UsersModule,
-    ProductsModule,
-    OrdersModule,
     AuthModule,
     UploadsModule,
+    ListsModule,
+    TasksModule,
     // 系统模块
     HealthModule,
     LanguageModule,

@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@theme {
+  /* 基础主题色 - Microsoft To Do 风格 */
+  --color-theme-primary: var(--theme-primary);
+  --color-theme-bg: var(--theme-bg);
+  --color-theme-text: var(--theme-text);
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-hover: var(--sidebar-hover);
+}
+
+:root {
+  /* 默认主题（蓝色） */
+  --theme-primary: #3b82f6; /* blue-500 */
+  --theme-bg: #f8fafc; /* gray-50 - 更柔和的背景色 */
+  --theme-text: #111827; /* gray-900 - 加深的字体颜色 */
+  --sidebar-bg: #ffffff; /* white - 侧边栏改为纯白 */
+  --sidebar-hover: #f1f5f9; /* gray-100 */
+  
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #111827;
+    background-color: #f8fafc;
+  }
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}

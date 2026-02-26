@@ -4,17 +4,21 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
-  Logger,
+  Inject,
+  LoggerService,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { BusinessException, ErrorCode } from '../exceptions/business.exception';
 import type { ErrorResponse } from '../interfaces/response.interface';
+import { I18nService } from 'nestjs-i18n';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(GlobalExceptionFilter.name);
-
-  constructor(private readonly i18n: any) {}
+  constructor(
+    private readonly i18n: I18nService<Record<string, unknown>>,
+    @Inject(WINSTON_MODULE_NEST_PROVIDER) private readonly logger: LoggerService,
+  ) {}
 
   async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const ctx = host.switchToHttp();
@@ -27,7 +31,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let details: any;
 
     // 获取当前语言
-    const lang = this.i18n.resolveLanguage ? this.i18n.resolveLanguage(request) : 'zh';
+    const lang = (this.i18n as any).resolveLanguage
+      ? (this.i18n as any).resolveLanguage(request)
+      : 'zh';
 
     if (exception instanceof BusinessException) {
       // 业务异常
@@ -85,6 +91,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       code = ErrorCode.UNKNOWN_ERROR;
 
+      // 强制在控制台输出详细错误信息
+      console.error('🚨 UNKNOWN ERROR:', exception);
+      if (exception instanceof Error) {
+        console.error(exception.stack);
+      }
+
       try {
         message = await this.i18n.translate('common.internalError', { lang });
       } catch {
@@ -98,21 +110,42 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       );
     }
 
-    const errorResponse: ErrorResponse = {
-      success: false,
-      message,
-      code,
+    // 记录错误日志
+    const errorLog = {
       timestamp: new Date().toISOString(),
       path: request.url,
-      ...(details && { details }),
+      method: request.method,
+      status,
+      code,
+      message,
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+      details: details || (exception instanceof Error ? exception.message : String(exception)),
+      stack: exception instanceof Error ? exception.stack : undefined,
     };
 
-    // 根据错误级别记录日志
     if (status >= 500) {
-      this.logger.error(`${request.method} ${request.url}`, exception);
+      this.logger.error(
+        `[${request.method}] ${request.url} - ${status} - ${message}`,
+        errorLog, // 使用 errorLog 对象记录详细信息
+        'GlobalExceptionFilter',
+      );
     } else {
-      this.logger.warn(`${request.method} ${request.url} - ${message}`);
+      this.logger.warn(
+        `[${request.method}] ${request.url} - ${status} - ${message}`,
+        errorLog, // 使用 errorLog 对象记录详细信息
+        'GlobalExceptionFilter',
+      );
     }
+
+    const errorResponse: ErrorResponse = {
+      success: false,
+      code,
+      message,
+      timestamp: new Date().toISOString(),
+      path: request.url,
+      details,
+    };
 
     response.status(status).json(errorResponse);
   }

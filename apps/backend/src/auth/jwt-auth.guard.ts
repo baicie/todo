@@ -13,8 +13,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const authEnabled = this.configService.get<boolean>('auth.enabled');
 
     if (!authEnabled) {
-      // 如果认证被禁用，直接返回true，跳过JWT验证
-      console.log('🔓 认证已禁用，跳过JWT验证');
+      // 如果认证被禁用，模拟一个默认用户并附加到请求对象上
+      const request = context.switchToHttp().getRequest();
+      request.user = {
+        id: 1, // 默认用户ID
+        email: 'default@example.com',
+        role: 'user',
+        name: 'Default User',
+      };
+      // console.log('🔓 认证已禁用，使用默认用户身份');
       return true;
     }
 
