@@ -3,6 +3,7 @@ import {
   Calendar,
   Check,
   Circle,
+  FileIcon,
   Paperclip,
   Plus,
   Repeat,
@@ -25,6 +26,14 @@ interface Step {
   createdAt: string;
 }
 
+interface TaskFile {
+  id?: number;
+  filename: string;
+  originalname: string;
+  url?: string;
+  path?: string;
+}
+
 interface Task {
   id: string;
   title: string;
@@ -32,7 +41,10 @@ interface Task {
   isImportant: boolean;
   addToMyDay: boolean;
   dueDate?: string | null;
-  reminderDate?: string;
+  reminderDate?: string | null;
+  repeatPattern?: string | null;
+  category?: string | null;
+  files?: TaskFile[];
   description?: string;
   steps?: Step[];
   createdAt?: string;
@@ -56,6 +68,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editingStepTitle, setEditingStepTitle] = useState('');
   const [stepToDelete, setStepToDelete] = useState<string | null>(null);
+  const [isRepeatMenuOpen, setIsRepeatMenuOpen] = useState(false);
+  const [isRemindMenuOpen, setIsRemindMenuOpen] = useState(false);
+  const [isDueDateMenuOpen, setIsDueDateMenuOpen] = useState(false);
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const updateTaskMutation = useMutation({
@@ -145,6 +161,35 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
     setEditingStepTitle(step.title);
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // 假设后端有一个上传接口 /uploads/upload
+      const res = await api.post('/uploads/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      // 假设后端返回文件元数据，或者我们手动构建一个文件对象
+      // 这里假设后端返回 { filename, originalname, ... }
+      const newFile = res.data;
+      const updatedFiles = [...(task.files || []), newFile];
+      updateTaskMutation.mutate({ files: updatedFiles });
+    } catch (error) {
+      console.error('File upload failed:', error);
+      alert('文件上传失败');
+    }
+  };
+
+  const removeFile = (index: number) => {
+    const updatedFiles = [...(task.files || [])];
+    updatedFiles.splice(index, 1);
+    updateTaskMutation.mutate({ files: updatedFiles });
+  };
+
   const getDueDateText = (dateStr?: string | null) => {
     if (!dateStr) return { text: t('drawer.addDueDate'), isOverdue: false };
     const date = new Date(dateStr);
@@ -165,6 +210,36 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
     if (isTomorrow) text = '明天';
 
     return { text, isOverdue };
+  };
+
+  const getRepeatText = (pattern?: string | null) => {
+    switch (pattern) {
+      case 'daily':
+        return '每天';
+      case 'weekly':
+        return '每周';
+      case 'monthly':
+        return '每月';
+      case 'yearly':
+        return '每年';
+      default:
+        return t('drawer.repeat');
+    }
+  };
+
+  const getCategoryText = (category?: string | null) => {
+    switch (category) {
+      case 'blue':
+        return '蓝色类别';
+      case 'red':
+        return '红色类别';
+      case 'green':
+        return '绿色类别';
+      case 'orange':
+        return '橙色类别';
+      default:
+        return t('drawer.pickCategory');
+    }
   };
 
   return (
@@ -315,52 +390,385 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </button>
           </div>
 
-          <div className="bg-white rounded-md shadow-sm overflow-hidden">
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100">
-              <Bell size={18} />
-              <span>{t('drawer.remindMe')}</span>
-            </button>
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100 relative">
-              <Calendar size={18} />
-              {(() => {
-                const { text, isOverdue } = getDueDateText(task.dueDate);
-                return <span className={isOverdue ? 'text-red-500' : ''}>{text}</span>;
-              })()}
-              {task.dueDate && (
-                <X
-                  size={16}
-                  className="ml-auto text-gray-400 hover:text-gray-600 z-10"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    updateTaskMutation.mutate({ dueDate: null }); // Use null instead of undefined
-                  }}
-                />
-              )}
-              <input
-                type="date"
-                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                value={task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : ''}
-                onChange={(e) => {
-                  const date = e.target.value ? new Date(e.target.value).toISOString() : null;
-                  updateTaskMutation.mutate({ dueDate: date });
-                }}
-              />
-            </button>
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-              <Repeat size={18} />
-              <span>{t('drawer.repeat')}</span>
-            </button>
+          <div className="bg-white rounded-md shadow-sm">
+            <div className="relative">
+              <button
+                onClick={() => setIsRemindMenuOpen(!isRemindMenuOpen)}
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              >
+                <Bell size={18} />
+                <span>
+                  {task.reminderDate
+                    ? new Date(task.reminderDate).toLocaleString()
+                    : t('drawer.remindMe')}
+                </span>
+                {task.reminderDate && (
+                  <div
+                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateTaskMutation.mutate({ reminderDate: null });
+                    }}
+                  >
+                    <X size={16} />
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isRemindMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-20"
+                      onClick={() => setIsRemindMenuOpen(false)}
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
+                    >
+                      {[
+                        {
+                          label: '今日晚些时候',
+                          time: '20:00',
+                          getDate: () => {
+                            const d = new Date();
+                            d.setHours(20, 0, 0, 0);
+                            return d;
+                          },
+                        },
+                        {
+                          label: '明天',
+                          time: '周日, 9:00',
+                          getDate: () => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + 1);
+                            d.setHours(9, 0, 0, 0);
+                            return d;
+                          },
+                        },
+                        {
+                          label: '下周',
+                          time: '周一, 9:00',
+                          getDate: () => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7));
+                            d.setHours(9, 0, 0, 0);
+                            return d;
+                          },
+                        },
+                      ].map((option, index) => (
+                        <button
+                          key={index}
+                          onClick={() => {
+                            updateTaskMutation.mutate({
+                              reminderDate: option.getDate().toISOString(),
+                            });
+                            setIsRemindMenuOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Repeat size={16} className="text-gray-400" />
+                            <span>{option.label}</span>
+                          </div>
+                          <span className="text-gray-400 text-xs">{option.time}</span>
+                        </button>
+                      ))}
+                      <div className="border-t border-gray-100 my-1" />
+                      <div className="relative">
+                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                          <Calendar size={16} className="text-gray-400" />
+                          <span>选择日期和时间</span>
+                        </button>
+                        <input
+                          type="datetime-local"
+                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                          onChange={(e) => {
+                            const date = e.target.value
+                              ? new Date(e.target.value).toISOString()
+                              : null;
+                            updateTaskMutation.mutate({ reminderDate: date });
+                            setIsRemindMenuOpen(false);
+                          }}
+                        />
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <div className="relative">
+              <button
+                onClick={() => setIsDueDateMenuOpen(!isDueDateMenuOpen)}
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              >
+                <Calendar size={18} />
+                {(() => {
+                  const { text, isOverdue } = getDueDateText(task.dueDate);
+                  return <span className={isOverdue ? 'text-red-500' : ''}>{text}</span>;
+                })()}
+                {task.dueDate && (
+                  <div
+                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateTaskMutation.mutate({ dueDate: null });
+                    }}
+                  >
+                    <X size={16} />
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isDueDateMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-20"
+                      onClick={() => setIsDueDateMenuOpen(false)}
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
+                    >
+                      <div className="px-4 py-2 text-sm font-medium text-gray-900 border-b border-gray-100 mb-1">
+                        截止
+                      </div>
+                      {[
+                        {
+                          label: '今天',
+                          getWeekday: () =>
+                            new Date().toLocaleDateString('zh-CN', { weekday: 'short' }),
+                          getDate: () => new Date(),
+                        },
+                        {
+                          label: '明天',
+                          getWeekday: () => {
+                            const tomorrow = new Date();
+                            tomorrow.setDate(tomorrow.getDate() + 1);
+                            return tomorrow.toLocaleDateString('zh-CN', { weekday: 'short' });
+                          },
+                          getDate: () => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + 1);
+                            return d;
+                          },
+                        },
+                        {
+                          label: '下周',
+                          getWeekday: () => '周一',
+                          getDate: () => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7));
+                            return d;
+                          },
+                        },
+                      ].map((option, index) => (
+                        <button
+                          key={index}
+                          onClick={() => {
+                            updateTaskMutation.mutate({ dueDate: option.getDate().toISOString() });
+                            setIsDueDateMenuOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Calendar size={16} className="text-gray-400" />
+                            <span>{option.label}</span>
+                          </div>
+                          <span className="text-gray-400 text-xs">{option.getWeekday()}</span>
+                        </button>
+                      ))}
+                      <div className="border-t border-gray-100 my-1" />
+                      <div className="relative">
+                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                          <Calendar size={16} className="text-gray-400" />
+                          <span>选择日期</span>
+                        </button>
+                        <input
+                          type="date"
+                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                          onChange={(e) => {
+                            const date = e.target.value
+                              ? new Date(e.target.value).toISOString()
+                              : null;
+                            updateTaskMutation.mutate({ dueDate: date });
+                            setIsDueDateMenuOpen(false);
+                          }}
+                        />
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+            <div className="relative">
+              <button
+                onClick={() => setIsRepeatMenuOpen(!isRepeatMenuOpen)}
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <Repeat size={18} />
+                <span>{getRepeatText(task.repeatPattern)}</span>
+                {task.repeatPattern && (
+                  <div
+                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateTaskMutation.mutate({ repeatPattern: null });
+                    }}
+                  >
+                    <X size={16} />
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isRepeatMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-20"
+                      onClick={() => setIsRepeatMenuOpen(false)}
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
+                    >
+                      {[
+                        { value: 'daily', label: '每天' },
+                        { value: 'weekly', label: '每周' },
+                        { value: 'monthly', label: '每月' },
+                        { value: 'yearly', label: '每年' },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => {
+                            updateTaskMutation.mutate({ repeatPattern: option.value });
+                            setIsRepeatMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                            task.repeatPattern === option.value
+                              ? 'text-[var(--theme-primary)] bg-blue-50'
+                              : 'text-gray-700'
+                          }`}
+                        >
+                          <span>{option.label}</span>
+                          {task.repeatPattern === option.value && <Check size={16} />}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
 
-          <div className="bg-white rounded-md shadow-sm overflow-hidden">
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100">
-              <Tag size={18} />
-              <span>{t('drawer.pickCategory')}</span>
-            </button>
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+          <div className="bg-white rounded-md shadow-sm">
+            <div className="relative">
+              <button
+                onClick={() => setIsCategoryMenuOpen(!isCategoryMenuOpen)}
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              >
+                <Tag size={18} />
+                <span>{getCategoryText(task.category)}</span>
+                {task.category && (
+                  <div
+                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateTaskMutation.mutate({ category: null });
+                    }}
+                  >
+                    <X size={16} />
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isCategoryMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-20"
+                      onClick={() => setIsCategoryMenuOpen(false)}
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
+                    >
+                      {[
+                        { value: 'blue', label: '蓝色类别' },
+                        { value: 'red', label: '红色类别' },
+                        { value: 'green', label: '绿色类别' },
+                        { value: 'orange', label: '橙色类别' },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => {
+                            updateTaskMutation.mutate({ category: option.value });
+                            setIsCategoryMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                            task.category === option.value
+                              ? 'text-[var(--theme-primary)] bg-blue-50'
+                              : 'text-gray-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`w-2 h-2 rounded-full ${
+                                option.value === 'blue'
+                                  ? 'bg-blue-500'
+                                  : option.value === 'red'
+                                    ? 'bg-red-500'
+                                    : option.value === 'green'
+                                      ? 'bg-green-500'
+                                      : 'bg-orange-500'
+                              }`}
+                            />
+                            <span>{option.label}</span>
+                          </div>
+                          {task.category === option.value && <Check size={16} />}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors relative">
               <Paperclip size={18} />
               <span>{t('drawer.addFile')}</span>
+              <input
+                type="file"
+                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                onChange={handleFileUpload}
+              />
             </button>
+            {task.files && task.files.length > 0 && (
+              <div className="px-4 pb-4 space-y-2">
+                {task.files.map((file, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm group"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <FileIcon size={16} className="text-gray-400" />
+                      <span className="truncate">{file.originalname}</span>
+                    </div>
+                    <button
+                      onClick={() => removeFile(index)}
+                      className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Description */}

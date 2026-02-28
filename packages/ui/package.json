@@ -1,15 +1,12 @@
 {
   "name": "@repo/ui",
   "version": "0.0.1",
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/types/index.d.ts",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "module": "./src/index.tsx",
+  "types": "./src/index.tsx",
   "exports": {
-    ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
-    }
+    ".": "./src/index.tsx"
   },
   "scripts": {
     "build": "rolldown -c",
@@ -17,7 +14,12 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "react": "^19.2.4"
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.575.0",
+    "react": "^19.2.4",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@repo/tsconfig": "workspace:*",

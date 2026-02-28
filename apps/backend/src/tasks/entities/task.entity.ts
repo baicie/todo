@@ -29,6 +29,15 @@ export class Task extends BaseEntity {
   @Column({ type: 'timestamp', nullable: true, comment: '提醒日期' })
   reminderDate: Date;
 
+  @Column({ type: 'varchar', nullable: true, comment: '重复模式' })
+  repeatPattern: string;
+
+  @Column({ type: 'varchar', nullable: true, comment: '分类' })
+  category: string;
+
+  @Column({ type: 'json', nullable: true, comment: '附件文件' })
+  files: any[];
+
   @ManyToOne(() => List, (list) => list.tasks, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'listId' })
   list: List;

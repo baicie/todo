@@ -1,7 +1,15 @@
 import { defineConfig } from 'rolldown';
 import { dts } from 'rolldown-plugin-dts';
 
-const external = ['react', 'react-dom', 'react/jsx-runtime'];
+const external = [
+  'react',
+  'react-dom',
+  'react/jsx-runtime',
+  'clsx',
+  'tailwind-merge',
+  'class-variance-authority',
+  '@radix-ui/react-slot',
+];
 
 export default defineConfig([
   {
@@ -30,7 +38,6 @@ export default defineConfig([
     plugins: [
       dts({
         tsconfig: 'tsconfig.json',
-        emitDtsOnly: true,
       }),
     ],
   },

@@ -1,4 +1,12 @@
-import { IsBoolean, IsDateString, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
 
 export class CreateTaskDto {
   @IsNotEmpty()
@@ -28,6 +36,18 @@ export class CreateTaskDto {
   @IsOptional()
   @IsDateString()
   reminderDate?: Date;
+
+  @IsOptional()
+  @IsString()
+  repeatPattern?: string;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @IsOptional()
+  @IsArray()
+  files?: any[];
 
   @IsOptional()
   @IsUUID()
@@ -62,6 +82,18 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsDateString()
   reminderDate?: Date;
+
+  @IsOptional()
+  @IsString()
+  repeatPattern?: string;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @IsOptional()
+  @IsArray()
+  files?: any[];
 
   @IsOptional()
   @IsUUID()
