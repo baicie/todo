@@ -1,14 +1,15 @@
-import { useState } from 'react';
 import { Sidebar } from './Sidebar';
-import { MainContent } from './MainContent';
+import { Header } from './Header';
+import { Outlet } from 'react-router-dom';
 
 export const Layout = () => {
-  const [activeListId, setActiveListId] = useState('my-day');
-
   return (
-    <div className="flex w-screen h-screen overflow-hidden bg-white text-gray-900 font-sans">
-      <Sidebar activeListId={activeListId} onListSelect={setActiveListId} />
-      <MainContent activeListId={activeListId} />
+    <div className="flex flex-col w-screen h-screen overflow-hidden bg-white text-gray-900 font-sans">
+      <Header />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
+        <Outlet />
+      </div>
     </div>
   );
 };

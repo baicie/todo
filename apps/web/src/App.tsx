@@ -1,8 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { MainContent } from './components/MainContent';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { useAuth } from './contexts/AuthContext';
+import type { JSX } from 'react';
 
 const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   const { user, isLoading } = useAuth();
@@ -35,7 +37,10 @@ function App() {
               <Layout />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route index element={<Navigate to="/tasks/my-day" replace />} />
+          <Route path="tasks/:listId" element={<MainContent />} />
+        </Route>
       </Routes>
     </BrowserRouter>
   );

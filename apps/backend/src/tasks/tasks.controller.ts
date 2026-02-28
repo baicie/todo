@@ -11,7 +11,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { TasksService } from './tasks.service';
-import { CreateStepDto, CreateTaskDto, TaskQueryDto, UpdateTaskDto } from './dto/create-task.dto';
+import {
+  CreateStepDto,
+  CreateTaskDto,
+  TaskQueryDto,
+  UpdateStepDto,
+  UpdateTaskDto,
+} from './dto/create-task.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
 import { User } from '../users/entities/user.entity';
@@ -55,5 +61,21 @@ export class TasksController {
   addStep(@Param('id') id: string, @Body() createStepDto: CreateStepDto, @Req() req: Request) {
     const user = req.user as User;
     return this.tasksService.addStep(id, createStepDto, user);
+  }
+
+  @Patch('steps/:stepId')
+  updateStep(
+    @Param('stepId') stepId: string,
+    @Body() updateStepDto: UpdateStepDto,
+    @Req() req: Request,
+  ) {
+    const user = req.user as User;
+    return this.tasksService.updateStep(stepId, updateStepDto, user);
+  }
+
+  @Delete('steps/:stepId')
+  removeStep(@Param('stepId') stepId: string, @Req() req: Request) {
+    const user = req.user as User;
+    return this.tasksService.removeStep(stepId, user);
   }
 }

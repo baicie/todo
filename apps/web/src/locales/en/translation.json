@@ -1,0 +1,71 @@
+{
+  "app": {
+    "title": "To Do"
+  },
+  "sidebar": {
+    "myDay": "My Day",
+    "important": "Important",
+    "planned": "Planned",
+    "tasks": "Tasks",
+    "newList": "New List",
+    "createList": "Create List"
+  },
+  "header": {
+    "search": "Search",
+    "settings": "Settings",
+    "help": "Help",
+    "notifications": "Notifications",
+    "logout": "Logout"
+  },
+  "main": {
+    "addTask": "Add a task",
+    "add": "Add",
+    "adding": "Adding...",
+    "completed": "Completed",
+    "stepProgress": "{{completed}} of {{total}}",
+    "date": {
+      "weekday": "{{date, date(weekday: 'long')}}",
+      "full": "{{date, date(month: 'long', day: 'numeric')}}"
+    },
+    "options": {
+      "remindMe": "Remind me",
+      "addDueDate": "Add due date",
+      "repeat": "Repeat"
+    },
+    "contextMenu": {
+      "addToMyDay": "Add to My Day",
+      "removeFromMyDay": "Remove from My Day",
+      "markAsImportant": "Mark as important",
+      "removeImportance": "Remove importance",
+      "markAsCompleted": "Mark as completed",
+      "markAsIncomplete": "Mark as incomplete",
+      "deleteTask": "Delete task"
+    }
+  },
+  "drawer": {
+    "addStep": "Add step",
+    "nextStep": "Next step",
+    "addToMyDay": "Add to My Day",
+    "addedToMyDay": "Added to My Day",
+    "remindMe": "Remind me",
+    "addDueDate": "Add due date",
+    "repeat": "Repeat",
+    "pickCategory": "Pick a category",
+    "addFile": "Add file",
+    "addNote": "Add note",
+    "created": "Created on {{date}}",
+    "deleteTask": "Delete task"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "theme": "Theme",
+    "systemDefault": "System Default",
+    "notifications": "Notifications",
+    "account": "Account & Security",
+    "manageAccount": "Manage Account",
+    "about": "About",
+    "helpFeedback": "Help & Feedback",
+    "version": "Version"
+  }
+}

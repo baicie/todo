@@ -2,7 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
 import { Step, Task } from './entities/task.entity';
-import { CreateStepDto, CreateTaskDto, TaskQueryDto, UpdateTaskDto } from './dto/create-task.dto';
+import {
+  CreateStepDto,
+  CreateTaskDto,
+  TaskQueryDto,
+  UpdateStepDto,
+  UpdateTaskDto,
+} from './dto/create-task.dto';
 import { User } from '../users/entities/user.entity';
 import { List } from '../lists/entities/list.entity';
 
@@ -108,5 +114,40 @@ export class TasksService {
       task,
     });
     return this.stepsRepository.save(step);
+  }
+
+  async updateStep(stepId: string, updateStepDto: UpdateStepDto, user: User) {
+    const step = await this.stepsRepository.findOne({
+      where: { id: stepId },
+      relations: ['task', 'task.user'],
+    });
+
+    if (!step) {
+      throw new NotFoundException(`Step #${stepId} not found`);
+    }
+
+    if (step.task.user.id !== user.id) {
+      throw new NotFoundException(`Step #${stepId} not found`);
+    }
+
+    const updatedStep = this.stepsRepository.merge(step, updateStepDto);
+    return this.stepsRepository.save(updatedStep);
+  }
+
+  async removeStep(stepId: string, user: User) {
+    const step = await this.stepsRepository.findOne({
+      where: { id: stepId },
+      relations: ['task', 'task.user'],
+    });
+
+    if (!step) {
+      throw new NotFoundException(`Step #${stepId} not found`);
+    }
+
+    if (step.task.user.id !== user.id) {
+      throw new NotFoundException(`Step #${stepId} not found`);
+    }
+
+    return this.stepsRepository.remove(step);
   }
 }

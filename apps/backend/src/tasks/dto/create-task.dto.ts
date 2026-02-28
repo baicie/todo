@@ -78,6 +78,16 @@ export class CreateStepDto {
   isCompleted?: boolean;
 }
 
+export class UpdateStepDto {
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isCompleted?: boolean;
+}
+
 export class TaskQueryDto {
   @IsOptional()
   @IsUUID()

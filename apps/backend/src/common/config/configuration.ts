@@ -5,10 +5,14 @@ export default () => ({
 
   // Database
   database: {
-    type: process.env.DB_TYPE || 'sqljs',
-    location: process.env.DB_LOCATION || 'database.sqljs',
-    synchronize: process.env.DB_SYNCHRONIZE === 'true',
-    logging: process.env.DB_LOGGING === 'true',
+    type: process.env.DB_TYPE || 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT, 10) || 5432,
+    username: process.env.DB_USERNAME || 'todo_user',
+    password: process.env.DB_PASSWORD || 'todo_password',
+    database: process.env.DB_DATABASE || 'todo_db',
+    synchronize: true,
+    logging: true,
   },
 
   // JWT

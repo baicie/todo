@@ -1,20 +1,18 @@
-version: '3'
+version: '3.8'
 
 services:
-  backend:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
+  postgres:
+    image: postgres:15-alpine
+    container_name: todo-postgres
     ports:
-      - '3001:3001'
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: todo_user
+      POSTGRES_PASSWORD: todo_password
+      POSTGRES_DB: todo_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     restart: always
 
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    ports:
-      - '8080:80'
-    restart: always
-    depends_on:
-      - backend
+volumes:
+  postgres_data:

@@ -11,6 +11,10 @@ export class LoginDto {
   @IsString()
   @MinLength(6, { message: '密码至少需要6位' })
   password: string;
+
+  @ApiProperty({ description: '保持登录', required: false })
+  @IsOptional()
+  rememberMe?: boolean;
 }
 
 export class RegisterDto {

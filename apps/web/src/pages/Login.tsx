@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail } from 'lucide-react';
@@ -7,10 +7,18 @@ import api from '../lib/api';
 export const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
+
+  // 如果已经登录，自动跳转到主页
+  useEffect(() => {
+    if (user) {
+      navigate('/', { replace: true });
+    }
+  }, [user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,10 +26,13 @@ export const Login = () => {
     setError('');
 
     try {
-      const response = await api.post('/auth/login', { email, password });
-      login(response.data.accessToken, response.data.user);
-      // 使用 replace: true 防止用户点后退键回到登录页
-      navigate('/', { replace: true });
+      const response = await api.post('/auth/login', { email, password, rememberMe });
+      // 先存储 token 和更新用户状态
+      await login(response.data.accessToken, response.data.user);
+      // 确保状态更新后再跳转
+      setTimeout(() => {
+        navigate('/', { replace: true });
+      }, 0);
     } catch (err: any) {
       setError(err.response?.data?.message || '登录失败，请检查邮箱和密码');
     } finally {
@@ -68,6 +79,19 @@ export const Login = () => {
               />
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
             </div>
+          </div>
+
+          <div className="flex items-center">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 text-[var(--theme-primary)] focus:ring-[var(--theme-primary)] border-gray-300 rounded"
+            />
+            <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+              30天内保持登录
+            </label>
           </div>
 
           <button

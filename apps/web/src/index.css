@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme {
   /* 基础主题色 - Microsoft To Do 风格 */
@@ -16,7 +16,7 @@
   --theme-text: #111827; /* gray-900 - 加深的字体颜色 */
   --sidebar-bg: #ffffff; /* white - 侧边栏改为纯白 */
   --sidebar-hover: #f1f5f9; /* gray-100 */
-  
+
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;

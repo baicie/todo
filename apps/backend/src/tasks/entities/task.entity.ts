@@ -23,10 +23,10 @@ export class Task extends BaseEntity {
   @Column({ type: 'boolean', default: false, comment: '是否添加到我的一天' })
   addToMyDay: boolean;
 
-  @Column({ type: 'datetime', nullable: true, comment: '截止日期' })
+  @Column({ type: 'timestamp', nullable: true, comment: '截止日期' })
   dueDate: Date;
 
-  @Column({ type: 'datetime', nullable: true, comment: '提醒日期' })
+  @Column({ type: 'timestamp', nullable: true, comment: '提醒日期' })
   reminderDate: Date;
 
   @ManyToOne(() => List, (list) => list.tasks, { onDelete: 'CASCADE', nullable: true })

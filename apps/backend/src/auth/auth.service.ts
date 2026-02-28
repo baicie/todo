@@ -1,5 +1,5 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
@@ -45,8 +45,10 @@ export class AuthService {
       role: user.role,
     };
 
+    const options: JwtSignOptions = loginDto.rememberMe ? { expiresIn: '30d' } : {};
+
     return {
-      access_token: this.jwtService.sign(payload),
+      access_token: this.jwtService.sign(payload, options),
       user: {
         id: user.id,
         email: user.email,

@@ -42,6 +42,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = (token: string, user: User) => {
     localStorage.setItem('token', token);
     setUser(user);
+    // 返回 Promise 以便调用者可以等待状态更新（虽然 setState 是异步的，但这里主要是为了接口一致性）
+    return Promise.resolve();
   };
 
   const logout = () => {
