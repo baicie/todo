@@ -1,16 +1,16 @@
 {
   "extends": "@repo/tsconfig/react.json",
   "compilerOptions": {
-    "target": "ESNext",
+    "target": "ES2021",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "bundler",
     "strict": true,
     "jsx": "react-jsx",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "lib": ["ESNext", "DOM"],
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "noEmit": true
   },

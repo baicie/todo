@@ -7,11 +7,11 @@ function App() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Desktop App (Electron)</h1>
+      <h1>Desktop App (Tauri)</h1>
       <p>Using Shared UI and Utils</p>
       <p>1 + 4 = {add(1, 4)}</p>
       <div style={{ marginTop: 20 }}>
-        <Button onClick={() => setCount((count) => count + 1)}>count is {count}</Button>
+        <Button onClick={() => setCount((c) => c + 1)}>count is {count}</Button>
       </div>
     </div>
   );
