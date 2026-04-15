@@ -41,9 +41,9 @@
     "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
-    "@nestjs/cli": "^11.0.19",
+    "@nestjs/cli": "^11.0.21",
     "@nestjs/schematics": "^11.0.10",
-    "@nestjs/swagger": "^11.2.7",
+    "@nestjs/swagger": "^11.3.0",
     "@nestjs/testing": "^11.1.19",
     "@repo/tsconfig": "workspace:*",
     "@types/compression": "^1.8.1",
