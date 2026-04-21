@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { add } from '@repo/utils';
+import { add } from '@baicie/orbit-utils';
 
 export function activate(context: vscode.ExtensionContext) {
   console.info('Congratulations, your extension "vscode-ext" is now active!');

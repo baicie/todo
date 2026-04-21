@@ -1,0 +1,193 @@
+.miniprogram-container {
+  min-height: 100vh;
+  background-color: #f8fafc;
+  padding: 0 32rpx;
+  box-sizing: border-box;
+}
+
+.header {
+  padding: 24rpx 0;
+}
+
+.app-title {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: #3b82f6;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: row;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16rpx 0;
+  border-radius: 16rpx;
+  background-color: #f3f4f6;
+}
+
+.tab-active {
+  background-color: #eff6ff;
+}
+
+.tab-text {
+  font-size: 26rpx;
+  color: #9ca3af;
+}
+
+.tab-text-active {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.add-task {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  background-color: #fff;
+  border-radius: 20rpx;
+  padding: 16rpx 24rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 1rpx 3rpx rgba(0, 0, 0, 0.05);
+}
+
+.add-btn {
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 16rpx;
+}
+
+.add-icon {
+  font-size: 40rpx;
+  color: #3b82f6;
+  font-weight: 300;
+}
+
+.task-input {
+  flex: 1;
+  font-size: 30rpx;
+  color: #111827;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.task-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  background-color: #fff;
+  border-radius: 20rpx;
+  padding: 24rpx;
+  box-shadow: 0 1rpx 3rpx rgba(0, 0, 0, 0.03);
+}
+
+.task-left {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: 1;
+  gap: 20rpx;
+}
+
+.checkbox {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 22rpx;
+  border-width: 4rpx;
+  border-color: #d1d5db;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.checkbox-done {
+  background-color: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.check-icon {
+  color: #fff;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.task-title {
+  flex: 1;
+  font-size: 30rpx;
+  color: #111827;
+}
+
+.task-done {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+
+.task-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 8rpx;
+}
+
+.action-btn {
+  width: 64rpx;
+  height: 64rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.star-icon {
+  font-size: 36rpx;
+  color: #9ca3af;
+}
+
+.star-active {
+  color: #f59e0b;
+}
+
+.delete-icon {
+  font-size: 40rpx;
+  color: #9ca3af;
+  font-weight: 300;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 96rpx;
+}
+
+.empty-text {
+  margin-top: 16rpx;
+  font-size: 28rpx;
+  color: #9ca3af;
+}
+
+.completed-section {
+  margin-top: 32rpx;
+  border-top-width: 1rpx;
+  border-top-color: #e5e7eb;
+  padding-top: 16rpx;
+}
+
+.completed-title {
+  font-size: 24rpx;
+  color: #9ca3af;
+  margin-bottom: 16rpx;
+}

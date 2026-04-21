@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-theme-primary: #3b82f6;
+  --color-theme-bg: #f8fafc;
+  --color-theme-text: #111827;
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-hover: #f1f5f9;
+}
+
+body {
+  margin: 0;
+  width: 360px;
+  height: 480px;
+  font-family: Inter, system-ui, sans-serif;
+}

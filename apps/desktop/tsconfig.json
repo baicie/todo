@@ -1,5 +1,5 @@
 {
-  "extends": "@repo/tsconfig/react.json",
+  "extends": "@baicie/orbit-tsconfig/react.json",
   "compilerOptions": {
     "target": "ES2021",
     "useDefineForClassFields": true,

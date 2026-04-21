@@ -110,7 +110,7 @@ pnpm lint         # 代码检查（所有包和应用）
 
 - 使用 `import type` 导入类型
 - 导入顺序：外部依赖 → 内部包 → 相对路径
-- 使用路径别名（如 `@repo/*`）引用内部包
+- 使用路径别名（如 `@baicie/orbit-*`）引用内部包
 - 禁止使用 Node.js 内置模块的直接导入，应使用 `node:` 前缀（如 `node:fs`）
 
 ### 类型定义
@@ -143,7 +143,7 @@ pnpm lint         # 代码检查（所有包和应用）
 
 ### 内部包命名
 
-- 使用 `@repo/*` 命名空间（如 `@repo/ui`, `@repo/utils`）
+- 使用 `@baicie/orbit-*` 命名空间（如 `@baicie/orbit-ui`, `@baicie/orbit-utils`）
 - 使用 `workspace:*` 协议引用内部包
 
 ### 构建和发布
@@ -160,8 +160,8 @@ pnpm lint         # 代码检查（所有包和应用）
 
 项目配置了路径别名以便于包之间的引用：
 
-- `@repo/*` 映射到 `packages/*/src`
-- `@repo/tsconfig` 映射到 `packages/tsconfig`
+- `@baicie/orbit-*` 映射到 `packages/*/src`
+- `@baicie/orbit-tsconfig` 映射到 `packages/tsconfig`
 
 ## Git 和 Pull Request 规范
 

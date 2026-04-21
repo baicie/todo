@@ -1,14 +1,13 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { Button } from '@repo/ui';
-import { add } from '@repo/utils';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { PopupApp } from '../app/PopupApp';
+import { queryClient } from '@baicie/orbit-hooks';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <div style={{ width: 300, padding: 10 }}>
-      <h1>Browser Ext</h1>
-      <p>1 + 5 = {add(1, 5)}</p>
-      <Button>Click Me</Button>
-    </div>
+    <QueryClientProvider client={queryClient}>
+      <PopupApp />
+    </QueryClientProvider>
   </React.StrictMode>,
 );

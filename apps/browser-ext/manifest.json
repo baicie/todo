@@ -1,8 +1,61 @@
 {
   "manifest_version": 3,
-  "name": "Browser Ext",
+  "name": "UniTodo",
+  "short_name": "UniTodo",
+  "description": "跨平台待办事项应用，随时随地管理您的任务",
   "version": "1.0.0",
   "action": {
-    "default_popup": "popup.html"
-  }
+    "default_popup": "dist/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "UniTodo"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["storage", "notifications", "contextMenus", "activeTab"],
+  "host_permissions": ["http://localhost:3001/*", "https://*/*"],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "打开 UniTodo"
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "新建任务",
+      "short_name": "新建",
+      "description": "快速创建新任务",
+      "action": {
+        "type": "taskbar"
+      }
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

@@ -30,9 +30,9 @@
     "@types/vscode": "^1.116.0",
     "@types/node": "25.x",
     "typescript": "^6.0.3",
-    "@repo/tsconfig": "workspace:*"
+    "@baicie/orbit-tsconfig": "workspace:*"
   },
   "dependencies": {
-    "@repo/utils": "workspace:*"
+    "@baicie/orbit-utils": "workspace:*"
   }
 }

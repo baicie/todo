@@ -1,61 +1,35 @@
-import { type ReactNode, createContext, useContext, useEffect, useState } from 'react';
-import api from '../lib/api';
-
-interface User {
-  id: number;
-  email: string;
-  name: string;
-}
+import type { ReactNode } from 'react';
+import { useAuth as useAuthHook } from '@baicie/orbit-hooks';
+import type { User } from '@baicie/orbit';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (token: string, user: User) => void;
+  login: (email: string, password: string) => Promise<{ accessToken: string; user: User }>;
   logout: () => void;
+  register: (
+    name: string,
+    email: string,
+    password: string,
+  ) => Promise<{ accessToken: string; user: User }>;
 }
+
+import { createContext, useContext } from 'react';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const auth = useAuthHook();
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      const token = localStorage.getItem('token');
-      if (token) {
-        try {
-          // 这里假设有一个获取当前用户信息的 API
-          // 目前后端还没实现 /auth/me，我们暂时先模拟一下，或者等会儿去后端加一个
-          const response = await api.get('/auth/profile');
-          setUser(response.data);
-        } catch (error) {
-          localStorage.removeItem('token');
-        }
-      }
-      setIsLoading(false);
-    };
-
-    checkAuth();
-  }, []);
-
-  const login = (token: string, user: User) => {
-    localStorage.setItem('token', token);
-    setUser(user);
-    // 返回 Promise 以便调用者可以等待状态更新（虽然 setState 是异步的，但这里主要是为了接口一致性）
-    return Promise.resolve();
+  const value: AuthContextType = {
+    user: auth.user,
+    isLoading: auth.isLoading,
+    login: auth.login,
+    logout: auth.logout,
+    register: auth.register,
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setUser(null);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

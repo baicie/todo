@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail, User } from 'lucide-react';
-import api from '../lib/api';
 
 export const Register = () => {
   const [name, setName] = useState('');
@@ -10,7 +9,7 @@ export const Register = () => {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { login, register } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,15 +18,12 @@ export const Register = () => {
     setError('');
 
     try {
-      // 注册请求
-      await api.post('/auth/register', { name, email, password, age: 18 });
-      // 注册成功后自动登录
-      const response = await api.post('/auth/login', { email, password });
-      login(response.data.accessToken, response.data.user);
-      // 使用 replace: true 防止用户点后退键回到注册页
+      await register(name, email, password);
+      await login(email, password);
       navigate('/', { replace: true });
-    } catch (err: any) {
-      setError(err.response?.data?.message || '注册失败，请稍后重试');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || '注册失败，请稍后重试');
     } finally {
       setIsLoading(false);
     }

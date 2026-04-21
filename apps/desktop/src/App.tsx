@@ -1,19 +1,46 @@
-import { Button } from '@repo/ui';
-import { add } from '@repo/utils';
-import { useState } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { Layout } from './components/Layout';
+import { MainContent } from './components/MainContent';
+import { Login } from './pages/Login';
+import { Register } from './pages/Register';
+import { useAuth } from './contexts/AuthContext';
+import type { JSX } from 'react';
+
+const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--theme-primary)]"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children;
+};
 
 function App() {
-  const [count, setCount] = useState(0);
-
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Desktop App (Tauri)</h1>
-      <p>Using Shared UI and Utils</p>
-      <p>1 + 4 = {add(1, 4)}</p>
-      <div style={{ marginTop: 20 }}>
-        <Button onClick={() => setCount((c) => c + 1)}>count is {count}</Button>
-      </div>
-    </div>
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Navigate to="/tasks/my-day" replace />} />
+        <Route path="tasks/:listId" element={<MainContent />} />
+      </Route>
+    </Routes>
   );
 }
 

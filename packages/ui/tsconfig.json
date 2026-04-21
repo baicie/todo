@@ -1,8 +1,11 @@
 {
-  "extends": "@repo/tsconfig/react.json",
+  "extends": "@baicie/orbit-tsconfig/react.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "moduleResolution": "bundler",
+    "target": "ES2020",
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src"]
 }

@@ -1,5 +1,5 @@
 {
-  "extends": "@repo/tsconfig/nest.json",
+  "extends": "@baicie/orbit-tsconfig/nest.json",
   "compilerOptions": {
     "outDir": "./dist",
     "baseUrl": "./"

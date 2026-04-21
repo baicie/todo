@@ -36,7 +36,7 @@
 │  (纯逻辑，无 DOM 依赖，完全跨平台复用)           │
 ├─────────────────────────────────────────────────┤
 │  Layer 1：数据 / 类型层                          │
-│  @repo/todo-model (存储抽象 + TypeScript 类型)   │
+│  @baicie/orbit (存储抽象 + TypeScript 类型)   │
 │  React Query (服务端状态 + 缓存)                 │
 │  (完全跨平台复用)                                │
 └─────────────────────────────────────────────────┘
@@ -48,8 +48,8 @@
 
 ```typescript
 // 任何平台都可以直接使用，无需任何适配
-import { createLocalStorage, createRemoteStorage } from '@repo/todo-model';
-import { Task, List, CreateTaskInput } from '@repo/todo-model';
+import { createLocalStorage, createRemoteStorage } from '@baicie/orbit';
+import { Task, List, CreateTaskInput } from '@baicie/orbit';
 ```
 
 **包含内容**：
@@ -63,7 +63,7 @@ import { Task, List, CreateTaskInput } from '@repo/todo-model';
 
 ```typescript
 // 提取为独立包 packages/hooks
-import { useTask, useTaskList, useCreateTask } from '@repo/hooks';
+import { useTask, useTaskList, useCreateTask } from '@baicie/orbit-hooks';
 ```
 
 **包含内容**（待实现）：
@@ -81,7 +81,7 @@ import { useTask, useTaskList, useCreateTask } from '@repo/hooks';
 | `useCreateList()` | 创建清单 |
 | `useAuth()` | 认证状态管理 |
 
-**实现要点**：Hooks 内部调用 `@repo/todo-model` 的接口，不涉及任何 DOM、路由或平台特定 API。
+**实现要点**：Hooks 内部调用 `@baicie/orbit` 的接口，不涉及任何 DOM、路由或平台特定 API。
 
 #### Layer 3 — 业务组合层（复用率 ~40%）
 
@@ -164,7 +164,7 @@ Browser Ext 可以直接将 `apps/web/src/` 中的以下文件作为依赖引用
 
 **改造步骤**：
 
-1. 将 `apps/web/src/contexts/AuthContext.tsx` 中的 `localStorage` 访问替换为 `@repo/todo-model` 的 `IAuthStorage` 接口
+1. 将 `apps/web/src/contexts/AuthContext.tsx` 中的 `localStorage` 访问替换为 `@baicie/orbit` 的 `IAuthStorage` 接口
 2. 将 `apps/web/src/lib/api.ts` 中的 `axios` 实例替换为适配器（local 模式直接用 axios，ext 模式用 chrome.runtime）
 3. Browser Ext 入口使用 React 18（Manifest V3 要求），需降级 React 版本或确认兼容性
 
@@ -255,7 +255,7 @@ apps/desktop/
 **关键改造点**：
 
 1. **入口替换**：`main.tsx` 改为 Tauri 提供的 `app.listen()` 入口
-2. **认证存储**：将 `localStorage` 改为 `@repo/todo-model` 的 `IAuthStorage` 接口
+2. **认证存储**：将 `localStorage` 改为 `@baicie/orbit` 的 `IAuthStorage` 接口
 3. **窗口配置**：`tauri.conf.json` 中配置窗口尺寸、标题、菜单
 4. **构建命令**：`vite build` → Tauri CLI `tauri build`
 

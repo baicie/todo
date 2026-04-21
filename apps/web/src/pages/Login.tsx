@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail } from 'lucide-react';
-import { Button, Input } from '@repo/ui';
-import api from '../lib/api';
+import { Button, Input } from '@baicie/orbit-ui';
 
 export const Login = () => {
   const [email, setEmail] = useState('');
@@ -14,7 +13,6 @@ export const Login = () => {
   const { login, user } = useAuth();
   const navigate = useNavigate();
 
-  // 如果已经登录，自动跳转到主页
   useEffect(() => {
     if (user) {
       navigate('/', { replace: true });
@@ -27,15 +25,11 @@ export const Login = () => {
     setError('');
 
     try {
-      const response = await api.post('/auth/login', { email, password, rememberMe });
-      // 先存储 token 和更新用户状态
-      await login(response.data.accessToken, response.data.user);
-      // 确保状态更新后再跳转
-      setTimeout(() => {
-        navigate('/', { replace: true });
-      }, 0);
-    } catch (err: any) {
-      setError(err.response?.data?.message || '登录失败，请检查邮箱和密码');
+      await login(email, password);
+      navigate('/', { replace: true });
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || '登录失败，请检查邮箱和密码');
     } finally {
       setIsLoading(false);
     }

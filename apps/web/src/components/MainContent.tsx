@@ -16,34 +16,22 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
-import api from '../lib/api';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Sidebar } from './Sidebar';
-
-interface Step {
-  id: string;
-  title: string;
-  isCompleted: boolean;
-  createdAt: string;
-}
-
-interface Task {
-  id: string;
-  title: string;
-  isCompleted: boolean;
-  isImportant: boolean;
-  addToMyDay: boolean;
-  listId?: string;
-  description?: string;
-  steps?: Step[];
-  createdAt?: string;
-  dueDate?: string | null;
-}
+import {
+  useCreateTask,
+  useDeleteTask,
+  useTask,
+  useToggleComplete,
+  useToggleImportant,
+  useToggleMyDay,
+  useUpdateTask,
+} from '@baicie/orbit-hooks';
+import type { Task, TaskFilter } from '@baicie/orbit';
 
 export const MainContent = () => {
   const { listId } = useParams();
@@ -57,97 +45,38 @@ export const MainContent = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: Task } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
-  const queryClient = useQueryClient();
 
-  const { data: tasks = [] } = useQuery<Task[]>({
-    queryKey: ['tasks', activeListId],
-    queryFn: async () => {
-      // 构建查询参数
-      const params: any = {};
+  const filter = buildFilter(activeListId);
+  const { data: tasks = [] } = useTask(filter);
 
-      const isSmartList = ['my-day', 'important', 'planned', 'tasks'].includes(activeListId);
-
-      if (!isSmartList) {
-        // 如果是普通清单，按 listId 筛选
-        params.listId = activeListId;
-      } else {
-        // 如果是智能清单
-        if (activeListId === 'my-day') params.addToMyDay = true;
-        if (activeListId === 'important') params.isImportant = true;
-        if (activeListId === 'planned') params.hasDueDate = true;
-        // 'tasks' 默认显示所有未分类任务，或者所有任务。这里我们暂定显示所有任务，或者可以添加 isCompleted=false 默认只看未完成的
-      }
-
-      const response = await api.get('/tasks', { params });
-      const data = response.data;
-      if (Array.isArray(data)) return data;
-      if (data && Array.isArray(data.data)) return data.data;
-      return [];
-    },
-  });
-
-  const createTaskMutation = useMutation({
-    mutationFn: (data: { title: string; dueDate?: string | null }) => {
-      const isSmartList = ['my-day', 'important', 'planned', 'tasks'].includes(activeListId);
-
-      const payload: any = { title: data.title };
-
-      if (data.dueDate) {
-        payload.dueDate = data.dueDate;
-      }
-
-      if (!isSmartList) {
-        payload.listId = activeListId;
-      }
-
-      if (activeListId === 'my-day') {
-        payload.addToMyDay = true;
-      }
-
-      if (activeListId === 'important') {
-        payload.isImportant = true;
-      }
-
-      return api.post('/tasks', payload);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      setNewTask('');
-      setNewTaskDueDate(null);
-    },
-  });
-
-  const toggleTaskMutation = useMutation({
-    mutationFn: ({ id, isCompleted }: { id: string; isCompleted: boolean }) => {
-      return api.patch(`/tasks/${id}`, { isCompleted });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-
-  const toggleImportanceMutation = useMutation({
-    mutationFn: ({ id, isImportant }: { id: string; isImportant: boolean }) => {
-      return api.patch(`/tasks/${id}`, { isImportant });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-
-  const deleteTaskMutation = useMutation({
-    mutationFn: (id: string) => {
-      return api.delete(`/tasks/${id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
+  const createTask = useCreateTask();
+  const updateTask = useUpdateTask();
+  const deleteTask = useDeleteTask();
+  const toggleComplete = useToggleComplete();
+  const toggleImportant = useToggleImportant();
+  const toggleMyDay = useToggleMyDay();
 
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTask.trim()) return;
-    createTaskMutation.mutate({ title: newTask, dueDate: newTaskDueDate });
+
+    const isSmartList = ['my-day', 'important', 'planned', 'tasks'].includes(activeListId);
+    const payload: {
+      title: string;
+      dueDate?: string | null;
+      listId?: string;
+      addToMyDay?: boolean;
+      isImportant?: boolean;
+    } = { title: newTask };
+
+    if (newTaskDueDate) payload.dueDate = newTaskDueDate;
+    if (activeListId === 'my-day') payload.addToMyDay = true;
+    if (activeListId === 'important') payload.isImportant = true;
+    if (!isSmartList) payload.listId = activeListId;
+
+    createTask.mutate(payload);
+    setNewTask('');
+    setNewTaskDueDate(null);
   };
 
   const getTitle = () => {
@@ -155,21 +84,16 @@ export const MainContent = () => {
     if (activeListId === 'important') return t('sidebar.important');
     if (activeListId === 'planned') return t('sidebar.planned');
     if (activeListId === 'tasks') return t('sidebar.tasks');
-    // 尝试查找自定义清单标题（需要从 Sidebar 获取或在全局状态中管理，这里简化处理）
     return t('app.title');
   };
 
-  const activeTasks = tasks.filter((t) => !t.isCompleted);
-  const completedTasks = tasks.filter((t) => t.isCompleted);
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
+  const activeTasks = tasks.filter((task) => !task.isCompleted);
+  const completedTasks = tasks.filter((task) => task.isCompleted);
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
 
   const handleContextMenu = (e: React.MouseEvent, task: Task) => {
     e.preventDefault();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      task,
-    });
+    setContextMenu({ x: e.clientX, y: e.clientY, task });
   };
 
   const getDueDateText = (dateStr?: string | null) => {
@@ -194,15 +118,16 @@ export const MainContent = () => {
     return { text, isOverdue };
   };
 
+  const handleDateChange = (task: Task, dateStr: string | null) => {
+    updateTask.mutate({ id: task.id, input: { dueDate: dateStr } });
+  };
+
   return (
     <div className="flex-1 h-full flex flex-row overflow-hidden relative">
-      {/* Main Task List Area */}
       <div className="flex-1 h-full flex flex-col bg-[var(--theme-bg)] overflow-hidden">
-        {/* Header */}
         <header className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              {/* Mobile Menu Button */}
               <button
                 className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-md"
                 onClick={() => setIsSidebarOpen(true)}
@@ -274,9 +199,7 @@ export const MainContent = () => {
           </div>
         </header>
 
-        {/* Task List */}
         <motion.div layout className="flex-1 overflow-y-auto px-4 sm:px-8 pb-24 scroll-smooth">
-          {/* Add Task Input (Moved to top) */}
           <div
             className={`mb-4 bg-white rounded-md shadow-sm border transition-all ${isInputFocused ? 'border-gray-200' : 'border-gray-200'}`}
           >
@@ -297,10 +220,10 @@ export const MainContent = () => {
               {newTask && (
                 <button
                   type="submit"
-                  disabled={createTaskMutation.isPending}
+                  disabled={createTask.isPending}
                   className="text-xs font-medium text-[var(--theme-primary)] uppercase px-2"
                 >
-                  {createTaskMutation.isPending ? t('main.adding') : t('main.add')}
+                  {createTask.isPending ? t('main.adding') : t('main.add')}
                 </button>
               )}
             </form>
@@ -341,7 +264,6 @@ export const MainContent = () => {
             )}
           </div>
 
-          {/* Incomplete Tasks */}
           <motion.div
             layout
             className={viewMode === 'table' ? 'flex flex-col gap-0.5' : 'space-y-1'}
@@ -374,10 +296,7 @@ export const MainContent = () => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleTaskMutation.mutate({
-                          id: task.id,
-                          isCompleted: !task.isCompleted,
-                        });
+                        toggleComplete(task);
                       }}
                       className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
                     ></button>
@@ -419,11 +338,7 @@ export const MainContent = () => {
                                   const date = e.target.value
                                     ? new Date(e.target.value).toISOString()
                                     : null;
-                                  const payload: any = { id: task.id, dueDate: date };
-                                  // Optimistic update logic handled by mutation
-                                  api.patch(`/tasks/${task.id}`, { dueDate: date }).then(() => {
-                                    queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                                  });
+                                  handleDateChange(task, date);
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                               />
@@ -435,10 +350,7 @@ export const MainContent = () => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleImportanceMutation.mutate({
-                              id: task.id,
-                              isImportant: !task.isImportant,
-                            });
+                            toggleImportant(task);
                           }}
                           className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
                             task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
@@ -452,10 +364,7 @@ export const MainContent = () => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleImportanceMutation.mutate({
-                          id: task.id,
-                          isImportant: !task.isImportant,
-                        });
+                        toggleImportant(task);
                       }}
                       className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
                         task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
@@ -469,7 +378,6 @@ export const MainContent = () => {
             </AnimatePresence>
           </motion.div>
 
-          {/* Completed Tasks */}
           {completedTasks.length > 0 && (
             <div className="mt-6">
               <button
@@ -510,10 +418,7 @@ export const MainContent = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              toggleTaskMutation.mutate({
-                                id: task.id,
-                                isCompleted: !task.isCompleted,
-                              });
+                              toggleComplete(task);
                             }}
                             className="w-5 h-5 rounded-full border-2 bg-[var(--theme-primary)] border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
                           >
@@ -566,11 +471,7 @@ export const MainContent = () => {
                                         const date = e.target.value
                                           ? new Date(e.target.value).toISOString()
                                           : null;
-                                        api
-                                          .patch(`/tasks/${task.id}`, { dueDate: date })
-                                          .then(() => {
-                                            queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                                          });
+                                        handleDateChange(task, date);
                                       }}
                                       onClick={(e) => e.stopPropagation()}
                                     />
@@ -582,10 +483,7 @@ export const MainContent = () => {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  toggleImportanceMutation.mutate({
-                                    id: task.id,
-                                    isImportant: !task.isImportant,
-                                  });
+                                  toggleImportant(task);
                                 }}
                                 className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
                                   task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
@@ -599,10 +497,7 @@ export const MainContent = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              toggleImportanceMutation.mutate({
-                                id: task.id,
-                                isImportant: !task.isImportant,
-                              });
+                              toggleImportant(task);
                             }}
                             className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
                               task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
@@ -623,7 +518,6 @@ export const MainContent = () => {
 
       <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTaskId(null)} />
 
-      {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
           <>
@@ -641,11 +535,7 @@ export const MainContent = () => {
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
               className="fixed inset-y-0 left-0 z-50 md:hidden"
             >
-              <Sidebar
-                onItemClick={() => {
-                  setIsSidebarOpen(false);
-                }}
-              />
+              <Sidebar onItemClick={() => setIsSidebarOpen(false)} />
             </motion.div>
           </>
         )}
@@ -657,28 +547,23 @@ export const MainContent = () => {
           y={contextMenu.y}
           task={contextMenu.task}
           onClose={() => setContextMenu(null)}
-          onToggleComplete={() =>
-            toggleTaskMutation.mutate({
-              id: contextMenu.task.id,
-              isCompleted: !contextMenu.task.isCompleted,
-            })
-          }
-          onToggleImportant={() =>
-            toggleImportanceMutation.mutate({
-              id: contextMenu.task.id,
-              isImportant: !contextMenu.task.isImportant,
-            })
-          }
-          onToggleMyDay={() =>
-            api
-              .patch(`/tasks/${contextMenu.task.id}`, { addToMyDay: !contextMenu.task.addToMyDay })
-              .then(() => {
-                queryClient.invalidateQueries({ queryKey: ['tasks'] });
-              })
-          }
-          onDelete={() => deleteTaskMutation.mutate(contextMenu.task.id)}
+          onToggleComplete={() => toggleComplete(contextMenu.task)}
+          onToggleImportant={() => toggleImportant(contextMenu.task)}
+          onToggleMyDay={() => toggleMyDay(contextMenu.task)}
+          onDelete={() => deleteTask.mutate(contextMenu.task.id)}
         />
       )}
     </div>
   );
 };
+
+function buildFilter(listId: string): TaskFilter | undefined {
+  const smartSet = new Set(['my-day', 'important', 'planned', 'tasks']);
+  if (smartSet.has(listId)) {
+    if (listId === 'my-day') return { addToMyDay: true };
+    if (listId === 'important') return { isImportant: true };
+    if (listId === 'planned') return { hasDueDate: true };
+    return {};
+  }
+  return { listId };
+}

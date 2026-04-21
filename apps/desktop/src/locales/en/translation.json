@@ -1,0 +1,37 @@
+{
+  "app": { "title": "UniTodo" },
+  "sidebar": {
+    "myDay": "My Day",
+    "important": "Important",
+    "planned": "Planned",
+    "tasks": "Tasks",
+    "createList": "New List",
+    "newList": "Enter list name..."
+  },
+  "main": {
+    "addTask": "Add a task",
+    "add": "Add",
+    "adding": "Adding...",
+    "completed": "Completed",
+    "options": {
+      "addDueDate": "Add due date",
+      "remindMe": "Remind me",
+      "repeat": "Repeat"
+    },
+    "stepProgress": "{{completed}}/{{total}}"
+  },
+  "drawer": {
+    "addStep": "Add step",
+    "nextStep": "Add next step",
+    "addToMyDay": "Add to My Day",
+    "addedToMyDay": "Added to My Day",
+    "remindMe": "Remind me",
+    "addDueDate": "Add due date",
+    "repeat": "Repeat",
+    "pickCategory": "Pick a category",
+    "addFile": "Add a file",
+    "addNote": "Add a note",
+    "deleteTask": "Delete task",
+    "created": "Created {{date}}"
+  }
+}

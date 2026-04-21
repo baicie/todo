@@ -1,10 +1,11 @@
 import { AlertCircle, CheckCircle, Circle, Copy, Star, Sun, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import type { Task } from '@baicie/orbit';
 
 interface ContextMenuProps {
   x: number;
   y: number;
-  task: any;
+  task: Task;
   onClose: () => void;
   onToggleComplete: () => void;
   onToggleImportant: () => void;

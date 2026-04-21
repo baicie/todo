@@ -1,5 +1,5 @@
 {
-  "name": "@repo/utils",
+  "name": "@baicie/orbit-utils",
   "version": "0.0.1",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -17,7 +17,7 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "@repo/tsconfig": "workspace:*",
+    "@baicie/orbit-tsconfig": "workspace:*",
     "rolldown": "1.0.0-rc.16",
     "typescript": "^6.0.3"
   }

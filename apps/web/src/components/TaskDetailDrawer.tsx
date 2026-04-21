@@ -3,7 +3,7 @@ import {
   Calendar,
   Check,
   Circle,
-  FileIcon,
+  File as FileIcon,
   Paperclip,
   Plus,
   Repeat,
@@ -14,41 +14,19 @@ import {
   X,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import api from '../lib/api';
-
-interface Step {
-  id: string;
-  title: string;
-  isCompleted: boolean;
-  createdAt: string;
-}
-
-interface TaskFile {
-  id?: number;
-  filename: string;
-  originalname: string;
-  url?: string;
-  path?: string;
-}
-
-interface Task {
-  id: string;
-  title: string;
-  isCompleted: boolean;
-  isImportant: boolean;
-  addToMyDay: boolean;
-  dueDate?: string | null;
-  reminderDate?: string | null;
-  repeatPattern?: string | null;
-  category?: string | null;
-  files?: TaskFile[];
-  description?: string;
-  steps?: Step[];
-  createdAt?: string;
-}
+import {
+  useAddStep,
+  useDeleteStep,
+  useDeleteTask,
+  useToggleComplete,
+  useToggleImportant,
+  useToggleMyDay,
+  useUpdateStep,
+  useUpdateTask,
+} from '@baicie/orbit-hooks';
+import type { Task, TaskCategory } from '@baicie/orbit';
 
 interface TaskDetailDrawerProps {
   task: Task | null;
@@ -72,91 +50,47 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const [isRemindMenuOpen, setIsRemindMenuOpen] = useState(false);
   const [isDueDateMenuOpen, setIsDueDateMenuOpen] = useState(false);
   const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
-  const queryClient = useQueryClient();
 
-  const updateTaskMutation = useMutation({
-    mutationFn: (updates: Partial<Task>) => {
-      return api.patch(`/tasks/${task.id}`, updates);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-
-  const addStepMutation = useMutation({
-    mutationFn: (title: string) => {
-      return api.post(`/tasks/${task.id}/steps`, { title });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      setNewStep('');
-    },
-  });
-
-  const updateStepMutation = useMutation({
-    mutationFn: ({ stepId, updates }: { stepId: string; updates: Partial<Step> }) => {
-      return api.patch(`/tasks/steps/${stepId}`, updates);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-
-  const deleteStepMutation = useMutation({
-    mutationFn: (stepId: string) => {
-      return api.delete(`/tasks/steps/${stepId}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      setStepToDelete(null);
-    },
-  });
-
-  const deleteTaskMutation = useMutation({
-    mutationFn: () => {
-      return api.delete(`/tasks/${task.id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      onClose();
-    },
-  });
-
-  const handleAddStep = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStep.trim()) return;
-    addStepMutation.mutate(newStep);
-  };
+  const updateTask = useUpdateTask();
+  const addStep = useAddStep();
+  const updateStep = useUpdateStep();
+  const deleteStep = useDeleteStep();
+  const deleteTask = useDeleteTask();
+  const toggleComplete = useToggleComplete();
+  const toggleImportant = useToggleImportant();
+  const toggleMyDay = useToggleMyDay();
 
   const handleTitleBlur = () => {
-    if (task && title !== task.title) {
-      updateTaskMutation.mutate({ title });
+    if (title !== task.title) {
+      updateTask.mutate({ id: task.id, input: { title } });
     }
   };
 
   const handleDescriptionBlur = () => {
-    if (task && description !== (task.description || '')) {
-      updateTaskMutation.mutate({ description });
+    if (description !== (task.description || '')) {
+      updateTask.mutate({ id: task.id, input: { description } });
     }
+  };
+
+  const handleAddStep = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newStep.trim()) return;
+    addStep.mutate({ taskId: task.id, input: { title: newStep } });
+    setNewStep('');
   };
 
   const handleStepTitleBlur = () => {
     if (editingStepId && editingStepTitle.trim()) {
-      updateStepMutation.mutate({
-        stepId: editingStepId,
-        updates: { title: editingStepTitle },
-      });
+      updateStep.mutate({ stepId: editingStepId, input: { title: editingStepTitle } });
     }
     setEditingStepId(null);
   };
 
   const handleStepTitleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleStepTitleBlur();
-    }
+    if (e.key === 'Enter') handleStepTitleBlur();
   };
 
-  const startEditingStep = (step: Step) => {
+  const startEditingStep = (step: { id: string; title: string }) => {
     setEditingStepId(step.id);
     setEditingStepTitle(step.title);
   };
@@ -164,30 +98,21 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      // 假设后端有一个上传接口 /uploads/upload
-      const res = await api.post('/uploads/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      // 假设后端返回文件元数据，或者我们手动构建一个文件对象
-      // 这里假设后端返回 { filename, originalname, ... }
-      const newFile = res.data;
-      const updatedFiles = [...(task.files || []), newFile];
-      updateTaskMutation.mutate({ files: updatedFiles });
-    } catch (error) {
-      console.error('File upload failed:', error);
-      alert('文件上传失败');
-    }
+    const newFile = {
+      id: crypto.randomUUID(),
+      filename: file.name,
+      originalname: file.name,
+      mimetype: file.type,
+      size: file.size,
+      path: URL.createObjectURL(file),
+    };
+    updateTask.mutate({ id: task.id, input: { files: [...task.files, newFile] } });
   };
 
   const removeFile = (index: number) => {
-    const updatedFiles = [...(task.files || [])];
+    const updatedFiles = [...task.files];
     updatedFiles.splice(index, 1);
-    updateTaskMutation.mutate({ files: updatedFiles });
+    updateTask.mutate({ id: task.id, input: { files: updatedFiles } });
   };
 
   const getDueDateText = (dateStr?: string | null) => {
@@ -242,14 +167,24 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
     }
   };
 
+  const updateField = (updates: Parameters<typeof updateTask.mutate>[0]['input']) => {
+    updateTask.mutate({ id: task.id, input: updates });
+  };
+
+  const categories: { value: TaskCategory; label: string; color: string }[] = [
+    { value: 'blue', label: '蓝色类别', color: 'bg-blue-500' },
+    { value: 'red', label: '红色类别', color: 'bg-red-500' },
+    { value: 'green', label: '绿色类别', color: 'bg-green-500' },
+    { value: 'orange', label: '橙色类别', color: 'bg-orange-500' },
+  ];
+
   return (
     <>
-      {/* Fixed Header */}
       <div className="px-4 pt-4 z-10 bg-[#faf9f8]">
         <div className="bg-white rounded-md shadow-sm p-4">
           <div className="flex items-start gap-3">
             <button
-              onClick={() => updateTaskMutation.mutate({ isCompleted: !task.isCompleted })}
+              onClick={() => toggleComplete(task)}
               className="mt-1 text-gray-400 hover:text-[var(--theme-primary)] transition-colors"
             >
               {task.isCompleted ? (
@@ -272,7 +207,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               />
             </div>
             <button
-              onClick={() => updateTaskMutation.mutate({ isImportant: !task.isImportant })}
+              onClick={() => toggleImportant(task)}
               className={`p-1 rounded hover:bg-gray-100 transition-colors ${
                 task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
               }`}
@@ -283,15 +218,16 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
         </div>
       </div>
 
-      {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-4 pb-4 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent">
         <div className="space-y-4">
-          {/* Steps Section */}
           <div className="bg-white rounded-md shadow-sm p-4">
             <div>
               {task.steps
-                ?.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-                .map((step) => (
+                ?.sort(
+                  (a: { createdAt: string }, b: { createdAt: string }) =>
+                    new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+                )
+                .map((step: { id: string; title: string; isCompleted: boolean }) => (
                   <div
                     key={step.id}
                     className={`flex items-center gap-3 group px-2 py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-100 ${
@@ -301,9 +237,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        updateStepMutation.mutate({
+                        updateStep.mutate({
                           stepId: step.id,
-                          updates: { isCompleted: !step.isCompleted },
+                          input: { isCompleted: !step.isCompleted },
                         });
                       }}
                       className="text-gray-400 hover:text-[var(--theme-primary)] transition-colors p-1"
@@ -367,10 +303,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </div>
           </div>
 
-          {/* Action List */}
           <div className="bg-white rounded-md shadow-sm overflow-hidden">
             <button
-              onClick={() => updateTaskMutation.mutate({ addToMyDay: !task.addToMyDay })}
+              onClick={() => toggleMyDay(task)}
               className={`flex items-center gap-3 w-full p-4 text-sm hover:bg-gray-50 transition-colors ${
                 task.addToMyDay ? 'text-blue-600' : 'text-gray-600'
               }`}
@@ -383,7 +318,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                   className="ml-auto text-gray-400 hover:text-gray-600"
                   onClick={(e) => {
                     e.stopPropagation();
-                    updateTaskMutation.mutate({ addToMyDay: false });
+                    updateField({ addToMyDay: false });
                   }}
                 />
               )}
@@ -407,7 +342,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
-                      updateTaskMutation.mutate({ reminderDate: null });
+                      updateField({ reminderDate: null });
                     }}
                   >
                     <X size={16} />
@@ -430,7 +365,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       {[
                         {
                           label: '今日晚些时候',
-                          time: '20:00',
                           getDate: () => {
                             const d = new Date();
                             d.setHours(20, 0, 0, 0);
@@ -439,7 +373,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         },
                         {
                           label: '明天',
-                          time: '周日, 9:00',
                           getDate: () => {
                             const d = new Date();
                             d.setDate(d.getDate() + 1);
@@ -449,7 +382,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         },
                         {
                           label: '下周',
-                          time: '周一, 9:00',
                           getDate: () => {
                             const d = new Date();
                             d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7));
@@ -461,9 +393,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         <button
                           key={index}
                           onClick={() => {
-                            updateTaskMutation.mutate({
-                              reminderDate: option.getDate().toISOString(),
-                            });
+                            updateField({ reminderDate: option.getDate().toISOString() });
                             setIsRemindMenuOpen(false);
                           }}
                           className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
@@ -472,7 +402,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             <Repeat size={16} className="text-gray-400" />
                             <span>{option.label}</span>
                           </div>
-                          <span className="text-gray-400 text-xs">{option.time}</span>
+                          <span className="text-gray-400 text-xs">
+                            {index === 0 ? '20:00' : index === 1 ? '周日, 9:00' : '周一, 9:00'}
+                          </span>
                         </button>
                       ))}
                       <div className="border-t border-gray-100 my-1" />
@@ -488,7 +420,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             const date = e.target.value
                               ? new Date(e.target.value).toISOString()
                               : null;
-                            updateTaskMutation.mutate({ reminderDate: date });
+                            updateField({ reminderDate: date });
                             setIsRemindMenuOpen(false);
                           }}
                         />
@@ -514,7 +446,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
-                      updateTaskMutation.mutate({ dueDate: null });
+                      updateField({ dueDate: null });
                     }}
                   >
                     <X size={16} />
@@ -538,19 +470,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         截止
                       </div>
                       {[
-                        {
-                          label: '今天',
-                          getWeekday: () =>
-                            new Date().toLocaleDateString('zh-CN', { weekday: 'short' }),
-                          getDate: () => new Date(),
-                        },
+                        { label: '今天', getDate: () => new Date() },
                         {
                           label: '明天',
-                          getWeekday: () => {
-                            const tomorrow = new Date();
-                            tomorrow.setDate(tomorrow.getDate() + 1);
-                            return tomorrow.toLocaleDateString('zh-CN', { weekday: 'short' });
-                          },
                           getDate: () => {
                             const d = new Date();
                             d.setDate(d.getDate() + 1);
@@ -559,7 +481,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         },
                         {
                           label: '下周',
-                          getWeekday: () => '周一',
                           getDate: () => {
                             const d = new Date();
                             d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7));
@@ -570,7 +491,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         <button
                           key={index}
                           onClick={() => {
-                            updateTaskMutation.mutate({ dueDate: option.getDate().toISOString() });
+                            updateField({ dueDate: option.getDate().toISOString() });
                             setIsDueDateMenuOpen(false);
                           }}
                           className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
@@ -579,7 +500,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             <Calendar size={16} className="text-gray-400" />
                             <span>{option.label}</span>
                           </div>
-                          <span className="text-gray-400 text-xs">{option.getWeekday()}</span>
+                          <span className="text-gray-400 text-xs">
+                            {option.getDate().toLocaleDateString('zh-CN', { weekday: 'short' })}
+                          </span>
                         </button>
                       ))}
                       <div className="border-t border-gray-100 my-1" />
@@ -595,7 +518,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             const date = e.target.value
                               ? new Date(e.target.value).toISOString()
                               : null;
-                            updateTaskMutation.mutate({ dueDate: date });
+                            updateField({ dueDate: date });
                             setIsDueDateMenuOpen(false);
                           }}
                         />
@@ -617,7 +540,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
-                      updateTaskMutation.mutate({ repeatPattern: null });
+                      updateField({ repeatPattern: null });
                     }}
                   >
                     <X size={16} />
@@ -637,26 +560,21 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       exit={{ opacity: 0, y: 10 }}
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
-                      {[
-                        { value: 'daily', label: '每天' },
-                        { value: 'weekly', label: '每周' },
-                        { value: 'monthly', label: '每月' },
-                        { value: 'yearly', label: '每年' },
-                      ].map((option) => (
+                      {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((value) => (
                         <button
-                          key={option.value}
+                          key={value}
                           onClick={() => {
-                            updateTaskMutation.mutate({ repeatPattern: option.value });
+                            updateField({ repeatPattern: value });
                             setIsRepeatMenuOpen(false);
                           }}
                           className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
-                            task.repeatPattern === option.value
+                            task.repeatPattern === value
                               ? 'text-[var(--theme-primary)] bg-blue-50'
                               : 'text-gray-700'
                           }`}
                         >
-                          <span>{option.label}</span>
-                          {task.repeatPattern === option.value && <Check size={16} />}
+                          <span>{getRepeatText(value)}</span>
+                          {task.repeatPattern === value && <Check size={16} />}
                         </button>
                       ))}
                     </motion.div>
@@ -679,7 +597,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
-                      updateTaskMutation.mutate({ category: null });
+                      updateField({ category: null });
                     }}
                   >
                     <X size={16} />
@@ -699,16 +617,11 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       exit={{ opacity: 0, y: 10 }}
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
-                      {[
-                        { value: 'blue', label: '蓝色类别' },
-                        { value: 'red', label: '红色类别' },
-                        { value: 'green', label: '绿色类别' },
-                        { value: 'orange', label: '橙色类别' },
-                      ].map((option) => (
+                      {categories.map((option) => (
                         <button
                           key={option.value}
                           onClick={() => {
-                            updateTaskMutation.mutate({ category: option.value });
+                            updateField({ category: option.value });
                             setIsCategoryMenuOpen(false);
                           }}
                           className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
@@ -718,17 +631,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           }`}
                         >
                           <div className="flex items-center gap-2">
-                            <div
-                              className={`w-2 h-2 rounded-full ${
-                                option.value === 'blue'
-                                  ? 'bg-blue-500'
-                                  : option.value === 'red'
-                                    ? 'bg-red-500'
-                                    : option.value === 'green'
-                                      ? 'bg-green-500'
-                                      : 'bg-orange-500'
-                              }`}
-                            />
+                            <div className={`w-2 h-2 rounded-full ${option.color}`} />
                             <span>{option.label}</span>
                           </div>
                           {task.category === option.value && <Check size={16} />}
@@ -750,9 +653,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </button>
             {task.files && task.files.length > 0 && (
               <div className="px-4 pb-4 space-y-2">
-                {task.files.map((file, index) => (
+                {task.files.map((file: import('@baicie/orbit').TaskFile, index: number) => (
                   <div
-                    key={index}
+                    key={file.id || index}
                     className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm group"
                   >
                     <div className="flex items-center gap-2 truncate">
@@ -771,7 +674,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             )}
           </div>
 
-          {/* Description */}
           <div className="bg-white rounded-md shadow-sm p-4">
             <textarea
               value={description}
@@ -784,7 +686,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
         </div>
       </div>
 
-      {/* Footer */}
       <div className="p-3 border-t border-gray-200 bg-[#faf9f8] flex items-center justify-between text-xs text-gray-500">
         <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded transition-colors">
           <svg
@@ -809,7 +710,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           })}
         </span>
         <button
-          onClick={() => deleteTaskMutation.mutate()}
+          onClick={() => {
+            deleteTask.mutate(task.id);
+            onClose();
+          }}
           className="p-2 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-red-600"
           title={t('drawer.deleteTask')}
         >
@@ -817,7 +721,6 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
         </button>
       </div>
 
-      {/* Delete Step Confirmation Dialog */}
       <AnimatePresence>
         {stepToDelete && (
           <>
@@ -844,7 +747,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                   取消
                 </button>
                 <button
-                  onClick={() => deleteStepMutation.mutate(stepToDelete)}
+                  onClick={() => {
+                    deleteStep.mutate(stepToDelete);
+                    setStepToDelete(null);
+                  }}
                   className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded transition-colors"
                 >
                   删除
@@ -863,7 +769,6 @@ export const TaskDetailDrawer = ({ task, onClose }: TaskDetailDrawerProps) => {
     <AnimatePresence>
       {task && (
         <>
-          {/* Backdrop for mobile */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

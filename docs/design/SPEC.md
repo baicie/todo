@@ -21,7 +21,7 @@
 | 目标 | 说明 |
 |------|------|
 | 跨平台渲染 | 同一套 UI 代码运行于 Web、Desktop (Tauri)、Mobile (React Native/Taro)、小程序、浏览器扩展 |
-| 双模存储 | 通过 `@repo/todo-model` 的存储抽象层，可自由切换本地 (IndexedDB/localStorage) 和远程 (REST API) |
+| 双模存储 | 通过 `@baicie/orbit` 的存储抽象层，可自由切换本地 (IndexedDB/localStorage) 和远程 (REST API) |
 | 可部署 | 提供完整的 NestJS 后端，支持 Docker 一键部署 |
 | 开源可控 | 数据存储位置由用户决定，可私有部署 |
 
@@ -60,7 +60,7 @@ todo/
 
 ### 2.2 核心包：todo-model
 
-`@repo/todo-model` 是本项目的核心抽象层，其设计遵循**依赖倒置原则**——业务层不依赖具体存储实现，只依赖抽象接口。
+`@baicie/orbit` 是本项目的核心抽象层，其设计遵循**依赖倒置原则**——业务层不依赖具体存储实现，只依赖抽象接口。
 
 ```
 todo-model/src/
@@ -84,11 +84,11 @@ todo-model/src/
 
 ```typescript
 // 本地模式（纯本地，无需后端）
-import { createLocalStorage } from '@repo/todo-model/local';
+import { createLocalStorage } from '@baicie/orbit/local';
 const storage = createLocalStorage();
 
 // 远程模式（连接后端服务）
-import { createRemoteStorage } from '@repo/todo-model/remote';
+import { createRemoteStorage } from '@baicie/orbit/remote';
 const storage = createRemoteStorage({ mode: 'remote', apiBaseUrl: 'https://api.example.com' });
 
 // 统一接口调用
@@ -317,7 +317,7 @@ interface IStorage {
 | 动画 | Framer Motion |
 | 国际化 | i18next + react-i18next |
 | 图标 | Lucide React |
-| UI 组件 | @repo/ui |
+| UI 组件 | @baicie/orbit-ui |
 
 ### 5.2 目录结构
 
@@ -518,7 +518,7 @@ pnpm lint             # ESLint 检查
 
 ### Phase 1：核心功能完善（当前重点）
 
-- [ ] Web App 接入 `@repo/todo-model` 存储抽象层
+- [ ] Web App 接入 `@baicie/orbit` 存储抽象层
 - [ ] 完成本地存储实现（IndexedDB）
 - [ ] 完成远程存储实现（REST API 对接）
 - [ ] 实现设置页面：存储模式切换、主题切换、账号管理
@@ -564,10 +564,10 @@ pnpm lint             # ESLint 检查
 
 | 包 | 路径 | 用途 |
 |----|------|------|
-| `@repo/todo-model` | `packages/todo-model` | 核心数据模型 + 存储抽象 |
-| `@repo/ui` | `packages/ui` | 共享 UI 组件 |
-| `@repo/utils` | `packages/utils` | 共享工具函数 |
-| `@repo/tsconfig` | `packages/tsconfig` | TypeScript 配置 |
+| `@baicie/orbit` | `packages/todo-model` | 核心数据模型 + 存储抽象 |
+| `@baicie/orbit-ui` | `packages/ui` | 共享 UI 组件 |
+| `@baicie/orbit-utils` | `packages/utils` | 共享工具函数 |
+| `@baicie/orbit-tsconfig` | `packages/tsconfig` | TypeScript 配置 |
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "name": "desktop-app",
   "version": "1.0.0",
-  "description": "Tauri application with React and TypeScript",
+  "description": "跨平台待办事项应用 - UniTodo",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,19 +10,30 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@baicie/orbit-hooks": "workspace:*",
+    "@baicie/orbit": "workspace:*",
+    "@baicie/orbit-ui": "workspace:*",
+    "@baicie/orbit-utils": "workspace:*",
+    "@tanstack/react-query": "^5.99.2",
+    "framer-motion": "^12.38.0",
+    "i18next": "^26.0.6",
+    "i18next-browser-languagedetector": "^8.2.1",
+    "lucide-react": "^1.8.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "@repo/ui": "workspace:*",
-    "@repo/utils": "workspace:*"
+    "react-i18next": "^17.0.4",
+    "react-router-dom": "^7.14.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.10.1",
+    "@baicie/orbit-tsconfig": "workspace:*",
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/cli": "^2.10.1",
+    "@tailwindcss/vite": "^4.2.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.2.3",
     "typescript": "^6.0.3",
-    "vite": "^8.0.9",
-    "@repo/tsconfig": "workspace:*"
+    "vite": "^8.0.9"
   }
 }

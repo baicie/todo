@@ -282,7 +282,7 @@ if ('serviceWorker' in navigator) {
 
 ### 4.1 IndexedDB 离线数据
 
-Service Worker 管理的是**应用资源**的缓存，而**用户数据**（任务、清单）存储在 IndexedDB 中（通过 `@repo/todo-model`）。两者互补：
+Service Worker 管理的是**应用资源**的缓存，而**用户数据**（任务、清单）存储在 IndexedDB 中（通过 `@baicie/orbit` 的存储抽象层）。两者互补：
 
 ```
 用户数据 → IndexedDB（通过 todo-model）

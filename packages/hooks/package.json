@@ -1,0 +1,32 @@
+{
+  "name": "@baicie/orbit-hooks",
+  "version": "0.0.1",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "rolldown -c && tsc --emitDeclarationOnly -p tsconfig.json",
+    "dev": "rolldown -c -w",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@baicie/orbit": "workspace:*",
+    "@tanstack/react-query": "^5.99.2"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@baicie/orbit-tsconfig": "workspace:*",
+    "@types/react": "^19.2.14",
+    "rolldown": "1.0.0-rc.16",
+    "typescript": "^6.0.3"
+  }
+}
