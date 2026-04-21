@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -25,9 +26,6 @@ export class DatabaseMigrationService {
     private dataSource: DataSource,
   ) {}
 
-  /**
-   * 获取迁移列表
-   */
   async getMigrations(): Promise<MigrationInfo[]> {
     try {
       const migrations = this.dataSource.migrations;
@@ -38,17 +36,20 @@ export class DatabaseMigrationService {
           `SELECT * FROM migrations ORDER BY timestamp ASC`,
         );
       } catch {
-        // 如果 migrations 表不存在，返回空数组
         executedMigrations = [];
       }
 
-      const executedMap = new Map(executedMigrations.map((m: any) => [m.name, m]));
+      const executedMap = new Map(executedMigrations.map((m) => [m.name, m]));
 
-      return migrations.map((migration: any) => ({
-        name: migration.name || migration.constructor.name,
-        timestamp: migration.timestamp || Date.now(),
-        executed: executedMap.has(migration.name || migration.constructor.name),
-        executedAt: executedMap.get(migration.name || migration.constructor.name)?.executedAt,
+      return migrations.map((migration) => ({
+        name: (migration as { name?: string }).name || migration.constructor.name,
+        timestamp: (migration as { timestamp?: number }).timestamp || Date.now(),
+        executed: executedMap.has(
+          (migration as { name?: string }).name || migration.constructor.name,
+        ),
+        executedAt: executedMap.get(
+          (migration as { name?: string }).name || migration.constructor.name,
+        )?.executedAt,
       }));
     } catch (error) {
       this.logger.error('获取迁移列表失败:', error);
@@ -56,9 +57,6 @@ export class DatabaseMigrationService {
     }
   }
 
-  /**
-   * 执行待执行的迁移
-   */
   async runMigrations(): Promise<{ executed: string[]; errors: any[] }> {
     const executed: string[] = [];
     const errors: any[] = [];
@@ -79,39 +77,31 @@ export class DatabaseMigrationService {
     }
   }
 
-  /**
-   * 回滚最后一个迁移
-   */
-  async revertLastMigration(): Promise<{ reverted?: string; error?: any }> {
+  async revertLastMigration(): Promise<{ reverted?: string; error?: string }> {
     try {
-      // TypeORM 的 undoLastMigration 方法返回 void，我们需要手动检查
       await this.dataSource.undoLastMigration();
 
       this.logger.log('迁移回滚完成');
       return { reverted: '最后一个迁移已回滚' };
     } catch (error) {
-      if ((error as any).message?.includes('No migrations found')) {
+      const err = error as { message?: string };
+      if (err.message?.includes('No migrations found')) {
         return { error: '没有可回滚的迁移' };
       }
 
       this.logger.error('回滚迁移失败:', error);
-      return { error: (error as any).message || '回滚失败' };
+      return { error: err.message || '回滚失败' };
     }
   }
 
-  /**
-   * 创建数据库备份（仅适用于支持的数据库）
-   */
   async createBackup(backupName?: string): Promise<BackupInfo | null> {
     const name = backupName || `backup_${Date.now()}`;
 
     try {
-      // 对于SQL.js，我们可以导出数据库内容
       if (this.dataSource.options.type === 'sqljs') {
         return await this.createSqlJsBackup(name);
       }
 
-      // 其他数据库类型需要特定的备份逻辑
       this.logger.warn('当前数据库类型不支持自动备份');
       return null;
     } catch (error) {
@@ -120,9 +110,6 @@ export class DatabaseMigrationService {
     }
   }
 
-  /**
-   * 为SQL.js创建备份
-   */
   private async createSqlJsBackup(name: string): Promise<BackupInfo> {
     const fs = require('node:fs');
     const path = require('node:path');
@@ -135,13 +122,11 @@ export class DatabaseMigrationService {
     const backupPath = path.join(backupDir, `${name}.db`);
     const currentDbPath = this.dataSource.options.database || 'database.sqljs';
 
-    // 复制当前数据库文件
     if (typeof currentDbPath === 'string' && fs.existsSync(currentDbPath)) {
       fs.copyFileSync(currentDbPath, backupPath);
     } else {
-      // 如果是内存数据库，导出数据
       const entities = this.dataSource.entityMetadatas;
-      const backupData: any = {};
+      const backupData: Record<string, unknown> = {};
 
       for (const entity of entities) {
         const repository = this.dataSource.getRepository(entity.target);
@@ -161,9 +146,6 @@ export class DatabaseMigrationService {
     };
   }
 
-  /**
-   * 获取数据库状态
-   */
   async getDatabaseStatus(): Promise<{
     connected: boolean;
     type: string;
@@ -180,13 +162,11 @@ export class DatabaseMigrationService {
       let pendingMigrationsCount = 0;
 
       if (connected) {
-        // 获取表数量
         const tables = await this.dataSource.query(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         );
         tablesCount = tables.length;
 
-        // 获取迁移信息
         const migrations = await this.getMigrations();
         migrationsCount = migrations.length;
         pendingMigrationsCount = migrations.filter((m) => !m.executed).length;
@@ -211,9 +191,6 @@ export class DatabaseMigrationService {
     }
   }
 
-  /**
-   * 获取数据库大小
-   */
   async getDatabaseSize(): Promise<{
     sizeInBytes: number;
     sizeFormatted: string;
@@ -233,7 +210,6 @@ export class DatabaseMigrationService {
         }
       }
 
-      // 对于其他数据库类型，可以查询系统表
       const result = await this.dataSource.query('PRAGMA page_count; PRAGMA page_size;');
       const pageCount = result[0]?.page_count || 0;
       const pageSize = result[1]?.page_size || 0;
@@ -249,9 +225,6 @@ export class DatabaseMigrationService {
     }
   }
 
-  /**
-   * 格式化字节大小
-   */
   private formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
 

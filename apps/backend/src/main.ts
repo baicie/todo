@@ -21,7 +21,7 @@ function ensureLogsDirectory() {
   const logsDir = 'logs';
   if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });
-    console.log('📁 日志目录已创建: logs/');
+    console.info('📁 日志目录已创建: logs/');
   }
 }
 
@@ -29,16 +29,15 @@ function ensureLogsDirectory() {
 function ensureUploadDirectory(uploadDir: string) {
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
-    console.log(`📁 上传目录已创建: ${uploadDir}`);
+    console.info(`📁 上传目录已创建: ${uploadDir}`);
   }
 }
 
-async function seedDatabase(app: any) {
-  // 获取数据源
-  const dataSource = app.get(DataSource);
+async function seedDatabase(app: unknown) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ds = (app as any).get(DataSource);
 
-  // 获取repositories
-  const userRepo = dataSource.getRepository(User);
+  const userRepo = ds.getRepository(User);
 
   const userCount = await userRepo.count();
 
@@ -69,7 +68,7 @@ async function seedDatabase(app: any) {
         role: 'admin',
       },
     ]);
-    console.log('用户种子数据已创建（默认密码：123456）');
+    console.info('用户种子数据已创建（默认密码：123456）');
   }
 }
 
@@ -98,6 +97,7 @@ async function bootstrap() {
   app.use(compression());
 
   // 全局异常过滤器（注入i18n服务和logger）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app.useGlobalFilters(new GlobalExceptionFilter(i18nService as any, logger as any));
 
   // 全局响应拦截器
@@ -148,8 +148,9 @@ async function bootstrap() {
   // 初始化种子数据
   try {
     await seedDatabase(app);
-  } catch (error) {
-    console.log('种子数据初始化跳过:', (error as any).message);
+  } catch (error: unknown) {
+    const err = error as { message?: string };
+    console.info('种子数据初始化跳过:', err.message);
   }
 
   const port = configService.get<number>('port');
@@ -157,23 +158,23 @@ async function bootstrap() {
 
   const authEnabled = configService.get<boolean>('auth.enabled');
 
-  console.log(`🚀 服务器启动在 http://localhost:${port}/api`);
-  console.log(`📚 API文档地址: http://localhost:${port}/docs`);
-  console.log(`💚 健康检查: http://localhost:${port}/api/health`);
-  console.log(`🔗 API前缀: /api (所有接口都以/api开头)`);
-  console.log(`🌍 环境: ${configService.get<string>('nodeEnv')}`);
-  console.log('✅ 统一错误处理已启用');
-  console.log(`${authEnabled ? '🔐' : '🔓'} JWT认证系统: ${authEnabled ? '已启用' : '已禁用'}`);
-  console.log('✅ Winston日志系统已启用');
-  console.log('🛡️ 安全防护已启用 (Helmet + 限流 + 压缩)');
-  console.log('⚙️ 配置管理已启用');
-  console.log('🌍 国际化(i18n)已启用 (中文/英文)');
-  console.log('📝 日志文件位置: logs/');
-  console.log('💡 语言切换: 请求头 X-Lang: zh/en');
+  console.info(`🚀 服务器启动在 http://localhost:${port}/api`);
+  console.info(`📚 API文档地址: http://localhost:${port}/docs`);
+  console.info(`💚 健康检查: http://localhost:${port}/api/health`);
+  console.info(`🔗 API前缀: /api (所有接口都以/api开头)`);
+  console.info(`🌍 环境: ${configService.get<string>('nodeEnv')}`);
+  console.info('✅ 统一错误处理已启用');
+  console.info(`${authEnabled ? '🔐' : '🔓'} JWT认证系统: ${authEnabled ? '已启用' : '已禁用'}`);
+  console.info('✅ Winston日志系统已启用');
+  console.info('🛡️ 安全防护已启用 (Helmet + 限流 + 压缩)');
+  console.info('⚙️ 配置管理已启用');
+  console.info('🌍 国际化(i18n)已启用 (中文/英文)');
+  console.info('📝 日志文件位置: logs/');
+  console.info('💡 语言切换: 请求头 X-Lang: zh/en');
 
   if (!authEnabled) {
-    console.log('⚠️  警告: 认证已禁用，所有API接口无需JWT token即可访问！');
-    console.log('⚠️  仅在开发/测试环境使用，生产环境请启用认证');
+    console.info('⚠️  警告: 认证已禁用，所有API接口无需JWT token即可访问！');
+    console.info('⚠️  仅在开发/测试环境使用，生产环境请启用认证');
   }
 }
 bootstrap();

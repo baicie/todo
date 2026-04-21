@@ -12,6 +12,7 @@
     "lint": "eslint . --fix"
   },
   "dependencies": {
+    "@baicie/orbit-utils": "workspace:*",
     "@nestjs/common": "^11.1.19",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.1.19",
@@ -20,12 +21,12 @@
     "@nestjs/platform-express": "^11.1.19",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.1",
-    "@baicie/orbit-utils": "workspace:*",
     "@types/sql.js": "^1.4.11",
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "compression": "^1.8.1",
+    "dotenv": "^17.4.2",
     "helmet": "^8.1.0",
     "joi": "^18.1.2",
     "nest-winston": "^1.10.2",
@@ -41,11 +42,11 @@
     "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
+    "@baicie/orbit-tsconfig": "workspace:*",
     "@nestjs/cli": "^11.0.21",
     "@nestjs/schematics": "^11.1.0",
     "@nestjs/swagger": "^11.3.2",
     "@nestjs/testing": "^11.1.19",
-    "@baicie/orbit-tsconfig": "workspace:*",
     "@types/compression": "^1.8.1",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",

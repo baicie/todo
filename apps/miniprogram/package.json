@@ -41,6 +41,7 @@
     "@tarojs/mini-runner": "3.6.37",
     "@tarojs/plugin-framework-react": "4.2.0",
     "@tarojs/plugin-platform-alipay": "4.2.0",
+    "@tarojs/plugin-platform-h5": "^4.2.0",
     "@tarojs/plugin-platform-jd": "4.2.0",
     "@tarojs/plugin-platform-qq": "4.2.0",
     "@tarojs/plugin-platform-swan": "4.2.0",
@@ -57,6 +58,7 @@
   "devDependencies": {
     "@babel/core": "^7.29.0",
     "@baicie/orbit-tsconfig": "workspace:*",
+    "@pmmmwh/react-refresh-webpack-plugin": "^0.6.2",
     "@tarojs/cli": "4.2.0",
     "@tarojs/webpack5-runner": "4.2.0",
     "@types/react": "^19.2.14",
@@ -65,6 +67,7 @@
     "eslint": "^10.2.1",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "react-refresh": "^0.18.0",
     "stylelint": "^17.8.0",
     "typescript": "^6.0.3"
   }

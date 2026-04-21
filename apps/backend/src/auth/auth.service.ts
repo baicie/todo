@@ -16,15 +16,16 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async validateUser(email: string, password: string): Promise<any> {
+  async validateUser(email: string, password: string): Promise<User | null> {
     const user = await this.usersRepository.findOne({
       where: { email },
-      select: ['id', 'email', 'name', 'role', 'password'], // 明确包含password字段
+      select: ['id', 'email', 'name', 'role', 'password'],
     });
 
     if (user && (await bcrypt.compare(password, user.password))) {
-      const { password, ...result } = user;
-      return result;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { password: _pw, ...result } = user;
+      return result as User;
     }
     return null;
   }
@@ -76,7 +77,7 @@ export class AuthService {
     const user = this.usersRepository.create({
       name: registerDto.name,
       email: registerDto.email,
-      age: registerDto.age,
+      age: registerDto.age ?? 18,
       password: hashedPassword,
       role: registerDto.role || UserRole.USER,
     });

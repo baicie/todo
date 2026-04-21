@@ -47,6 +47,7 @@ export class CreateTaskDto {
 
   @IsOptional()
   @IsArray()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files?: any[];
 
   @IsOptional()
@@ -93,6 +94,7 @@ export class UpdateTaskDto {
 
   @IsOptional()
   @IsArray()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files?: any[];
 
   @IsOptional()

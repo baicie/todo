@@ -25,7 +25,7 @@ export class RolesGuard implements CanActivate {
 
     if (!authEnabled) {
       // 如果认证被禁用，跳过角色检查，允许访问
-      console.log('🔓 认证已禁用，跳过角色权限检查');
+      console.info('🔓 认证已禁用，跳过角色权限检查');
       return true;
     }
 

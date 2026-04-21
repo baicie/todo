@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface ApiResponse<T = any> {
   success: boolean;
   data?: T;
@@ -6,6 +7,7 @@ export interface ApiResponse<T = any> {
   timestamp: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface PaginatedResponse<T = any> extends ApiResponse<T[]> {
   meta: {
     total: number;
@@ -21,5 +23,6 @@ export interface ErrorResponse {
   code: number;
   timestamp: string;
   path?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   details?: any;
 }

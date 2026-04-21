@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Request } from 'express';
+import type { Repository } from 'typeorm';
+import type { Request } from 'express';
 import { AuditAction, AuditEntityType, AuditLog } from '../entities/audit-log.entity';
 import { PaginatedResponseDto, PaginationDto } from '../dto/pagination.dto';
 import { PaginationService } from './pagination.service';
@@ -13,9 +13,9 @@ export interface AuditLogOptions {
   userId?: number;
   userName?: string;
   description?: string;
-  oldData?: any;
-  newData?: any;
-  metadata?: any;
+  oldData?: unknown;
+  newData?: unknown;
+  metadata?: unknown;
   request?: Request;
 }
 
@@ -27,9 +27,6 @@ export class AuditLogService {
     private paginationService: PaginationService,
   ) {}
 
-  /**
-   * 记录审计日志
-   */
   async log(options: AuditLogOptions): Promise<AuditLog> {
     const auditLog = this.auditLogRepository.create({
       action: options.action,
@@ -48,13 +45,10 @@ export class AuditLogService {
     return await this.auditLogRepository.save(auditLog);
   }
 
-  /**
-   * 快捷方法：记录创建操作
-   */
   async logCreate(
     entityType: AuditEntityType,
     entityId: number,
-    newData: any,
+    newData: unknown,
     userId?: number,
     userName?: string,
     request?: Request,
@@ -71,14 +65,11 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 快捷方法：记录更新操作
-   */
   async logUpdate(
     entityType: AuditEntityType,
     entityId: number,
-    oldData: any,
-    newData: any,
+    oldData: unknown,
+    newData: unknown,
     userId?: number,
     userName?: string,
     request?: Request,
@@ -96,13 +87,10 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 快捷方法：记录删除操作
-   */
   async logDelete(
     entityType: AuditEntityType,
     entityId: number,
-    oldData: any,
+    oldData: unknown,
     userId?: number,
     userName?: string,
     request?: Request,
@@ -119,13 +107,10 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 快捷方法：记录软删除操作
-   */
   async logSoftDelete(
     entityType: AuditEntityType,
     entityId: number,
-    oldData: any,
+    oldData: unknown,
     userId?: number,
     userName?: string,
     request?: Request,
@@ -142,14 +127,11 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 快捷方法：记录登录操作
-   */
   async logLogin(
     userId: number,
     userName: string,
     request?: Request,
-    metadata?: any,
+    metadata?: unknown,
   ): Promise<AuditLog> {
     return this.log({
       action: AuditAction.LOGIN,
@@ -162,9 +144,6 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 获取审计日志列表
-   */
   async findAll(paginationDto: PaginationDto): Promise<PaginatedResponseDto<AuditLog>> {
     return await this.paginationService.paginate(
       this.auditLogRepository,
@@ -172,13 +151,10 @@ export class AuditLogService {
       {
         order: { createdAt: 'DESC' },
       },
-      ['description', 'userName'], // 可搜索字段
+      ['description', 'userName'],
     );
   }
 
-  /**
-   * 根据实体获取审计日志
-   */
   async findByEntity(
     entityType: AuditEntityType,
     entityId: number,
@@ -190,9 +166,6 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 根据用户获取审计日志
-   */
   async findByUser(
     userId: number,
     paginationDto: PaginationDto,
@@ -203,9 +176,6 @@ export class AuditLogService {
     });
   }
 
-  /**
-   * 获取审计统计
-   */
   async getStatistics(days = 30): Promise<{
     totalLogs: number;
     actionStats: { action: string; count: number }[];
@@ -217,7 +187,6 @@ export class AuditLogService {
 
     const totalLogs = await this.auditLogRepository.count();
 
-    // 按操作类型统计
     const actionStats = await this.auditLogRepository
       .createQueryBuilder('log')
       .select('log.action', 'action')
@@ -225,7 +194,6 @@ export class AuditLogService {
       .groupBy('log.action')
       .getRawMany();
 
-    // 按实体类型统计
     const entityStats = await this.auditLogRepository
       .createQueryBuilder('log')
       .select('log.entityType', 'entityType')
@@ -233,7 +201,6 @@ export class AuditLogService {
       .groupBy('log.entityType')
       .getRawMany();
 
-    // 最近活动数量
     const recentActivity = await this.auditLogRepository
       .createQueryBuilder('log')
       .where('log.createdAt >= :date', { date: daysAgo })
@@ -253,9 +220,6 @@ export class AuditLogService {
     };
   }
 
-  /**
-   * 清理旧的审计日志
-   */
   async cleanupOldLogs(daysToKeep = 365): Promise<number> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
@@ -269,9 +233,6 @@ export class AuditLogService {
     return result.affected || 0;
   }
 
-  /**
-   * 从请求中提取IP地址
-   */
   private extractIpFromRequest(request?: Request): string | null {
     if (!request) return null;
 

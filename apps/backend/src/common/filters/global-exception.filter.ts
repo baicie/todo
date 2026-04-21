@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   ArgumentsHost,
   Catch,
@@ -7,7 +8,7 @@ import {
   Inject,
   LoggerService,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { BusinessException, ErrorCode } from '../exceptions/business.exception';
 import type { ErrorResponse } from '../interfaces/response.interface';
@@ -28,35 +29,34 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let status: HttpStatus;
     let message: string;
     let code: number;
+
     let details: any;
 
-    // 获取当前语言
-    const lang = (this.i18n as any).resolveLanguage
-      ? (this.i18n as any).resolveLanguage(request)
-      : 'zh';
+    const i18nAny = this.i18n as unknown as Record<string, unknown>;
+
+    const lang =
+      typeof i18nAny.resolveLanguage === 'function'
+        ? (this.i18n as any).resolveLanguage(request)
+        : 'zh';
 
     if (exception instanceof BusinessException) {
-      // 业务异常
       const businessException = exception.getResponse() as any;
       status = exception.getStatus();
       code = businessException.code;
 
-      // 如果有翻译key，使用翻译
       if (businessException.translationKey) {
         try {
           message = await this.i18n.translate(businessException.translationKey, {
             lang,
             args: businessException.translationArgs || {},
           });
-        } catch (_translationError) {
-          // 翻译失败时使用原始消息
+        } catch {
           message = businessException.message;
         }
       } else {
         message = businessException.message;
       }
     } else if (exception instanceof HttpException) {
-      // HTTP异常
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
 
@@ -65,14 +65,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         message = Array.isArray(responseMessage)
           ? responseMessage.join(', ')
           : String(responseMessage);
-        details = exceptionResponse;
+
+        details = exceptionResponse as any;
       } else {
         message = String(exceptionResponse) || exception.message;
       }
 
       code = this.mapHttpStatusToErrorCode(status);
 
-      // 尝试翻译常见的HTTP错误
       try {
         const translatedMessage = await this.i18n.translate(
           `common.${this.getHttpErrorKey(status)}`,
@@ -87,11 +87,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         // 翻译失败时保持原消息
       }
     } else {
-      // 未知异常
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       code = ErrorCode.UNKNOWN_ERROR;
 
-      // 强制在控制台输出详细错误信息
       console.error('🚨 UNKNOWN ERROR:', exception);
       if (exception instanceof Error) {
         console.error(exception.stack);
@@ -103,14 +101,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         message = '服务器内部错误';
       }
 
-      // 记录未知错误日志
       this.logger.error(
         `Unexpected error: ${exception}`,
         exception instanceof Error ? exception.stack : undefined,
       );
     }
 
-    // 记录错误日志
     const errorLog = {
       timestamp: new Date().toISOString(),
       path: request.url,
@@ -127,13 +123,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (status >= 500) {
       this.logger.error(
         `[${request.method}] ${request.url} - ${status} - ${message}`,
-        errorLog, // 使用 errorLog 对象记录详细信息
+        errorLog,
         'GlobalExceptionFilter',
       );
     } else {
       this.logger.warn(
         `[${request.method}] ${request.url} - ${status} - ${message}`,
-        errorLog, // 使用 errorLog 对象记录详细信息
+        errorLog,
         'GlobalExceptionFilter',
       );
     }

@@ -27,7 +27,6 @@ import configuration from './common/config/configuration';
 import { configValidationSchema } from './common/config/config.schema';
 import { AuditModule } from './audit/audit.module';
 import { DatabaseModule } from './database/database.module';
-import { AuditLog } from './common/entities/audit-log.entity';
 
 @Module({
   imports: [
@@ -84,17 +83,29 @@ import { AuditLog } from './common/entities/audit-log.entity';
     // TypeORM 配置
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('database.host'),
-        port: configService.get<number>('database.port'),
-        username: configService.get<string>('database.username'),
-        password: configService.get<string>('database.password'),
-        database: configService.get<string>('database.database'),
-        autoLoadEntities: true,
-        synchronize: configService.get<boolean>('database.synchronize'),
-        logging: configService.get<boolean>('database.logging'),
-      }),
+      useFactory: (configService: ConfigService) => {
+        const dbType = (configService.get<string>('database.type') || 'sqljs') as
+          | 'postgres'
+          | 'sqljs'
+          | 'mysql'
+          | 'sqlite';
+        const dbConfig: Record<string, unknown> = {
+          type: dbType,
+          autoLoadEntities: true,
+          synchronize: configService.get<boolean>('database.synchronize'),
+          logging: configService.get<boolean>('database.logging'),
+        };
+        if (dbType !== 'sqljs') {
+          Object.assign(dbConfig, {
+            host: configService.get<string>('database.host'),
+            port: configService.get<number>('database.port'),
+            username: configService.get<string>('database.username'),
+            password: configService.get<string>('database.password'),
+            database: configService.get<string>('database.database'),
+          });
+        }
+        return dbConfig as Parameters<typeof TypeOrmModule.forRoot>[0];
+      },
     }),
     // Multer文件上传配置
     MulterModule.registerAsync({

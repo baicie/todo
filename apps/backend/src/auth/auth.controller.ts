@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Post, Request, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { I18nLang, I18nService } from 'nestjs-i18n';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import type { User } from '../users/entities/user.entity';
 
 @ApiTags('用户认证')
 @Controller('auth')
@@ -52,12 +54,13 @@ export class AuthController {
   @ApiOperation({ summary: '获取当前用户信息' })
   @ApiResponse({ status: 200, description: '返回当前用户信息' })
   @ApiResponse({ status: 401, description: '未授权' })
-  async getProfile(@Request() req: any, @I18nLang() lang: string) {
+  async getProfile(@Req() req: Request, @I18nLang() lang: string) {
     const title = await this.i18n.translate('auth.profile.title', { lang });
+    const user = (req as Request & { user?: User }).user;
 
     return {
       title,
-      user: req.user,
+      user,
     };
   }
 }

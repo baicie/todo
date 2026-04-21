@@ -43,6 +43,7 @@ export class TasksService {
   }
 
   async findAll(user: User, query?: TaskQueryDto) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: any = { user: { id: user.id } };
 
     if (query) {

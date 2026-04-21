@@ -32,10 +32,11 @@ export class RegisterDto {
   @MinLength(6, { message: '密码至少需要6位' })
   password: string;
 
-  @ApiProperty({ description: '年龄' })
+  @ApiProperty({ description: '年龄', required: false })
+  @IsOptional()
   @IsInt({ message: '年龄必须是整数' })
   @Min(1, { message: '年龄必须大于0' })
-  age: number;
+  age?: number;
 
   @ApiProperty({ description: '用户角色', enum: UserRole, required: false })
   @IsOptional()

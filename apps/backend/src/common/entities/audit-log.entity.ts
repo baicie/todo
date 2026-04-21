@@ -79,25 +79,16 @@ export class AuditLog {
   })
   description: string;
 
-  @Column({
-    type: 'json',
-    nullable: true,
-    comment: '变更前数据',
-  })
+  @Column({ type: 'json', nullable: true, comment: '变更前数据' })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   oldData: any;
 
-  @Column({
-    type: 'json',
-    nullable: true,
-    comment: '变更后数据',
-  })
+  @Column({ type: 'json', nullable: true, comment: '变更后数据' })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newData: any;
 
-  @Column({
-    type: 'json',
-    nullable: true,
-    comment: '额外元数据',
-  })
+  @Column({ type: 'json', nullable: true, comment: '额外元数据' })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   metadata: any;
 
   @CreateDateColumn({ comment: '创建时间' })

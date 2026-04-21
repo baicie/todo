@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { IAuthStorage, IStorage, StorageConfig, StorageMode } from '@baicie/orbit';
+import { useCallback, useEffect, useState } from 'react';
+import type { IStorage, StorageConfig, StorageMode } from '@baicie/orbit';
 import { LocalStorage, RemoteStorage } from '@baicie/orbit';
 
 let globalStorage: IStorage | null = null;
-let globalAuthStorage: IAuthStorage | null = null;
 
 const CONFIG_KEY = 'unitodo_storage_config';
 
@@ -32,7 +31,6 @@ export function getStorage(): IStorage {
   if (!globalStorage) {
     const config = loadConfig();
     globalStorage = createStorage(config);
-    globalAuthStorage = globalStorage.auth;
   }
   return globalStorage;
 }
@@ -45,7 +43,6 @@ export function switchStorageMode(mode: StorageMode, apiBaseUrl?: string): void 
     conflictStrategy: 'local-wins',
   };
   globalStorage = createStorage(config);
-  globalAuthStorage = globalStorage.auth;
   saveConfig(config);
 }
 

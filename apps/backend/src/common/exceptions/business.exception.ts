@@ -29,7 +29,7 @@ export class BusinessException extends HttpException {
     errorCode: ErrorCode,
     httpStatus: HttpStatus = HttpStatus.BAD_REQUEST,
     translationKey?: string,
-    translationArgs?: any,
+    translationArgs?: Record<string, unknown>,
   ) {
     super(
       {

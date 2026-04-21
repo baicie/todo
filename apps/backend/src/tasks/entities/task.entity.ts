@@ -23,10 +23,10 @@ export class Task extends BaseEntity {
   @Column({ type: 'boolean', default: false, comment: '是否添加到我的一天' })
   addToMyDay: boolean;
 
-  @Column({ type: 'timestamp', nullable: true, comment: '截止日期' })
+  @Column({ type: 'datetime', nullable: true, comment: '截止日期' })
   dueDate: Date;
 
-  @Column({ type: 'timestamp', nullable: true, comment: '提醒日期' })
+  @Column({ type: 'datetime', nullable: true, comment: '提醒日期' })
   reminderDate: Date;
 
   @Column({ type: 'varchar', nullable: true, comment: '重复模式' })
@@ -36,7 +36,7 @@ export class Task extends BaseEntity {
   category: string;
 
   @Column({ type: 'json', nullable: true, comment: '附件文件' })
-  files: any[];
+  files: unknown[];
 
   @ManyToOne(() => List, (list) => list.tasks, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'listId' })
