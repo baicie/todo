@@ -5,10 +5,13 @@ const external = [
   'react',
   'react-dom',
   'react/jsx-runtime',
+  'react/jsx-dev-runtime',
   'clsx',
   'tailwind-merge',
   'class-variance-authority',
   '@radix-ui/react-slot',
+  'framer-motion',
+  'lucide-react',
 ];
 
 export default defineConfig([

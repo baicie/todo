@@ -241,6 +241,27 @@ export default tseslint.config(
     },
   },
   // =====================================================
+  // Shared packages (pure TypeScript, no React)
+  // =====================================================
+  {
+    files: [
+      'packages/todo-model/src/**/*.ts',
+      'packages/utils/src/**/*.ts',
+      'packages/hooks/src/**/*.ts',
+      'packages/ui/src/**/*.ts',
+    ],
+    extends: [tseslint.configs.base, eslintConfigPrettier],
+    plugins: {
+      'import-x': patchedImportX,
+      prettier: prettier,
+    },
+    rules: {
+      ...omit(baseRules, ['@typescript-eslint/consistent-type-imports']),
+      '@typescript-eslint/consistent-type-imports': 'off',
+      'no-restricted-globals': 'off',
+    },
+  },
+  // =====================================================
   // VS Code Extension - 不需要 React 规则
   // =====================================================
   {
