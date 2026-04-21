@@ -1,66 +1,35 @@
-import { Calendar, Home, List as ListIcon, Plus, Search, Star, Sun, User } from 'lucide-react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Calendar, Home, List as ListIcon, Plus, Star, Sun } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import api from '../lib/api';
-import { useAuth } from '../contexts/AuthContext';
+import { useCreateList, useList } from '@baicie/orbit-hooks';
 import { useState } from 'react';
-
-interface List {
-  id: string;
-  title: string;
-  icon?: string;
-  isSmart: boolean;
-}
 
 export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
   const { t } = useTranslation();
-  const { user } = useAuth();
   const navigate = useNavigate();
   const { listId } = useParams();
   const activeListId = listId || 'my-day';
   const [isCreating, setIsCreating] = useState(false);
   const [newListTitle, setNewListTitle] = useState('');
-  const queryClient = useQueryClient();
 
-  const { data: lists } = useQuery<List[]>({
-    queryKey: ['lists'],
-    queryFn: async () => {
-      const response = await api.get('/lists');
-      // 确保返回的是数组，如果后端返回结构包裹在 data 字段中，需要解构
-      // 假设后端返回 { success: true, data: [...] } 或直接 [...]
-      const data = response.data;
-      if (Array.isArray(data)) return data;
-      if (data && Array.isArray(data.data)) return data.data;
-      return [];
-    },
-    enabled: !!user,
-  });
-
-  const createListMutation = useMutation({
-    mutationFn: (title: string) => {
-      return api.post('/lists', { title });
-    },
-    onSuccess: (response) => {
-      queryClient.invalidateQueries({ queryKey: ['lists'] });
-      setIsCreating(false);
-      setNewListTitle('');
-      // 创建成功后自动选中新清单
-      if (response.data && response.data.id) {
-        navigate(`/tasks/${response.data.id}`);
-        if (onItemClick) onItemClick();
-      } else if (response.data && response.data.data && response.data.data.id) {
-        navigate(`/tasks/${response.data.data.id}`);
-        if (onItemClick) onItemClick();
-      }
-    },
-  });
+  const { data: lists } = useList();
+  const createListMutation = useCreateList();
 
   const handleCreateList = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newListTitle.trim()) return;
-    createListMutation.mutate(newListTitle);
+    createListMutation.mutate(
+      { title: newListTitle },
+      {
+        onSuccess: (newList) => {
+          setIsCreating(false);
+          setNewListTitle('');
+          navigate(`/tasks/${newList.id}`);
+          if (onItemClick) onItemClick();
+        },
+      },
+    );
   };
 
   const smartLists = [

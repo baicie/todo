@@ -1,15 +1,26 @@
 import { useState } from 'react';
-import { useExtAuth } from '../../contexts/AuthContext';
+import { useAuth } from '@baicie/orbit-hooks';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const { login } = useExtAuth();
+  const [error, setError] = useState('');
+  const { login } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     try {
       await login(email, password);
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || '登录失败');
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    try {
+      await login('guest', '');
     } catch {
       // ignore
     }
@@ -20,6 +31,7 @@ export function LoginPage() {
       <form onSubmit={handleSubmit} className="w-full max-w-[280px] space-y-3">
         <h1 className="text-xl font-bold text-center text-gray-800">Orbit</h1>
         <p className="text-sm text-gray-500 text-center">登录以同步任务</p>
+        {error && <p className="text-xs text-red-500 text-center">{error}</p>}
         <input
           type="email"
           value={email}
@@ -40,7 +52,14 @@ export function LoginPage() {
         >
           登录
         </button>
-        <p className="text-xs text-gray-400 text-center">或直接使用，任务将保存在本地</p>
+        <button
+          type="button"
+          onClick={handleGuestLogin}
+          className="w-full py-2 bg-gray-100 text-gray-600 rounded-md text-sm hover:bg-gray-200 transition-colors"
+        >
+          游客模式
+        </button>
+        <p className="text-xs text-gray-400 text-center">不登录也可以使用，任务保存在本地</p>
       </form>
     </div>
   );

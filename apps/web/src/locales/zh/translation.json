@@ -61,11 +61,29 @@
     "general": "常规",
     "theme": "主题外观",
     "systemDefault": "跟随系统",
+    "light": "浅色",
+    "dark": "深色",
     "notifications": "通知提醒",
+    "enableNotifications": "启用通知",
+    "reminderLeadTime": "提醒提前量",
+    "repeatNotifications": "重复任务通知",
+    "notificationSound": "通知声音",
+    "importantOnly": "仅重要任务",
     "account": "账户与安全",
     "manageAccount": "账户管理",
     "about": "关于",
     "helpFeedback": "帮助与反馈",
-    "version": "版本信息"
+    "version": "版本信息",
+    "installApp": "安装应用"
+  },
+  "pwa": {
+    "offline": "离线模式 — 更改将在恢复网络后同步",
+    "pendingSync": "{{count}} 项待同步",
+    "retry": "重试",
+    "installPrompt": "安装应用",
+    "installTitle": "安装 Orbit 应用",
+    "installDesc": "安装后可获得更快的访问速度和离线支持。",
+    "install": "安装",
+    "dismiss": "稍后"
   }
 }

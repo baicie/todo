@@ -1,4 +1,4 @@
-import { type ReactNode, createContext, useContext, useEffect, useState } from 'react';
+import { type ReactNode, createContext, useContext, useState } from 'react';
 import { ExtAuthStorage } from '../adapter';
 
 interface User {
@@ -23,9 +23,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+interface AuthProviderProps {
+  children: ReactNode;
+  initialUser?: User | null;
+}
+
+export function AuthProvider({ children, initialUser }: AuthProviderProps) {
   const authStorage = new ExtAuthStorage();
-  const [user, setUser] = useState<User | null>(() => authStorage.getStoredUser());
+  const [user, setUser] = useState<User | null>(() => initialUser ?? authStorage.getStoredUser());
   const [isLoading, setIsLoading] = useState(false);
 
   const login = async (email: string, _password: string) => {

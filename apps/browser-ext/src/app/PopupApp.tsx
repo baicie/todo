@@ -1,10 +1,17 @@
 import { useState } from 'react';
-import { AuthProvider, useExtAuth } from '../contexts/AuthContext';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useAuth } from '@baicie/orbit-hooks';
 import { LoginPage } from './pages/LoginPage';
 import { TaskList } from './pages/TaskList';
 
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { refetchOnWindowFocus: false, retry: 1 },
+  },
+});
+
 function AppContent() {
-  const { user } = useExtAuth();
+  const { user } = useAuth();
   const [filter, setFilter] = useState<'all' | 'today' | 'important'>('all');
 
   if (!user) {
@@ -20,8 +27,8 @@ function AppContent() {
 
 export function PopupApp() {
   return (
-    <AuthProvider>
+    <QueryClientProvider client={queryClient}>
       <AppContent />
-    </AuthProvider>
+    </QueryClientProvider>
   );
 }

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail, User } from 'lucide-react';
-import api from '../lib/api';
 
 export const Register = () => {
   const [name, setName] = useState('');
@@ -10,7 +9,7 @@ export const Register = () => {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { register, login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,13 +18,7 @@ export const Register = () => {
     setError('');
 
     try {
-      const response = await api.post('/auth/register', { name, email, password });
-      const result = response.data?.data ?? response.data;
-
-      localStorage.setItem('unitodo_token', result.access_token);
-      localStorage.setItem('unitodo_user', JSON.stringify(result.user));
-      localStorage.setItem('unitodo_storage_config', JSON.stringify({ mode: 'remote' }));
-
+      await register(name, email, password);
       await login(email, password);
       navigate('/', { replace: true });
     } catch (err: unknown) {

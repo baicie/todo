@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@baicie/orbit": "workspace:*",
+    "@baicie/orbit-utils": "workspace:*",
     "@tanstack/react-query": "^5.99.2"
   },
   "peerDependencies": {

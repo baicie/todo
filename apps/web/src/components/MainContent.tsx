@@ -2,7 +2,6 @@ import {
   ArrowUpDown,
   Bell,
   Calendar,
-  ChevronDown,
   ChevronRight,
   Grid2X2,
   LayoutGrid,
@@ -12,13 +11,12 @@ import {
   Plus,
   Repeat,
   Star,
-  Trash2,
   UserPlus,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Sidebar } from './Sidebar';
@@ -26,12 +24,15 @@ import {
   useCreateTask,
   useDeleteTask,
   useTask,
+  useTaskListShortcuts,
   useToggleComplete,
   useToggleImportant,
   useToggleMyDay,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
 import type { Task, TaskFilter } from '@baicie/orbit';
+import { CommandPalette } from './CommandPalette';
+import { useAppEvent } from '../hooks/useAppEvents';
 
 export const MainContent = () => {
   const { listId } = useParams();
@@ -45,6 +46,7 @@ export const MainContent = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: Task } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
@@ -55,6 +57,40 @@ export const MainContent = () => {
   const toggleComplete = useToggleComplete();
   const toggleImportant = useToggleImportant();
   const toggleMyDay = useToggleMyDay();
+  const navigate = useNavigate();
+  const taskInputRef = useRef<HTMLInputElement>(null);
+
+  const { focusedIndex } = useTaskListShortcuts({
+    tasks,
+    selectedTaskId,
+    onSelectTask: setSelectedTaskId,
+    onToggleComplete: toggleComplete,
+    onToggleImportant: toggleImportant,
+    onToggleMyDay: toggleMyDay,
+    onDeleteTask: (id) => deleteTask.mutate(id),
+    onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
+    onOpenSettings: () => {
+      const headerSettingsBtn = document.querySelector<HTMLElement>('header button[title]');
+      headerSettingsBtn?.click();
+    },
+    onOpenSearch: () => {
+      const headerSearch = document.querySelector<HTMLInputElement>('header input[type="text"]');
+      headerSearch?.focus();
+    },
+    onAddTask: () => taskInputRef.current?.focus(),
+    onNavigate: navigate,
+  });
+
+  // Listen to app-level events from keyboard shortcuts
+  useAppEvent('open-command-palette', () => setIsCommandPaletteOpen(true));
+  useAppEvent('open-settings', () => {
+    const headerSettingsBtn = document.querySelector<HTMLElement>('header button[title]');
+    headerSettingsBtn?.click();
+  });
+  useAppEvent('open-search', () => {
+    const headerSearch = document.querySelector<HTMLInputElement>('header input[type="text"]');
+    headerSearch?.focus();
+  });
 
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
@@ -209,6 +245,7 @@ export const MainContent = () => {
                 size={24}
               />
               <input
+                ref={taskInputRef}
                 type="text"
                 value={newTask}
                 onChange={(e) => setNewTask(e.target.value)}
@@ -286,9 +323,13 @@ export const MainContent = () => {
                   transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                   onClick={() => setSelectedTaskId(task.id)}
                   onContextMenu={(e) => handleContextMenu(e, task)}
-                  className={`group bg-white rounded-md shadow-sm border border-gray-100 p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
-                    selectedTask?.id === task.id ? 'bg-blue-50 border-blue-200' : ''
-                  } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''}`}
+                  className={`group bg-white rounded-md shadow-sm border p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
+                    selectedTask?.id === task.id ? 'bg-blue-50 border-blue-200' : 'border-gray-100'
+                  } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''} ${
+                    focusedIndex >= 0 && activeTasks[focusedIndex]?.id === task.id
+                      ? 'ring-2 ring-[var(--theme-primary)] ring-offset-1'
+                      : ''
+                  }`}
                 >
                   <div
                     className={`flex items-center gap-3 w-full ${viewMode === 'table' ? 'col-span-6' : ''}`}
@@ -408,8 +449,10 @@ export const MainContent = () => {
                         transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                         onClick={() => setSelectedTaskId(task.id)}
                         onContextMenu={(e) => handleContextMenu(e, task)}
-                        className={`group bg-white rounded-md shadow-sm border border-gray-100 p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
-                          selectedTask?.id === task.id ? 'bg-blue-50 border-blue-200' : ''
+                        className={`group bg-white rounded-md shadow-sm border p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
+                          selectedTask?.id === task.id
+                            ? 'bg-blue-50 border-blue-200'
+                            : 'border-gray-100'
                         } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''}`}
                       >
                         <div
@@ -553,6 +596,11 @@ export const MainContent = () => {
           onDelete={() => deleteTask.mutate(contextMenu.task.id)}
         />
       )}
+
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+      />
     </div>
   );
 };

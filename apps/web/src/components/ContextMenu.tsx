@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle, Circle, Copy, Star, Sun, Trash2 } from 'lucide-react';
+import { CheckCircle, Circle, Copy, Star, Sun, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { Task } from '@baicie/orbit';
 
@@ -33,24 +33,31 @@ export const ContextMenu = ({
     };
 
     const handleScroll = () => onClose();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
 
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('keydown', handleKeyDown);
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose]);
 
   // Adjust position if menu goes off screen
-  const style: React.CSSProperties = {
-    top: y,
-    left: x,
-  };
+  const menuWidth = 224; // w-56 = 14rem = ~224px
+  const menuHeight = 280; // approximate menu height
+  const adjustedX = Math.min(x, window.innerWidth - menuWidth - 8);
+  const adjustedY = Math.min(y, window.innerHeight - menuHeight - 8);
 
-  // Basic viewport detection logic could be added here if needed
-  // For now we rely on the parent providing reasonable coordinates
+  const style: React.CSSProperties = {
+    top: Math.max(8, adjustedY),
+    left: Math.max(8, adjustedX),
+  };
 
   return (
     <div

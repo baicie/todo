@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useExtAuth } from '../../contexts/AuthContext';
+import { useAuth } from '@baicie/orbit-hooks';
 import {
   useCreateTask,
   useDeleteTask,
@@ -16,9 +16,10 @@ interface TaskListProps {
 }
 
 export function TaskList({ filter, onFilterChange }: TaskListProps) {
-  const { user, logout } = useExtAuth();
+  const { user, logout } = useAuth();
   const [newTask, setNewTask] = useState('');
-  const [isAdding, setIsAdding] = useState(false);
+  void user;
+  void logout;
 
   const taskFilter: TaskFilter = {
     ...(filter === 'today' ? { addToMyDay: true } : {}),
@@ -94,7 +95,6 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
             type="text"
             value={newTask}
             onChange={(e) => setNewTask(e.target.value)}
-            onFocus={() => setIsAdding(true)}
             placeholder="添加任务..."
             className="flex-1 text-sm bg-transparent border-none outline-none text-gray-900 placeholder:text-gray-400"
           />

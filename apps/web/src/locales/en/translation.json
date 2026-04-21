@@ -61,11 +61,29 @@
     "general": "General",
     "theme": "Theme",
     "systemDefault": "System Default",
+    "light": "Light",
+    "dark": "Dark",
     "notifications": "Notifications",
+    "enableNotifications": "Enable Notifications",
+    "reminderLeadTime": "Reminder Lead Time",
+    "repeatNotifications": "Repeat Task Notifications",
+    "notificationSound": "Notification Sound",
+    "importantOnly": "Important Tasks Only",
     "account": "Account & Security",
     "manageAccount": "Manage Account",
     "about": "About",
     "helpFeedback": "Help & Feedback",
-    "version": "Version"
+    "version": "Version",
+    "installApp": "Install App"
+  },
+  "pwa": {
+    "offline": "Offline mode — changes will sync when back online",
+    "pendingSync": "{{count}} pending",
+    "retry": "Retry",
+    "installPrompt": "Install App",
+    "installTitle": "Install Orbit",
+    "installDesc": "Install for faster access and offline support.",
+    "install": "Install",
+    "dismiss": "Later"
   }
 }

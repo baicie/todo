@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 import { useAuth as useAuthHook } from '@baicie/orbit-hooks';
 import type { User } from '@baicie/orbit';
+import type { StorageMode } from '@baicie/orbit';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
+  storageMode: StorageMode;
   login: (email: string, password: string) => Promise<{ accessToken: string; user: User }>;
   logout: () => void;
   register: (
@@ -24,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthContextType = {
     user: auth.user,
     isLoading: auth.isLoading,
+    storageMode: auth.storageMode,
     login: auth.login,
     logout: auth.logout,
     register: auth.register,

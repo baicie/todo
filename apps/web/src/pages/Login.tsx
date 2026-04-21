@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail } from 'lucide-react';
 import { Button, Input } from '@baicie/orbit-ui';
-import api from '../lib/api';
 
 export const Login = () => {
   const [email, setEmail] = useState('');
@@ -26,13 +25,6 @@ export const Login = () => {
     setError('');
 
     try {
-      const response = await api.post('/auth/login', { email, password });
-      const result = response.data?.data ?? response.data;
-
-      localStorage.setItem('unitodo_token', result.access_token);
-      localStorage.setItem('unitodo_user', JSON.stringify(result.user));
-      localStorage.setItem('unitodo_storage_config', JSON.stringify({ mode: 'remote' }));
-
       await login(email, password);
       navigate('/', { replace: true });
     } catch (err: unknown) {

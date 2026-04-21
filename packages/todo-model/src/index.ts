@@ -624,19 +624,43 @@ class RemoteAuthStorageImpl implements IAuthStorage {
   }
 
   async login(email: string, password: string): Promise<AuthResult> {
-    const { data } = await this.api.post<AuthResult>('/auth/login', { email, password });
-    this.setAuth(data);
-    return data;
+    const { data } = await this.api.post<{ access_token: string; user: User }>('/auth/login', {
+      email,
+      password,
+    });
+    const result: AuthResult = {
+      accessToken: data.access_token,
+      user: this.mapBackendUser(data.user),
+    };
+    this.setAuth(result);
+    return result;
   }
 
   async register(name: string, email: string, password: string): Promise<AuthResult> {
-    const { data } = await this.api.post<AuthResult>('/auth/register', {
+    const { data } = await this.api.post<{ access_token: string; user: User }>('/auth/register', {
       name,
       email,
       password,
       age: 18,
     });
-    return data;
+    const result: AuthResult = {
+      accessToken: data.access_token,
+      user: this.mapBackendUser(data.user),
+    };
+    this.setAuth(result);
+    return result;
+  }
+
+  private mapBackendUser(u: User): User {
+    return {
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      age: u.age,
+      role: u.role,
+      createdAt: u.createdAt ?? new Date().toISOString(),
+      updatedAt: u.updatedAt ?? new Date().toISOString(),
+    };
   }
 
   async getProfile(): Promise<User> {
@@ -696,13 +720,21 @@ export class RemoteStorage implements IStorage {
   readonly auth: IAuthStorage;
 
   constructor(config: StorageConfig) {
-    const baseUrl = config.apiBaseUrl ?? 'http://localhost:3001/api';
+    const baseUrl = config.apiBaseUrl ?? 'http://localhost:3002/api';
     this.config = config;
     this.tasks = new RemoteTaskStorageImpl(
-      axios.create({ baseURL: baseUrl, headers: { 'Content-Type': 'application/json' } }),
+      axios.create({
+        baseURL: baseUrl,
+        headers: { 'Content-Type': 'application/json' },
+        withCredentials: false,
+      }),
     );
     this.lists = new RemoteListStorageImpl(
-      axios.create({ baseURL: baseUrl, headers: { 'Content-Type': 'application/json' } }),
+      axios.create({
+        baseURL: baseUrl,
+        headers: { 'Content-Type': 'application/json' },
+        withCredentials: false,
+      }),
     );
     this.auth = new RemoteAuthStorageImpl(baseUrl);
   }
@@ -710,3 +742,7 @@ export class RemoteStorage implements IStorage {
   async initialize(): Promise<void> {}
   async destroy(): Promise<void> {}
 }
+
+// Re-export sync queue for external use
+export { syncQueue } from './sync-queue';
+export type { SyncQueueListener } from './sync-queue';

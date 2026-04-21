@@ -3,6 +3,7 @@ import { Layout } from './components/Layout';
 import { MainContent } from './components/MainContent';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { useAuth } from './contexts/AuthContext';
 import type { JSX } from 'react';
 
@@ -42,6 +43,7 @@ function App() {
           <Route path="tasks/:listId" element={<MainContent />} />
         </Route>
       </Routes>
+      <PWAInstallPrompt />
     </BrowserRouter>
   );
 }

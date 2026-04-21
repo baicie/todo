@@ -9,8 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@baicie/orbit-hooks": "workspace:*",
     "@baicie/orbit": "workspace:*",
+    "@baicie/orbit-hooks": "workspace:*",
     "@baicie/orbit-ui": "workspace:*",
     "@baicie/orbit-utils": "workspace:*",
     "@tanstack/react-query": "^5.99.2",
@@ -22,7 +22,9 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-i18next": "^17.0.4",
-    "react-router-dom": "^7.14.1"
+    "react-router-dom": "^7.14.1",
+    "vite-plugin-pwa": "^1.2.0",
+    "workbox-window": "^7.4.0"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",

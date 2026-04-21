@@ -6,3 +6,7 @@ export * from './components/ui/drawer';
 export * from './components/ui/modal';
 export * from './components/ui/date-picker';
 export * from './components/ui/select';
+export * from './components/ui/avatar';
+export * from './components/ui/badge';
+export * from './components/ui/dropdown';
+export * from './components/ui/toast';

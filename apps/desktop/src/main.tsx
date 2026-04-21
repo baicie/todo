@@ -5,8 +5,13 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './styles.css';
 import './i18n';
-import { queryClient } from '@baicie/orbit-hooks';
+import { queryClient, switchStorageMode } from '@baicie/orbit-hooks';
 import { AuthProvider } from './contexts/AuthContext';
+
+const apiUrl = import.meta.env.VITE_API_URL;
+if (apiUrl) {
+  switchStorageMode('remote', apiUrl);
+}
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

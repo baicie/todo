@@ -7,12 +7,32 @@
 
 .header {
   padding: 24rpx 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .app-title {
   font-size: 48rpx;
   font-weight: 700;
   color: #3b82f6;
+}
+
+.filter-label {
+  font-size: 28rpx;
+  color: #6b7280;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 200rpx;
+}
+
+.loading-text {
+  font-size: 28rpx;
+  color: #9ca3af;
 }
 
 .tabs {
@@ -95,6 +115,10 @@
   box-shadow: 0 1rpx 3rpx rgba(0, 0, 0, 0.03);
 }
 
+.task-item-done {
+  opacity: 0.6;
+}
+
 .task-left {
   display: flex;
   flex-direction: row;
@@ -103,12 +127,36 @@
   gap: 20rpx;
 }
 
+.task-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+}
+
+.task-title {
+  flex: 1;
+  font-size: 30rpx;
+  color: #111827;
+}
+
+.task-done {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+
+.task-steps {
+  font-size: 22rpx;
+  color: #9ca3af;
+}
+
 .checkbox {
   width: 44rpx;
   height: 44rpx;
   border-radius: 22rpx;
   border-width: 4rpx;
   border-color: #d1d5db;
+  border-style: solid;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -126,21 +174,10 @@
   font-weight: 700;
 }
 
-.task-title {
-  flex: 1;
-  font-size: 30rpx;
-  color: #111827;
-}
-
-.task-done {
-  text-decoration: line-through;
-  color: #9ca3af;
-}
-
 .task-actions {
   display: flex;
   flex-direction: row;
-  gap: 8rpx;
+  gap: 4rpx;
 }
 
 .action-btn {
@@ -160,6 +197,15 @@
   color: #f59e0b;
 }
 
+.myday-icon {
+  font-size: 32rpx;
+  color: #9ca3af;
+}
+
+.myday-active {
+  color: #f59e0b;
+}
+
 .delete-icon {
   font-size: 40rpx;
   color: #9ca3af;
@@ -173,10 +219,20 @@
   padding-top: 96rpx;
 }
 
+.empty-icon {
+  font-size: 96rpx;
+}
+
 .empty-text {
   margin-top: 16rpx;
   font-size: 28rpx;
   color: #9ca3af;
+}
+
+.empty-subtext {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #d1d5db;
 }
 
 .completed-section {

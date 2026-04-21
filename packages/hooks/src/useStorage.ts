@@ -24,7 +24,11 @@ export function createStorage(config: StorageConfig): IStorage {
   if (config.mode === 'local') {
     return new LocalStorage(config);
   }
-  return new RemoteStorage(config);
+  const mergedConfig: StorageConfig = {
+    ...config,
+    apiBaseUrl: config.apiBaseUrl ?? 'http://localhost:3002/api',
+  };
+  return new RemoteStorage(mergedConfig);
 }
 
 export function getStorage(): IStorage {
@@ -38,7 +42,7 @@ export function getStorage(): IStorage {
 export function switchStorageMode(mode: StorageMode, apiBaseUrl?: string): void {
   const config: StorageConfig = {
     mode,
-    apiBaseUrl: apiBaseUrl ?? 'http://localhost:3001/api',
+    apiBaseUrl: apiBaseUrl ?? (mode === 'remote' ? 'http://localhost:3002/api' : undefined),
     syncOnReconnect: true,
     conflictStrategy: 'local-wins',
   };
