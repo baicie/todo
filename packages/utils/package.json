@@ -1,6 +1,8 @@
 {
   "name": "@baicie/orbit-utils",
   "version": "0.0.1",
+  "description": "Shared utility functions for Orbit",
+  "license": "MIT",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/types/index.d.ts",

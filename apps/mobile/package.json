@@ -6,7 +6,12 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --fix",
+    "prebuild": "expo prebuild",
+    "build:ios": "expo prebuild --platform ios && xcodebuild -workspace ios/*.xcworkspace -scheme orbit-mobile -configuration Release",
+    "build:android": "expo prebuild --platform android && ./android/gradlew assembleRelease"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

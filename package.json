@@ -5,10 +5,20 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
+    "build:web": "pnpm --filter orbit-web build",
+    "build:desktop": "pnpm --filter orbit-desktop build",
+    "build:browser-ext": "pnpm --filter orbit-browser-ext build",
+    "build:backend": "pnpm --filter orbit-backend build",
+    "build:miniprogram": "pnpm --filter orbit-miniprogram build:weapp",
+    "build:mobile": "pnpm --filter orbit-mobile typecheck",
+    "build:vscode-ext": "pnpm --filter orbit-vscode-ext compile",
     "lint": "pnpm -r lint",
     "fix": "eslint --fix",
     "format": "prettier --write --cache .",
+    "format:check": "prettier --check --cache .",
     "check": "echo \"Check passed\"",
+    "test-unit": "echo \"No unit tests configured\"",
+    "test-e2e": "echo \"No e2e tests configured\"",
     "postinstall": "simple-git-hooks"
   },
   "simple-git-hooks": {

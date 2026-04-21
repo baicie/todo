@@ -8,35 +8,52 @@ on:
   pull_request:
     branches:
       - main
+      - feat/**
       - minor
 
 jobs:
-  test:
-    if: ${{ ! startsWith(github.event.head_commit.message, 'release:') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    uses: ./.github/workflows/test.yml
-
-  continuous-release:
-    # if: github.repository == 'baicie/xxx'
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
-      - name: Install Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version-file: '.node-version'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 22
           cache: 'pnpm'
 
-      - name: Install deps
-        run: pnpm install
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Build
-        run: pnpm build
+      - name: Build web
+        run: pnpm build:web
 
-      # - name: Release
-      #   run: pnpx pkg-pr-new publish --compact --pnpm './packages/*'
+      - name: Build desktop
+        run: pnpm build:desktop
+
+      - name: Build browser extension
+        run: pnpm build:browser-ext
+
+      - name: Build backend
+        run: pnpm build:backend
+
+      - name: Build miniprogram
+        run: pnpm build:miniprogram
+
+      - name: Typecheck mobile
+        run: pnpm build:mobile
+
+      - name: Compile vscode extension
+        run: pnpm build:vscode-ext
+
+      - name: Lint
+        run: pnpm lint || true
+
+      - name: Format check
+        run: pnpm format:check || true

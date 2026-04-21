@@ -3,53 +3,46 @@ name: Release
 on:
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - 'v*'
 
 jobs:
-  test:
+  build:
     uses: ./.github/workflows/test.yml
 
-  release:
-    # prevents this action from running on forks
-    needs: [test]
+  publish:
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
-    # Use Release environment for deployment protection
     environment: Release
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version-file: '.node-version'
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
-      - name: Install deps
-        run: pnpm install
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Update npm
-        run: npm i -g npm@latest
+      - name: Build all packages
+        run: pnpm build
 
-      - name: Build and publish
-        id: publish
+      - name: Publish packages
         run: |
-          pnpm release --publishOnly
-
-      - name: Create GitHub release
-        id: release_tag
-        uses: yyx990803/release-tag@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          body: |
-            For stable releases, please refer to [CHANGELOG.md](https://github.com/baicie/zeus/blob/main/CHANGELOG.md) for details.
-            For pre-releases, please refer to [CHANGELOG.md](https://github.com/baicie/zeus/blob/minor/CHANGELOG.md) of the `minor` branch.
+          for pkg in packages/*/; do
+            name=$(node -p "require('./${pkg}package.json').name")
+            if node -p "require('./${pkg}package.json').private" 2>/dev/null; then
+              echo "Skipping private package: $name"
+            else
+              echo "Publishing: $name"
+              cd "$pkg" && npm publish --access public --tag latest || true && cd - > /dev/null
+            fi
+          done

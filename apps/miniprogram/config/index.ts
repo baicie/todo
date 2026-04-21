@@ -26,7 +26,10 @@ export default defineConfig(async (merge, { command, mode }) => {
     framework: 'react',
     compiler: 'webpack5',
     cache: {
-      enable: false, // Webpack5 开启缓存会导致 alias 失效，暂时关闭
+      enable: false,
+    },
+    babel: {
+      ts: true,
     },
     mini: {
       postcss: {

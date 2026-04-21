@@ -1,7 +1,7 @@
 import { Input, Text, View } from '@tarojs/components';
 import { useCallback, useState } from 'react';
 import Taro from '@tarojs/taro';
-import { type TodoItem, createTask } from '../../../types';
+import { type TodoItem, createTask } from '../../types';
 import './index.scss';
 
 type FilterType = 'all' | 'today' | 'important';
