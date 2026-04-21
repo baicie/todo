@@ -12,18 +12,21 @@
 ## 项目结构
 
 ```
-full-monorepo/
+orbit/
 ├── apps/                 # 应用程序
-│   ├── web/             # React + Vite Web 应用
-│   ├── backend/         # NestJS 后端应用
-│   ├── desktop/         # Electron 桌面应用
-│   ├── mobile/          # React Native 移动应用
-│   ├── miniprogram/     # Taro 小程序
-│   └── browser-ext/    # 浏览器扩展
+│   ├── orbit-web/             # React + Vite Web 应用
+│   ├── orbit-backend/         # NestJS 后端应用
+│   ├── orbit-desktop/         # Tauri 桌面应用
+│   ├── orbit-mobile/          # React Native 移动应用
+│   ├── orbit-miniprogram/     # Taro 小程序
+│   ├── orbit-browser-ext/     # 浏览器扩展
+│   └── orbit-vscode-ext/      # VSCode 扩展
 ├── packages/            # 共享包
-│   ├── ui/             # UI 组件包
-│   ├── utils/          # 工具函数包
-│   └── tsconfig/       # TypeScript 配置包
+│   ├── orbit/             # 核心数据模型
+│   ├── orbit-hooks/       # React Hooks
+│   ├── orbit-ui/          # UI 组件包
+│   ├── orbit-utils/       # 工具函数包
+│   └── orbit-tsconfig/    # TypeScript 配置包
 └── pnpm-workspace.yaml # Workspace 配置
 ```
 

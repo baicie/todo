@@ -15,7 +15,7 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'add-to-unitodo',
-    title: '添加到 UniTodo',
+    title: '添加到 Orbit',
     contexts: ['selection'],
   });
 });
@@ -54,7 +54,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.notifications.create({
         type: 'basic',
         iconUrl: 'icons/icon-48.png',
-        title: message.title || 'UniTodo',
+        title: message.title || 'Orbit',
         message: message.body || '',
         priority: 2,
       });
@@ -67,4 +67,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // 安装时打印日志
-console.log('[UniTodo] Background service worker started');
+console.log('[Orbit] Background service worker started');

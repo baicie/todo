@@ -6,7 +6,7 @@ import prodConfig from './prod';
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
 export default defineConfig(async (merge, { command, mode }) => {
   const baseConfig = {
-    projectName: 'miniprogram',
+    projectName: 'orbit-miniprogram',
     date: '2024-05-20',
     designWidth: 750,
     deviceRatio: {

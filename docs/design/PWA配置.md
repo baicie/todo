@@ -24,8 +24,8 @@ PWA 让 Web 应用拥有接近原生应用的体验：
 
 ```json
 {
-  "name": "UniTodo",
-  "short_name": "UniTodo",
+  "name": "Orbit",
+  "short_name": "Orbit",
   "description": "跨平台 Todo 应用，一套代码，多端运行",
   "start_url": "/",
   "display": "standalone",
@@ -393,7 +393,7 @@ async function triggerBackgroundSync() {
 
 // IndexedDB 中的 syncQueue 由 syncTasks() 函数处理
 async function syncTasks() {
-  const db = await openDB('UniTodoDB');
+  const db = await openDB('OrbitDB');
   const pending = await db.getAll('syncQueue');
 
   for (const operation of pending) {

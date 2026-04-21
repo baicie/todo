@@ -1,5 +1,5 @@
 [package]
-name = "desktop-app"
+name = "orbit-desktop"
 version = "1.0.0"
 description = "Tauri application with React and TypeScript"
 authors = ["you"]

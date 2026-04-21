@@ -1,8 +1,8 @@
 {
-  "name": "miniprogram",
+  "name": "orbit-miniprogram",
   "version": "1.0.0",
   "private": true,
-  "description": "Taro Mini Program - UniTodo",
+  "description": "Taro Mini Program - Orbit",
   "templateInfo": {
     "name": "default",
     "typescript": true,

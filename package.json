@@ -1,5 +1,5 @@
 {
-  "name": "full-monorepo",
+  "name": "orbit",
   "private": true,
   "type": "module",
   "scripts": {

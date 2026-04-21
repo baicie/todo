@@ -216,7 +216,7 @@ export class TodoDatabase extends Dexie {
   syncQueue!: Table<SyncOperation, number>;
 
   constructor() {
-    super('UniTodoDB');
+    super('OrbitDB');
 
     this.version(1).stores({
       tasks:

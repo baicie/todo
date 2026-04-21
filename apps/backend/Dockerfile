@@ -19,7 +19,7 @@ COPY apps/backend ./apps/backend
 RUN pnpm install --frozen-lockfile
 
 # Build
-RUN pnpm --filter backend build
+RUN pnpm --filter orbit-backend build
 
 # Prune dev dependencies
 RUN pnpm prune --prod

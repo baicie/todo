@@ -48,7 +48,7 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-blue-500">UniTodo</span>
+          <span className="text-sm font-bold text-blue-500">Orbit</span>
         </div>
         <div className="flex items-center gap-2">
           <button className="p-1 text-gray-500 hover:text-gray-700">

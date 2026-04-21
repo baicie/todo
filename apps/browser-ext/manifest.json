@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "UniTodo",
-  "short_name": "UniTodo",
+  "name": "Orbit",
+  "short_name": "Orbit",
   "description": "跨平台待办事项应用，随时随地管理您的任务",
   "version": "1.0.0",
   "action": {
@@ -12,7 +12,7 @@
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     },
-    "default_title": "UniTodo"
+    "default_title": "Orbit"
   },
   "icons": {
     "16": "icons/icon-16.png",
@@ -39,7 +39,7 @@
         "default": "Ctrl+Shift+U",
         "mac": "Command+Shift+U"
       },
-      "description": "打开 UniTodo"
+      "description": "打开 Orbit"
     }
   },
   "shortcuts": [

@@ -19,7 +19,7 @@ COPY apps/web ./apps/web
 RUN pnpm install --frozen-lockfile
 
 # Build
-RUN pnpm --filter web-app build
+RUN pnpm --filter orbit-web build
 
 FROM nginx:alpine AS runner
 

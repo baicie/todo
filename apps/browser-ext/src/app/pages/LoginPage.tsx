@@ -18,7 +18,7 @@ export function LoginPage() {
   return (
     <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4">
       <form onSubmit={handleSubmit} className="w-full max-w-[280px] space-y-3">
-        <h1 className="text-xl font-bold text-center text-gray-800">UniTodo</h1>
+        <h1 className="text-xl font-bold text-center text-gray-800">Orbit</h1>
         <p className="text-sm text-gray-500 text-center">登录以同步任务</p>
         <input
           type="email"

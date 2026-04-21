@@ -1,7 +1,7 @@
 {
-  "name": "vscode-ext",
-  "displayName": "VSCode Extension",
-  "description": "A VSCode extension in monorepo",
+  "name": "orbit-vscode-ext",
+  "displayName": "Orbit",
+  "description": "A cross-platform Orbit todo extension in monorepo",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"
@@ -14,7 +14,7 @@
   "contributes": {
     "commands": [
       {
-        "command": "vscode-ext.helloWorld",
+        "command": "orbit-vscode-ext.helloWorld",
         "title": "Hello World"
       }
     ]

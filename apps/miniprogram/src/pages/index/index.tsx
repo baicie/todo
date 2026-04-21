@@ -79,7 +79,7 @@ export default function Index() {
   return (
     <View className="miniprogram-container">
       <View className="header">
-        <Text className="app-title">UniTodo</Text>
+        <Text className="app-title">Orbit</Text>
       </View>
 
       <View className="tabs">

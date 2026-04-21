@@ -1,6 +1,6 @@
 {
   "miniprogramRoot": "dist/",
-  "projectname": "miniprogram",
+  "projectname": "orbit-miniprogram",
   "description": "Taro Mini Program",
   "appid": "touristappid",
   "setting": {

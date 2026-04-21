@@ -1,22 +1,24 @@
-# Full Stack Monorepo Template
+# Orbit - Cross-Platform Todo Application
 
-This is a comprehensive monorepo template supporting multiple platforms.
+A comprehensive monorepo template for building cross-platform todo applications with shared packages.
 
 ## Structure
 
 - **apps/**
-  - `web`: Web Application (Vite + React + TS)
-  - `desktop`: Desktop Application (Electron + React + TS)
-  - `backend`: Backend Application (NestJS + Docker)
-  - `mobile`: Mobile Application (React Native + Expo)
-  - `miniprogram`: Mini Program (Taro + React)
-  - `vscode-ext`: VSCode Extension
-  - `browser-ext`: Browser Extension (Manifest V3)
+  - `orbit-web`: Web Application (Vite + React + TS)
+  - `orbit-desktop`: Desktop Application (Tauri + React + TS)
+  - `orbit-backend`: Backend Application (NestJS + Docker)
+  - `orbit-mobile`: Mobile Application (React Native + Expo)
+  - `orbit-miniprogram`: Mini Program (Taro + React)
+  - `orbit-vscode-ext`: VSCode Extension
+  - `orbit-browser-ext`: Browser Extension (Manifest V3)
 
 - **packages/**
-  - `ui`: Shared React UI Components
-  - `utils`: Shared Utility Functions
-  - `tsconfig`: Shared TypeScript Configuration
+  - `orbit`: Core data model and storage abstraction
+  - `orbit-hooks`: Shared React hooks
+  - `orbit-ui`: Shared React UI Components
+  - `orbit-utils`: Shared Utility Functions
+  - `orbit-tsconfig`: Shared TypeScript Configuration
 
 ## Getting Started
 
@@ -27,6 +29,7 @@ This is a comprehensive monorepo template supporting multiple platforms.
    ```
 
 2. Run development servers:
+
    ```bash
    pnpm dev
    ```
@@ -53,6 +56,6 @@ docker-compose up -d --build
 ## Features
 
 - **Monorepo**: Managed by pnpm workspaces.
-- **Shared Code**: UI components and utility functions shared across web, mobile, and extensions.
+- **Shared Code**: Data model, hooks, UI components and utility functions shared across all apps.
 - **Docker Ready**: Backend and Web apps are containerized.
-- **Cross-Platform**: Covers Web, Desktop (Electron), Mobile, Mini Program, VSCode, and Browser Extensions.
+- **Cross-Platform**: Covers Web, Desktop (Tauri), Mobile, Mini Program, VSCode, and Browser Extensions.

@@ -13,7 +13,7 @@ export function Header() {
     <>
       <header className="h-12 px-4 flex items-center justify-between border-b border-gray-200 bg-white">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-[var(--theme-primary)]">UniTodo</span>
+          <span className="text-sm font-bold text-[var(--theme-primary)]">Orbit</span>
         </div>
         <div className="flex items-center gap-2">
           <button

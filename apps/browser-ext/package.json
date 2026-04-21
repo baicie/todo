@@ -1,5 +1,5 @@
 {
-  "name": "browser-ext",
+  "name": "orbit-browser-ext",
   "private": true,
   "version": "1.0.0",
   "type": "module",

@@ -68,7 +68,7 @@ export default function TaskListScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.header}>
-        <Text style={styles.appTitle}>UniTodo</Text>
+        <Text style={styles.appTitle}>Orbit</Text>
       </View>
 
       <View style={styles.tabs}>
