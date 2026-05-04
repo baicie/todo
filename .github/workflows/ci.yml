@@ -1,4 +1,5 @@
-name: 'ci'
+name: 'CI'
+
 on:
   push:
     branches:
@@ -11,8 +12,15 @@ on:
       - feat/**
       - minor
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  # ---------------------------------------------------------------------------
+  # TypeScript type check (fastest, no caching needed)
+  # ---------------------------------------------------------------------------
+  typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -31,29 +39,113 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build web
-        run: pnpm build:web
+      - name: TypeScript check
+        run: pnpm check
 
-      - name: Build desktop
-        run: pnpm build:desktop
+  # ---------------------------------------------------------------------------
+  # Lint + Format check
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
-      - name: Build browser extension
-        run: pnpm build:browser-ext
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
-      - name: Build backend
-        run: pnpm build:backend
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
 
-      - name: Build miniprogram
-        run: pnpm build:miniprogram
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Typecheck mobile
-        run: pnpm build:mobile
-
-      - name: Compile vscode extension
-        run: pnpm build:vscode-ext
-
-      - name: Lint
+      - name: ESLint
         run: pnpm lint
 
-      - name: Format check
+      - name: Prettier format check
         run: pnpm format:check
+
+  # ---------------------------------------------------------------------------
+  # Build all packages in parallel
+  # ---------------------------------------------------------------------------
+  build-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build todo-model
+        run: pnpm --filter "@baicie/orbit" build
+
+      - name: Build utils
+        run: pnpm --filter "@baicie/orbit-utils" build
+
+      - name: Build hooks
+        run: pnpm --filter "@baicie/orbit-hooks" build
+
+      - name: Build UI
+        run: pnpm --filter "@baicie/orbit-ui" build
+
+      - name: Build plugin-system
+        run: pnpm --filter "@baicie/orbit-plugin-system" build
+
+  # ---------------------------------------------------------------------------
+  # Build all apps in parallel
+  # ---------------------------------------------------------------------------
+  build-apps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build Web
+        run: pnpm build:web
+
+      - name: Build Desktop
+        run: pnpm build:desktop
+
+      - name: Build Browser Extension
+        run: pnpm build:browser-ext
+
+      - name: Build Backend
+        run: pnpm build:backend
+
+      - name: Build Miniprogram
+        run: pnpm build:miniprogram
+
+      - name: Typecheck Mobile
+        run: pnpm build:mobile
+
+      - name: Compile VSCode Extension
+        run: pnpm build:vscode-ext

@@ -21,6 +21,7 @@ import {
   useBatchOperations,
   useCreateTask,
   useDeleteTask,
+  useList,
   useReorderTasks,
   useReorderTasksOptimistic,
   useTag,
@@ -35,6 +36,8 @@ import { ShortcutsHelp } from './ShortcutsHelp';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { Sidebar } from './Sidebar';
 import { SortableTaskList } from './SortableTaskList';
+import { ShareDialog } from './ShareDialog';
+import { DatePicker } from './DatePicker';
 import type { Task, TaskFilter } from '@baicie/orbit';
 import { BatchActionsBar } from './BatchActionsBar';
 
@@ -44,13 +47,16 @@ export function MainContent() {
   const activeListId = listId || 'my-day';
   const { t } = useTranslation();
   const [newTask, setNewTask] = useState('');
+  const [newTaskDueDate, setNewTaskDueDate] = useState<string | null>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isCompletedCollapsed, setIsCompletedCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
   const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [sortBy, setSortBy] = useState<
     'createdAt' | 'updatedAt' | 'dueDate' | 'title' | 'importance'
   >('createdAt');
@@ -59,6 +65,7 @@ export function MainContent() {
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
   const { data: allTags = [] } = useTag();
+  const { data: allLists = [] } = useList();
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -98,13 +105,20 @@ export function MainContent() {
     e.preventDefault();
     if (!newTask.trim()) return;
     const isSmartList = ['my-day', 'important', 'planned', 'tasks'].includes(activeListId);
-    const payload: { title: string; listId?: string; addToMyDay?: boolean; isImportant?: boolean } =
-      { title: newTask };
+    const payload: {
+      title: string;
+      listId?: string;
+      addToMyDay?: boolean;
+      isImportant?: boolean;
+      dueDate?: string;
+    } = { title: newTask };
     if (activeListId === 'my-day') payload.addToMyDay = true;
     if (activeListId === 'important') payload.isImportant = true;
     if (!isSmartList) payload.listId = activeListId;
+    if (newTaskDueDate) payload.dueDate = newTaskDueDate;
     createTask.mutate(payload);
     setNewTask('');
+    setNewTaskDueDate(null);
   };
 
   const getTitle = () => {
@@ -267,7 +281,11 @@ export function MainContent() {
                 <Grid2X2 size={16} />
                 <span>组</span>
               </button>
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <button
+                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors"
+                onClick={() => setIsShareDialogOpen(true)}
+                title="分享"
+              >
                 <UserPlus size={16} />
                 <span>共享</span>
               </button>
@@ -277,9 +295,7 @@ export function MainContent() {
 
         <motion.div layout className="flex-1 overflow-y-auto px-4 sm:px-8 pb-24 scroll-smooth">
           {/* Add Task */}
-          <div
-            className={`mb-4 bg-white rounded-md shadow-sm border transition-all ${isInputFocused ? 'border-gray-200' : 'border-gray-200'}`}
-          >
+          <div className="mb-4 bg-white rounded-md shadow-sm border transition-all border-gray-200">
             <form onSubmit={handleAddTask} className="flex items-center gap-3 p-3">
               <Plus
                 className={isInputFocused ? 'text-[var(--theme-primary)]' : 'text-gray-400'}
@@ -304,6 +320,53 @@ export function MainContent() {
                 </button>
               )}
             </form>
+            {isInputFocused && (
+              <div className="flex items-center gap-1 px-3 pb-2 bg-gray-50/50 rounded-b-md border-t border-gray-100 pt-2 relative">
+                <div className="relative">
+                  <button
+                    className="p-1.5 hover:bg-gray-200 rounded text-gray-500"
+                    title="设置截止日期"
+                    onClick={() => setIsDatePickerOpen((v) => !v)}
+                  >
+                    <Calendar
+                      size={18}
+                      className={newTaskDueDate ? 'text-[var(--theme-primary)]' : ''}
+                    />
+                  </button>
+                  <AnimatePresence>
+                    {isDatePickerOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.1 }}
+                        className="absolute top-full left-0 mt-1 z-50"
+                      >
+                        <DatePicker
+                          value={newTaskDueDate ? newTaskDueDate.split('T')[0] : null}
+                          onChange={(date) => {
+                            setNewTaskDueDate(
+                              date ? new Date(date + 'T00:00:00').toISOString() : null,
+                            );
+                            setIsDatePickerOpen(false);
+                          }}
+                          onClear={() => {
+                            setNewTaskDueDate(null);
+                            setIsDatePickerOpen(false);
+                          }}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-500" title="设置提醒">
+                  <Bell size={18} />
+                </button>
+                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-500" title="设置重复">
+                  <Repeat size={18} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Active Tasks */}
@@ -429,6 +492,22 @@ export function MainContent() {
       />
 
       <ShortcutsHelp isOpen={isShortcutsHelpOpen} onClose={() => setIsShortcutsHelpOpen(false)} />
+
+      {(() => {
+        const isSmartList = ['my-day', 'important', 'planned', 'tasks'].includes(activeListId);
+        const currentList = isSmartList ? null : allLists.find((l) => l.id === activeListId);
+        if (!isSmartList && currentList) {
+          return (
+            <ShareDialog
+              isOpen={isShareDialogOpen}
+              onClose={() => setIsShareDialogOpen(false)}
+              listId={currentList.id}
+              listTitle={currentList.title}
+            />
+          );
+        }
+        return null;
+      })()}
     </div>
   );
 }

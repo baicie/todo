@@ -50,14 +50,14 @@ export class SharesService {
     return share;
   }
 
-  async resolvePermission(shareCode: string, userId: number) {
+  async resolvePermission(shareCode: string, userId?: number) {
     const share = await this.sharesRepository.findOne({
       where: { shareCode, isActive: true },
     });
     if (!share) {
       throw new NotFoundException('分享不存在或已失效');
     }
-    if (share.ownerId === userId) {
+    if (userId !== undefined && share.ownerId === userId) {
       return 'admin';
     }
     return share.permission;
@@ -99,5 +99,37 @@ export class SharesService {
       };
     }
     throw new ForbiddenException('无权限访问此分享');
+  }
+
+  async getShareView(shareCode: string, userId?: number) {
+    const share = await this.sharesRepository.findOne({
+      where: { shareCode, isActive: true },
+      relations: ['list', 'list.tasks'],
+    });
+    if (!share) {
+      throw new NotFoundException('分享不存在或已失效');
+    }
+    const isOwner = userId !== undefined && share.ownerId === userId;
+    const permission = isOwner ? 'admin' : share.permission;
+
+    const tasks =
+      share.list.tasks?.map((task) => ({
+        id: task.id,
+        title: task.title,
+        isCompleted: task.isCompleted,
+        isImportant: task.isImportant,
+        dueDate: task.dueDate,
+        myDay: task.addToMyDay,
+        createdAt: task.createdAt,
+      })) ?? [];
+
+    return {
+      list: {
+        id: share.list.id,
+        title: share.list.title,
+      },
+      tasks,
+      permission,
+    };
   }
 }

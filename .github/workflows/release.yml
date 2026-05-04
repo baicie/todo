@@ -5,22 +5,46 @@ on:
     tags:
       - 'v*'
 
-jobs:
-  build:
-    uses: ./.github/workflows/test.yml
+permissions:
+  contents: read
 
-  publish:
-    needs: [build]
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Run CI checks before release
+  # ---------------------------------------------------------------------------
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # ---------------------------------------------------------------------------
+  # Publish packages to npm
+  # ---------------------------------------------------------------------------
+  publish-npm:
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
     environment: Release
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - { name: '@baicie/orbit', dir: 'packages/todo-model' }
+          - { name: '@baicie/orbit-hooks', dir: 'packages/hooks' }
+          - { name: '@baicie/orbit-ui', dir: 'packages/ui' }
+          - { name: '@baicie/orbit-utils', dir: 'packages/utils' }
+          - { name: '@baicie/orbit-plugin-system', dir: 'packages/plugin-system' }
     steps:
       - uses: actions/checkout@v5
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -32,17 +56,104 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build all packages
-        run: pnpm build
+      - name: Build package
+        run: pnpm --filter "${{ matrix.package.name }}" build
 
-      - name: Publish packages
+      - name: Publish to npm
         run: |
-          for pkg in packages/*/; do
-            name=$(node -p "require('./${pkg}package.json').name")
-            if node -p "require('./${pkg}package.json').private" 2>/dev/null; then
-              echo "Skipping private package: $name"
-            else
-              echo "Publishing: $name"
-              cd "$pkg" && npm publish --access public --tag latest || true && cd - > /dev/null
-            fi
-          done
+          cd ${{ matrix.package.dir }}
+          npm publish --access public --tag latest
+
+  # ---------------------------------------------------------------------------
+  # Build and upload Web artifact
+  # ---------------------------------------------------------------------------
+  build-web:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build Web
+        run: pnpm build:web
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-web-dist
+          path: apps/web/dist
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Build and upload Desktop artifact
+  # ---------------------------------------------------------------------------
+  build-desktop:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build Desktop
+        run: pnpm build:desktop
+
+      - name: Upload Desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-desktop-dist
+          path: apps/desktop/dist
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Create GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [publish-npm, build-web, build-desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Generate Release Notes
+        run: |
+          echo '## What's Changed' > release-notes.md
+          echo '' >> release-notes.md
+          git log --oneline -20 >> release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          draft: true
+          files: |
+            apps/web/dist/**/*
+            apps/desktop/dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

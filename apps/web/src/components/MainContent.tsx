@@ -26,6 +26,7 @@ import {
   useBatchOperations,
   useCreateTask,
   useDeleteTask,
+  useList,
   useReorderTasks,
   useReorderTasksOptimistic,
   useTag,
@@ -40,6 +41,7 @@ import type { Task, TaskFilter } from '@baicie/orbit';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { DatePicker } from './DatePicker';
+import { ShareDialog } from './ShareDialog';
 import { useAppEvent } from '../hooks/useAppEvents';
 
 export const MainContent = () => {
@@ -63,10 +65,12 @@ export const MainContent = () => {
   >('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [activeDatePickerTaskId, setActiveDatePickerTaskId] = useState<string | null>(null);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
 
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
   const { data: allTags = [] } = useTag();
+  const { data: lists = [] } = useList();
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -313,7 +317,17 @@ export const MainContent = () => {
                 <Grid2X2 size={16} />
                 <span>组</span>
               </button>
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <button
+                onClick={() => {
+                  const smartSet = new Set(['my-day', 'important', 'planned', 'tasks']);
+                  if (smartSet.has(activeListId)) {
+                    alert('请选择一个自定义清单进行分享');
+                    return;
+                  }
+                  setIsShareDialogOpen(true);
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors"
+              >
                 <UserPlus size={16} />
                 <span>共享</span>
               </button>
@@ -645,6 +659,13 @@ export const MainContent = () => {
         onMarkImportant={() => batchOps.batchMarkImportant()}
         onAddToMyDay={() => batchOps.batchAddToMyDay()}
         onDelete={batchOps.batchDelete}
+      />
+
+      <ShareDialog
+        isOpen={isShareDialogOpen}
+        onClose={() => setIsShareDialogOpen(false)}
+        listId={activeListId}
+        listTitle={lists?.find((l) => l.id === activeListId)?.title ?? '清单'}
       />
     </div>
   );

@@ -40,6 +40,27 @@
       "markAsCompleted": "Mark as completed",
       "markAsIncomplete": "Mark as incomplete",
       "deleteTask": "Delete task"
+    },
+    "share": {
+      "dialogTitle": "Share List",
+      "createShare": "Create share link",
+      "sharePermission": "Share permission",
+      "viewOnly": "View only",
+      "canEdit": "Can edit",
+      "share": "Share",
+      "creating": "Creating...",
+      "copyLink": "Copy link",
+      "copied": "Copied",
+      "existingShares": "Existing share links",
+      "noShares": "No share links yet",
+      "loading": "Loading...",
+      "togglePermission": "Toggle permission",
+      "deleteShare": "Delete share",
+      "needLogin": "Please login first",
+      "createFailed": "Failed to create share",
+      "updateFailed": "Update failed",
+      "deleteFailed": "Delete failed",
+      "smartListTip": "Please select a custom list to share"
     }
   },
   "drawer": {
