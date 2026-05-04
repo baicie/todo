@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
-    "@types/react": "^19.2.0"
+    "@types/react": "^19.2.14"
   },
   "peerDependencies": {
     "react": "^19"

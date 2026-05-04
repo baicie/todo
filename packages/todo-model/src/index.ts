@@ -643,27 +643,29 @@ class RemoteTaskStorageImpl implements ITaskStorage {
   }
 
   async getTasks(filter?: TaskFilter): Promise<Task[]> {
-    const { data } = await this.api.get<Task[]>('/tasks', { params: this.buildParams(filter) });
-    return data.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const { data } = await this.api.get<{ success: boolean; data: Task[] }>('/tasks', {
+      params: this.buildParams(filter),
+    });
+    return data.data.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   }
 
   async getTask(id: string): Promise<Task | null> {
     try {
-      const { data } = await this.api.get<Task>(`/tasks/${id}`);
-      return data;
+      const { data } = await this.api.get<{ success: boolean; data: Task }>(`/tasks/${id}`);
+      return data.data;
     } catch {
       return null;
     }
   }
 
   async createTask(input: CreateTaskInput): Promise<Task> {
-    const { data } = await this.api.post<Task>('/tasks', input);
-    return data;
+    const { data } = await this.api.post<{ success: boolean; data: Task }>('/tasks', input);
+    return data.data;
   }
 
   async updateTask(id: string, input: UpdateTaskInput): Promise<Task> {
-    const { data } = await this.api.patch<Task>(`/tasks/${id}`, input);
-    return data;
+    const { data } = await this.api.patch<{ success: boolean; data: Task }>(`/tasks/${id}`, input);
+    return data.data;
   }
 
   async deleteTask(id: string): Promise<void> {
@@ -687,27 +689,27 @@ class RemoteListStorageImpl implements IListStorage {
   constructor(private readonly api: AxiosInstance) {}
 
   async getLists(): Promise<List[]> {
-    const { data } = await this.api.get<List[]>('/lists');
-    return data;
+    const { data } = await this.api.get<{ success: boolean; data: List[] }>('/lists');
+    return data.data;
   }
 
   async getList(id: string): Promise<List | null> {
     try {
-      const { data } = await this.api.get<List>(`/lists/${id}`);
-      return data;
+      const { data } = await this.api.get<{ success: boolean; data: List }>(`/lists/${id}`);
+      return data.data;
     } catch {
       return null;
     }
   }
 
   async createList(input: CreateListInput): Promise<List> {
-    const { data } = await this.api.post<List>('/lists', input);
-    return data;
+    const { data } = await this.api.post<{ success: boolean; data: List }>('/lists', input);
+    return data.data;
   }
 
   async updateList(id: string, input: UpdateListInput): Promise<List> {
-    const { data } = await this.api.patch<List>(`/lists/${id}`, input);
-    return data;
+    const { data } = await this.api.patch<{ success: boolean; data: List }>(`/lists/${id}`, input);
+    return data.data;
   }
 
   async deleteList(id: string): Promise<void> {
@@ -719,15 +721,10 @@ class RemoteAuthStorageImpl implements IAuthStorage {
   readonly mode: 'remote' = 'remote';
   private api: AxiosInstance;
 
-  constructor(private readonly baseUrl: string) {
-    this.api = axios.create({ baseURL: baseUrl, headers: { 'Content-Type': 'application/json' } });
+  constructor(api: AxiosInstance, _baseUrl: string) {
+    this.api = api;
     this.api.interceptors.request.use((config) => {
       const token = localStorage.getItem('unitodo_token');
-      console.debug(
-        '[orbit] request interceptor: token from localStorage:',
-        token ? `${token.slice(0, 20)}...` : null,
-      );
-      console.debug('[orbit] request interceptor: full url:', config.baseURL, config.url);
       if (token) config.headers.Authorization = `Bearer ${token}`;
       return config;
     });
@@ -738,7 +735,6 @@ class RemoteAuthStorageImpl implements IAuthStorage {
   }
 
   async login(email: string, password: string): Promise<AuthResult> {
-    console.debug('[orbit] login called with email:', email);
     const { data } = await this.api.post<{
       success: boolean;
       data: { access_token: string; user: User };
@@ -746,12 +742,10 @@ class RemoteAuthStorageImpl implements IAuthStorage {
       email,
       password,
     });
-    console.debug('[orbit] login response:', data);
     const result: AuthResult = {
       accessToken: data.data.access_token,
       user: this.mapBackendUser(data.data.user),
     };
-    console.debug('[orbit] setAuth called with token:', result.accessToken.slice(0, 20) + '...');
     this.setAuth(result);
     return result;
   }
@@ -821,27 +815,27 @@ class RemoteTagStorageImpl implements ITagStorage {
   constructor(private readonly api: AxiosInstance) {}
 
   async getTags(): Promise<Tag[]> {
-    const { data } = await this.api.get<Tag[]>('/tags');
-    return data;
+    const { data } = await this.api.get<{ success: boolean; data: Tag[] }>('/tags');
+    return data.data;
   }
 
   async getTag(id: string): Promise<Tag | null> {
     try {
-      const { data } = await this.api.get<Tag>(`/tags/${id}`);
-      return data;
+      const { data } = await this.api.get<{ success: boolean; data: Tag }>(`/tags/${id}`);
+      return data.data;
     } catch {
       return null;
     }
   }
 
   async createTag(input: CreateTagInput): Promise<Tag> {
-    const { data } = await this.api.post<Tag>('/tags', input);
-    return data;
+    const { data } = await this.api.post<{ success: boolean; data: Tag }>('/tags', input);
+    return data.data;
   }
 
   async updateTag(id: string, input: UpdateTagInput): Promise<Tag> {
-    const { data } = await this.api.patch<Tag>(`/tags/${id}`, input);
-    return data;
+    const { data } = await this.api.patch<{ success: boolean; data: Tag }>(`/tags/${id}`, input);
+    return data.data;
   }
 
   async deleteTag(id: string): Promise<void> {
@@ -882,28 +876,20 @@ export class RemoteStorage implements IStorage {
   constructor(config: StorageConfig) {
     const baseUrl = config.apiBaseUrl ?? 'http://localhost:3001/api';
     this.config = config;
-    this.tasks = new RemoteTaskStorageImpl(
-      axios.create({
-        baseURL: baseUrl,
-        headers: { 'Content-Type': 'application/json' },
-        withCredentials: false,
-      }),
-    );
-    this.lists = new RemoteListStorageImpl(
-      axios.create({
-        baseURL: baseUrl,
-        headers: { 'Content-Type': 'application/json' },
-        withCredentials: false,
-      }),
-    );
-    this.auth = new RemoteAuthStorageImpl(baseUrl);
-    this.tags = new RemoteTagStorageImpl(
-      axios.create({
-        baseURL: baseUrl,
-        headers: { 'Content-Type': 'application/json' },
-        withCredentials: false,
-      }),
-    );
+    const sharedApi = axios.create({
+      baseURL: baseUrl,
+      headers: { 'Content-Type': 'application/json' },
+      withCredentials: false,
+    });
+    sharedApi.interceptors.request.use((cfg) => {
+      const token = localStorage.getItem('unitodo_token');
+      if (token) cfg.headers.Authorization = `Bearer ${token}`;
+      return cfg;
+    });
+    this.auth = new RemoteAuthStorageImpl(sharedApi, baseUrl);
+    this.tasks = new RemoteTaskStorageImpl(sharedApi);
+    this.lists = new RemoteListStorageImpl(sharedApi);
+    this.tags = new RemoteTagStorageImpl(sharedApi);
   }
 
   async initialize(): Promise<void> {}

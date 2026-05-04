@@ -68,7 +68,7 @@ export class TasksService {
 
     return this.tasksRepository.find({
       where,
-      order: { createdAt: 'DESC' },
+      order: { sortOrder: 'ASC', createdAt: 'DESC' },
       relations: ['list', 'steps'],
     });
   }

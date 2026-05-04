@@ -25,3 +25,4 @@ apps/browser-ext/popup.html
 DEPLOY.md
 CONTRIBUTING.md
 docs/
+.agents/

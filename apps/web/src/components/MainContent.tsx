@@ -64,6 +64,7 @@ export const MainContent = () => {
     'createdAt' | 'updatedAt' | 'dueDate' | 'title' | 'importance'
   >('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [hasReordered, setHasReordered] = useState(false);
   const [activeDatePickerTaskId, setActiveDatePickerTaskId] = useState<string | null>(null);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
 
@@ -151,6 +152,9 @@ export const MainContent = () => {
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
 
   const sortedActiveTasks = [...activeTasks].sort((a, b) => {
+    if (hasReordered) {
+      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+    }
     let cmp = 0;
     switch (sortBy) {
       case 'title':
@@ -444,8 +448,11 @@ export const MainContent = () => {
                 const activeTask = tasks.find((t) => t.id === activeId);
                 const overTask = tasks.find((t) => t.id === overId);
                 if (activeTask && overTask) {
-                  reorderTasksOptimistic(activeTask, overTask);
-                  void reorderTasks(activeId, overTask.sortOrder ?? 0);
+                  const updatedTasks = reorderTasksOptimistic(activeTask, overTask);
+                  if (updatedTasks.length > 0) {
+                    void reorderTasks(updatedTasks);
+                    setHasReordered(true);
+                  }
                 }
               }}
               viewMode={viewMode}

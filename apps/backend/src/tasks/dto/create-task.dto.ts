@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsDateString,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -53,6 +54,10 @@ export class CreateTaskDto {
   @IsOptional()
   @IsUUID()
   listId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  sortOrder?: number;
 }
 
 export class UpdateTaskDto {
@@ -100,6 +105,15 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsUUID()
   listId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  sortOrder?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tagIds?: string[];
 }
 
 export class CreateStepDto {

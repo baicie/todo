@@ -97,7 +97,15 @@ import { SharesModule } from './shares/shares.module';
           synchronize: configService.get<boolean>('database.synchronize'),
           logging: configService.get<boolean>('database.logging'),
         };
-        if (dbType !== 'sqljs') {
+        if (dbType === 'sqljs') {
+          Object.assign(dbConfig, {
+            location: configService.get<string>('database.location') || 'orbit-db',
+          });
+        } else if (dbType === 'sqlite') {
+          Object.assign(dbConfig, {
+            database: configService.get<string>('database.database'),
+          });
+        } else {
           Object.assign(dbConfig, {
             host: configService.get<string>('database.host'),
             port: configService.get<number>('database.port'),
