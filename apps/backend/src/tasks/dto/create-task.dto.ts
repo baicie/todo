@@ -1,7 +1,6 @@
 import {
   IsArray,
   IsBoolean,
-  IsDateString,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -31,12 +30,10 @@ export class CreateTaskDto {
   addToMyDay?: boolean;
 
   @IsOptional()
-  @IsDateString()
-  dueDate?: Date;
+  dueDate?: string;
 
   @IsOptional()
-  @IsDateString()
-  reminderDate?: Date;
+  reminderDate?: string;
 
   @IsOptional()
   @IsString()
@@ -82,12 +79,10 @@ export class UpdateTaskDto {
   addToMyDay?: boolean;
 
   @IsOptional()
-  @IsDateString()
-  dueDate?: Date;
+  dueDate?: string;
 
   @IsOptional()
-  @IsDateString()
-  reminderDate?: Date;
+  reminderDate?: string;
 
   @IsOptional()
   @IsString()

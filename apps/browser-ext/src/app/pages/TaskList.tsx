@@ -8,6 +8,7 @@ import {
   useToggleImportant,
 } from '@baicie/orbit-hooks';
 import type { TaskFilter } from '@baicie/orbit';
+import { Button, Input } from '@baicie/orbit-ui';
 import { Calendar, Check, List, Plus, Search, Star, Sun } from 'lucide-react';
 
 interface TaskListProps {
@@ -52,12 +53,12 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
           <span className="text-sm font-bold text-blue-500">Orbit</span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="p-1 text-gray-500 hover:text-gray-700">
+          <Button variant="ghost" size="icon" className="p-1">
             <Search size={16} />
-          </button>
-          <button onClick={logout} className="text-xs text-gray-400 hover:text-gray-600">
+          </Button>
+          <Button variant="ghost" size="sm" onClick={logout} className="text-xs">
             {user?.name || '退出'}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -70,38 +71,45 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
             { key: 'important', label: '重要', Icon: Star },
           ] as const
         ).map(({ key, label, Icon }) => (
-          <button
+          <Button
             key={key}
+            variant="ghost"
+            size="sm"
             onClick={() => onFilterChange(key)}
-            className={`flex-1 flex items-center justify-center gap-1 py-2 text-xs font-medium transition-colors ${
+            className={`flex-1 justify-center gap-1 ${
               filter === key
-                ? 'text-blue-500 border-b-2 border-blue-500'
-                : 'text-gray-500 hover:text-gray-700'
+                ? 'text-blue-500 border-b-2 border-blue-500 rounded-none'
+                : 'text-gray-500'
             }`}
           >
             <Icon size={14} />
             {label}
-          </button>
+          </Button>
         ))}
       </div>
 
       {/* Add Task */}
       <form onSubmit={handleAddTask} className="px-3 py-2 bg-white border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <button type="button" className="text-gray-400">
+          <Button variant="ghost" size="icon" className="p-0 text-gray-400" type="button">
             <Plus size={18} />
-          </button>
-          <input
+          </Button>
+          <Input
             type="text"
             value={newTask}
             onChange={(e) => setNewTask(e.target.value)}
             placeholder="添加任务..."
-            className="flex-1 text-sm bg-transparent border-none outline-none text-gray-900 placeholder:text-gray-400"
+            className="flex-1 shadow-none bg-transparent"
           />
           {newTask && (
-            <button type="submit" className="text-xs text-blue-500 font-medium">
+            <Button
+              type="submit"
+              variant="ghost"
+              size="sm"
+              className="text-xs text-blue-500 font-medium"
+            >
               添加
-            </button>
+            </Button>
           )}
         </div>
       </form>
@@ -120,9 +128,11 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
             key={task.id}
             className="flex items-center gap-2 px-3 py-2.5 hover:bg-gray-100 transition-colors group"
           >
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleComplete(task)}
-              className="w-5 h-5 rounded-full border-2 border-gray-300 hover:border-blue-500 flex-shrink-0 transition-colors"
+              className="w-5 h-5 min-w-5 min-h-5 p-0 rounded-full border-2 border-gray-300 hover:border-blue-500 flex-shrink-0 transition-colors"
             />
             <span className="flex-1 text-sm text-gray-800 line-clamp-1">{task.title}</span>
             {task.dueDate && (
@@ -130,17 +140,21 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
                 <Calendar size={12} />
               </span>
             )}
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleImportant(task)}
-              className={`flex-shrink-0 transition-colors ${
-                task.isImportant ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500'
+              className={`flex-shrink-0 w-5 h-5 min-w-5 min-h-5 p-0 ${
+                task.isImportant ? 'text-yellow-500' : 'text-gray-300'
               }`}
             >
               <Star size={14} fill={task.isImportant ? 'currentColor' : 'none'} />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => deleteTask.mutate(task.id)}
-              className="flex-shrink-0 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+              className="flex-shrink-0 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 w-5 h-5 min-w-5 min-h-5 p-0"
             >
               <svg
                 width="14"
@@ -153,7 +167,7 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-            </button>
+            </Button>
           </div>
         ))}
 
@@ -165,18 +179,22 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
                 key={task.id}
                 className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 transition-colors group"
               >
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => toggleComplete(task)}
-                  className="w-5 h-5 rounded-full border-2 bg-blue-500 border-blue-500 flex-shrink-0 flex items-center justify-center"
+                  className="w-5 h-5 min-w-5 min-h-5 p-0 rounded-full bg-blue-500 border-blue-500 flex-shrink-0"
                 >
                   <Check size={12} className="text-white" strokeWidth={3} />
-                </button>
+                </Button>
                 <span className="flex-1 text-sm text-gray-400 line-through line-clamp-1">
                   {task.title}
                 </span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => deleteTask.mutate(task.id)}
-                  className="flex-shrink-0 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  className="flex-shrink-0 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 w-5 h-5 min-w-5 min-h-5 p-0"
                 >
                   <svg
                     width="14"
@@ -189,7 +207,7 @@ export function TaskList({ filter, onFilterChange }: TaskListProps) {
                     <line x1="18" y1="6" x2="6" y2="18" />
                     <line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
-                </button>
+                </Button>
               </div>
             ))}
           </div>

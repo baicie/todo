@@ -12,3 +12,4 @@ dev-dist
 # Backend
 apps/backend/database.sqljs
 apps/backend/uploads
+orbit-db

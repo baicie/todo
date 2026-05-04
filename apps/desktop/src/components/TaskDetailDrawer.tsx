@@ -28,7 +28,7 @@ import {
   useUpdateStep,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import { MarkdownEditor } from '@baicie/orbit-ui';
+import { Button, Input, MarkdownEditor } from '@baicie/orbit-ui';
 import type { Tag as TagType, Task, TaskCategory } from '@baicie/orbit';
 
 interface TaskDetailDrawerProps {
@@ -190,9 +190,11 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
       <div className="px-4 pt-4 z-10 bg-[#faf9f8]">
         <div className="bg-white rounded-md shadow-sm p-4">
           <div className="flex items-start gap-3">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleComplete(task)}
-              className="mt-1 text-gray-400 hover:text-[var(--theme-primary)] transition-colors"
+              className="mt-1 text-gray-400 hover:text-[var(--theme-primary)]"
             >
               {task.isCompleted ? (
                 <div className="w-6 h-6 rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
@@ -201,9 +203,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               ) : (
                 <Circle size={24} />
               )}
-            </button>
+            </Button>
             <div className="flex-1">
-              <input
+              <Input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -213,14 +215,16 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                 }`}
               />
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleImportant(task)}
-              className={`p-1 rounded hover:bg-gray-100 transition-colors ${
+              className={`p-1 rounded hover:bg-gray-100 ${
                 task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
               }`}
             >
               <Star size={24} fill={task.isImportant ? 'currentColor' : 'none'} />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -241,7 +245,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       editingStepId === step.id ? 'bg-gray-100' : ''
                     }`}
                   >
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={(e) => {
                         e.stopPropagation();
                         updateStep.mutate({
@@ -249,7 +255,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           input: { isCompleted: !step.isCompleted },
                         });
                       }}
-                      className="text-gray-400 hover:text-[var(--theme-primary)] transition-colors p-1"
+                      className="text-gray-400 hover:text-[var(--theme-primary)] p-1"
                     >
                       {step.isCompleted ? (
                         <div className="w-[18px] h-[18px] rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
@@ -258,10 +264,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       ) : (
                         <Circle size={18} />
                       )}
-                    </button>
+                    </Button>
 
                     {editingStepId === step.id ? (
-                      <input
+                      <Input
                         type="text"
                         value={editingStepTitle}
                         onChange={(e) => setEditingStepTitle(e.target.value)}
@@ -283,12 +289,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       </span>
                     )}
 
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setStepToDelete(step.id)}
-                      className="text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1"
+                      className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 p-1"
                     >
                       <X size={16} />
-                    </button>
+                    </Button>
                   </div>
                 ))}
 
@@ -297,7 +305,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                 className="flex items-center gap-3 text-[var(--theme-primary)] hover:text-blue-700 w-full py-1 transition-colors"
               >
                 <Plus size={18} />
-                <input
+                <Input
                   type="text"
                   value={newStep}
                   onChange={(e) => setNewStep(e.target.value)}
@@ -311,9 +319,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           </div>
 
           <div className="bg-white rounded-md shadow-sm overflow-hidden">
-            <button
+            <Button
+              variant="ghost"
               onClick={() => toggleMyDay(task)}
-              className={`flex items-center gap-3 w-full p-4 text-sm hover:bg-gray-50 transition-colors ${
+              className={`flex items-center gap-3 w-full p-4 text-sm hover:bg-gray-50 ${
                 task.addToMyDay ? 'text-blue-600' : 'text-gray-600'
               }`}
             >
@@ -329,14 +338,15 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                   }}
                 />
               )}
-            </button>
+            </Button>
           </div>
 
           <div className="bg-white rounded-md shadow-sm">
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsRemindMenuOpen(!isRemindMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 border-b border-gray-100 justify-start"
               >
                 <Bell size={18} />
                 <span>
@@ -355,7 +365,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <X size={16} />
                   </div>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isRemindMenuOpen && (
                   <>
@@ -397,37 +407,41 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           },
                         },
                       ].map((option, index) => (
-                        <button
+                        <Button
                           key={index}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ reminderDate: option.getDate().toISOString() });
                             setIsRemindMenuOpen(false);
                           }}
-                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between text-gray-700 justify-start"
                         >
                           <div className="flex items-center gap-2">
                             <Repeat size={16} className="text-gray-400" />
                             <span>{option.label}</span>
                           </div>
-                        </button>
+                        </Button>
                       ))}
                       <div className="border-t border-gray-100 my-1" />
                       <div className="relative">
-                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                        <Button
+                          variant="ghost"
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700 justify-start"
+                        >
                           <Calendar size={16} className="text-gray-400" />
                           <span>选择日期和时间</span>
-                        </button>
-                        <input
-                          type="datetime-local"
-                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                          onChange={(e) => {
-                            const date = e.target.value
-                              ? new Date(e.target.value).toISOString()
-                              : null;
-                            updateField({ reminderDate: date });
-                            setIsRemindMenuOpen(false);
-                          }}
-                        />
+                          <input
+                            type="datetime-local"
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                            onChange={(e) => {
+                              const date = e.target.value
+                                ? new Date(e.target.value).toISOString()
+                                : null;
+                              updateField({ reminderDate: date });
+                              setIsRemindMenuOpen(false);
+                            }}
+                          />
+                        </Button>
                       </div>
                     </motion.div>
                   </>
@@ -436,9 +450,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </div>
 
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsDueDateMenuOpen(!isDueDateMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 border-b border-gray-100 justify-start"
               >
                 <Calendar size={18} />
                 {(() => {
@@ -456,7 +471,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <X size={16} />
                   </div>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isDueDateMenuOpen && (
                   <>
@@ -489,37 +504,41 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           },
                         },
                       ].map((option) => (
-                        <button
+                        <Button
                           key={option.label}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ dueDate: option.getDate().toISOString() });
                             setIsDueDateMenuOpen(false);
                           }}
-                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700"
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between text-gray-700 justify-start"
                         >
                           <div className="flex items-center gap-2">
                             <Calendar size={16} className="text-gray-400" />
                             <span>{option.label}</span>
                           </div>
-                        </button>
+                        </Button>
                       ))}
                       <div className="border-t border-gray-100 my-1" />
                       <div className="relative">
-                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                        <Button
+                          variant="ghost"
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700 justify-start"
+                        >
                           <Calendar size={16} className="text-gray-400" />
                           <span>选择日期</span>
-                        </button>
-                        <input
-                          type="date"
-                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                          onChange={(e) => {
-                            const date = e.target.value
-                              ? new Date(e.target.value).toISOString()
-                              : null;
-                            updateField({ dueDate: date });
-                            setIsDueDateMenuOpen(false);
-                          }}
-                        />
+                          <input
+                            type="date"
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                            onChange={(e) => {
+                              const date = e.target.value
+                                ? new Date(e.target.value).toISOString()
+                                : null;
+                              updateField({ dueDate: date });
+                              setIsDueDateMenuOpen(false);
+                            }}
+                          />
+                        </Button>
                       </div>
                     </motion.div>
                   </>
@@ -527,9 +546,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               </AnimatePresence>
             </div>
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsRepeatMenuOpen(!isRepeatMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 justify-start"
               >
                 <Repeat size={18} />
                 <span>{getRepeatText(task.repeatPattern)}</span>
@@ -544,7 +564,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <X size={16} />
                   </div>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isRepeatMenuOpen && (
                   <>
@@ -559,13 +579,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
                       {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((value) => (
-                        <button
+                        <Button
                           key={value}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ repeatPattern: value });
                             setIsRepeatMenuOpen(false);
                           }}
-                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between justify-start ${
                             task.repeatPattern === value
                               ? 'text-[var(--theme-primary)] bg-blue-50'
                               : 'text-gray-700'
@@ -573,7 +594,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         >
                           <span>{getRepeatText(value)}</span>
                           {task.repeatPattern === value && <Check size={16} />}
-                        </button>
+                        </Button>
                       ))}
                     </motion.div>
                   </>
@@ -584,9 +605,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
 
           <div className="bg-white rounded-md shadow-sm">
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsCategoryMenuOpen(!isCategoryMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 border-b border-gray-100 justify-start"
               >
                 <Tag size={18} />
                 <span>{getCategoryText(task.category)}</span>
@@ -601,7 +623,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <X size={16} />
                   </div>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isCategoryMenuOpen && (
                   <>
@@ -616,13 +638,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
                       {categories.map((option) => (
-                        <button
+                        <Button
                           key={option.value}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ category: option.value });
                             setIsCategoryMenuOpen(false);
                           }}
-                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between justify-start ${
                             task.category === option.value
                               ? 'text-[var(--theme-primary)] bg-blue-50'
                               : 'text-gray-700'
@@ -633,7 +656,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             <span>{option.label}</span>
                           </div>
                           {task.category === option.value && <Check size={16} />}
-                        </button>
+                        </Button>
                       ))}
                     </motion.div>
                   </>
@@ -642,9 +665,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </div>
 
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsTagMenuOpen(!isTagMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 border-b border-gray-100 justify-start"
               >
                 <Tag size={18} />
                 <span>
@@ -663,7 +687,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     <X size={16} />
                   </div>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isTagMenuOpen && (
                   <>
@@ -677,15 +701,16 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       {allTags.map((tag: TagType) => {
                         const isSelected = task.tagIds.includes(tag.id);
                         return (
-                          <button
+                          <Button
                             key={tag.id}
+                            variant="ghost"
                             onClick={() => {
                               const newTagIds = isSelected
                                 ? task.tagIds.filter((id: string) => id !== tag.id)
                                 : [...task.tagIds, tag.id];
                               updateField({ tagIds: newTagIds });
                             }}
-                            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between justify-start ${
                               isSelected
                                 ? 'text-[var(--theme-primary)] bg-blue-50'
                                 : 'text-gray-700'
@@ -699,7 +724,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                               <span>{tag.name}</span>
                             </div>
                             {isSelected && <Check size={16} />}
-                          </button>
+                          </Button>
                         );
                       })}
                       <div className="border-t border-gray-100 my-1" />
@@ -719,19 +744,21 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         }}
                         className="flex items-center gap-2 px-4 py-2"
                       >
-                        <input
+                        <Input
                           type="text"
                           value={newTagName}
                           onChange={(e) => setNewTagName(e.target.value)}
                           placeholder="新建标签..."
                           className="flex-1 bg-transparent border-none outline-none text-sm text-gray-900 placeholder:text-gray-400"
                         />
-                        <button
+                        <Button
                           type="submit"
+                          variant="ghost"
+                          size="sm"
                           className="text-[var(--theme-primary)] hover:text-blue-700 text-sm font-medium"
                         >
                           添加
-                        </button>
+                        </Button>
                       </form>
                     </motion.div>
                   </>
@@ -739,7 +766,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               </AnimatePresence>
             </div>
 
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors relative">
+            <Button
+              variant="ghost"
+              className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 relative"
+            >
               <Paperclip size={18} />
               <span>{t('drawer.addFile')}</span>
               <input
@@ -747,7 +777,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 onChange={handleFileUpload}
               />
-            </button>
+            </Button>
             {task.files && task.files.length > 0 && (
               <div className="px-4 pb-4 space-y-2">
                 {task.files.map((file: import('@baicie/orbit').TaskFile, index: number) => (
@@ -759,12 +789,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       <FileIcon size={16} className="text-gray-400" />
                       <span className="truncate">{file.originalname}</span>
                     </div>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => removeFile(index)}
-                      className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100"
                     >
                       <X size={16} />
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -784,7 +816,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
       </div>
 
       <div className="p-3 border-t border-gray-200 bg-[#faf9f8] flex items-center justify-between text-xs text-gray-500">
-        <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded transition-colors">
+        <Button variant="ghost" size="icon" onClick={onClose}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="18"
@@ -800,22 +832,24 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             <line x1="15" y1="3" x2="15" y2="21" />
             <path d="m9 9 3 3-3 3" />
           </svg>
-        </button>
+        </Button>
         <span>
           {t('drawer.created', {
             date: new Date(task.createdAt || new Date()).toLocaleDateString(),
           })}
         </span>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={() => {
             deleteTask.mutate(task.id);
             onClose();
           }}
-          className="p-2 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-red-600"
+          className="text-gray-500 hover:text-red-600"
           title={t('drawer.deleteTask')}
         >
           <Trash2 size={18} />
-        </button>
+        </Button>
       </div>
 
       <AnimatePresence>
@@ -837,21 +871,18 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               <h3 className="text-lg font-semibold mb-2">删除步骤？</h3>
               <p className="text-gray-600 text-sm mb-6">确定要删除此步骤吗？此操作无法撤销。</p>
               <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setStepToDelete(null)}
-                  className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                >
+                <Button variant="outline" onClick={() => setStepToDelete(null)}>
                   取消
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="destructive"
                   onClick={() => {
                     deleteStep.mutate(stepToDelete);
                     setStepToDelete(null);
                   }}
-                  className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded transition-colors"
                 >
                   删除
-                </button>
+                </Button>
               </div>
             </motion.div>
           </>

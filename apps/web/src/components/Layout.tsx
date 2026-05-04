@@ -1,9 +1,19 @@
-import { Sidebar } from './Sidebar';
+import { SortableSidebar } from './SortableSidebar';
 import { Header } from './Header';
 import { Outlet } from 'react-router-dom';
 import { OfflineIndicator } from './OfflineIndicator';
+import { useAppDnD } from '../contexts/AppDnDContext';
+import { useTaskDropHandler } from '../hooks/useTaskDropHandler';
 
 export const Layout = () => {
+  const { draggingTaskId, endTaskDrag } = useAppDnD();
+  useTaskDropHandler();
+
+  const handleTaskDrop = (taskId: string, listId: string) => {
+    window.dispatchEvent(new CustomEvent('task-drop-to-list', { detail: { taskId, listId } }));
+    endTaskDrag();
+  };
+
   return (
     <>
       <a href="#main-content" className="skip-link">
@@ -13,7 +23,10 @@ export const Layout = () => {
         <OfflineIndicator />
         <Header />
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
+          <SortableSidebar
+            draggingTask={draggingTaskId ? { id: draggingTaskId } : null}
+            onTaskDrop={handleTaskDrop}
+          />
           <main
             id="main-content"
             tabIndex={-1}

@@ -47,6 +47,8 @@ export function useCreateList() {
         theme: input.theme ?? null,
         isSmart: false,
         userId: null,
+        groupId: input.groupId ?? null,
+        sortOrder: 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

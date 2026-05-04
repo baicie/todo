@@ -13,6 +13,7 @@ import {
   QueryResolver,
 } from 'nestjs-i18n';
 import { APP_GUARD } from '@nestjs/core';
+import { DataSource } from 'typeorm';
 import { diskStorage } from 'multer';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
@@ -29,6 +30,8 @@ import { AuditModule } from './audit/audit.module';
 import { DatabaseModule } from './database/database.module';
 import { TagsModule } from './tags/tags.module';
 import { SharesModule } from './shares/shares.module';
+import { GroupsModule } from './groups/groups.module';
+import { SqljsPersistenceSubscriber } from './common/subscribers/sqljs-persistence.subscriber';
 
 @Module({
   imports: [
@@ -100,6 +103,7 @@ import { SharesModule } from './shares/shares.module';
         if (dbType === 'sqljs') {
           Object.assign(dbConfig, {
             location: configService.get<string>('database.location') || 'orbit-db',
+            autoSave: true,
           });
         } else if (dbType === 'sqlite') {
           Object.assign(dbConfig, {
@@ -143,6 +147,7 @@ import { SharesModule } from './shares/shares.module';
     TasksModule,
     TagsModule,
     SharesModule,
+    GroupsModule,
     // 系统模块
     HealthModule,
     LanguageModule,
@@ -154,6 +159,14 @@ import { SharesModule } from './shares/shares.module';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    // SQL.js 持久化订阅器
+    {
+      provide: SqljsPersistenceSubscriber,
+      inject: [ConfigService, DataSource],
+      useFactory: (configService: ConfigService, dataSource: DataSource) => {
+        return new SqljsPersistenceSubscriber(configService, dataSource);
+      },
     },
   ],
 })

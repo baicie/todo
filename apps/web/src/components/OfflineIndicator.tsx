@@ -3,6 +3,7 @@ import { WifiOff } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { getStorage } from '@baicie/orbit-hooks';
+import { Button } from '@baicie/orbit-ui';
 
 export function OfflineIndicator() {
   const { t } = useTranslation();
@@ -83,12 +84,14 @@ export function OfflineIndicator() {
                 {t('pwa.pendingSync', { count: pendingCount })}
               </span>
             )}
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleRetry}
-              className="ml-2 text-xs font-medium text-amber-900 underline hover:no-underline"
+              className="ml-2 text-xs font-medium text-amber-900"
             >
               {t('pwa.retry')}
-            </button>
+            </Button>
           </div>
         </motion.div>
       )}

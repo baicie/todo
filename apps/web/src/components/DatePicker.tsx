@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { Button } from '@baicie/orbit-ui';
 
 interface DatePickerProps {
   value: string | null;
@@ -104,21 +105,15 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
     <div className="w-[280px] bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50">
       {/* Header: Month navigation */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50/50">
-        <button
-          onClick={prevMonth}
-          className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500"
-        >
+        <Button variant="ghost" size="icon" onClick={prevMonth} className="p-1">
           <ChevronLeft size={16} />
-        </button>
+        </Button>
         <span className="text-sm font-semibold text-gray-800">
           {viewYear} 年 {MONTHS[viewMonth]}
         </span>
-        <button
-          onClick={nextMonth}
-          className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500"
-        >
+        <Button variant="ghost" size="icon" onClick={nextMonth} className="p-1">
           <ChevronRight size={16} />
-        </button>
+        </Button>
       </div>
 
       {/* Weekday header */}
@@ -142,8 +137,9 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
           const isOverdue = isPast(date) && !isSelected;
 
           return (
-            <button
+            <Button
               key={day}
+              variant="ghost"
               onClick={() => handleSelect(day)}
               className={`h-8 w-8 rounded-full text-xs flex items-center justify-center transition-colors ${
                 isSelected
@@ -156,7 +152,7 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
               }`}
             >
               {day}
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -168,21 +164,23 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
         </div>
         <div className="flex gap-2">
           {value && (
-            <button
+            <Button
+              variant="ghost"
               onClick={handleClear}
-              className="text-xs text-gray-500 hover:text-red-500 transition-colors px-2 py-1 rounded hover:bg-red-50"
+              className="text-xs text-gray-500 hover:text-red-500 px-2 py-1"
             >
               清除
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="ghost"
             onClick={() => {
               onChange(formatDate(new Date()));
             }}
-            className="text-xs text-blue-500 hover:text-blue-600 transition-colors px-2 py-1 rounded hover:bg-blue-50"
+            className="text-xs text-blue-500 hover:text-blue-600 px-2 py-1"
           >
             今天
-          </button>
+          </Button>
         </div>
       </div>
     </div>

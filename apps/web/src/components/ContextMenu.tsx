@@ -1,6 +1,7 @@
 import { CheckCircle, Circle, Copy, Star, Sun, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { Task } from '@baicie/orbit';
+import { Button } from '@baicie/orbit-ui';
 
 interface ContextMenuProps {
   x: number;
@@ -48,9 +49,8 @@ export const ContextMenu = ({
     };
   }, [onClose]);
 
-  // Adjust position if menu goes off screen
-  const menuWidth = 224; // w-56 = 14rem = ~224px
-  const menuHeight = 280; // approximate menu height
+  const menuWidth = 224;
+  const menuHeight = 280;
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 8);
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 8);
 
@@ -66,23 +66,25 @@ export const ContextMenu = ({
       style={style}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <button
+      <Button
+        variant="ghost"
         onClick={() => {
           onToggleMyDay();
           onClose();
         }}
-        className="w-full px-4 py-2 flex items-center gap-3 hover:bg-gray-100 transition-colors text-left"
+        className="w-full px-4 py-2 flex items-center gap-3 justify-start"
       >
         <Sun size={16} />
-        <span>{task.addToMyDay ? '从“我的一天”移除' : '添加到“我的一天”'}</span>
-      </button>
+        <span>{task.addToMyDay ? '从我的一天移除' : '添加到我的一天'}</span>
+      </Button>
 
-      <button
+      <Button
+        variant="ghost"
         onClick={() => {
           onToggleImportant();
           onClose();
         }}
-        className="w-full px-4 py-2 flex items-center gap-3 hover:bg-gray-100 transition-colors text-left"
+        className="w-full px-4 py-2 flex items-center gap-3 justify-start"
       >
         <Star
           size={16}
@@ -90,43 +92,47 @@ export const ContextMenu = ({
           className={task.isImportant ? 'text-[var(--theme-primary)]' : ''}
         />
         <span>{task.isImportant ? '取消标记为重要' : '标记为重要'}</span>
-      </button>
+      </Button>
 
-      <button
+      <Button
+        variant="ghost"
         onClick={() => {
           onToggleComplete();
           onClose();
         }}
-        className="w-full px-4 py-2 flex items-center gap-3 hover:bg-gray-100 transition-colors text-left"
+        className="w-full px-4 py-2 flex items-center gap-3 justify-start"
       >
         {task.isCompleted ? <Circle size={16} /> : <CheckCircle size={16} />}
         <span>{task.isCompleted ? '标记为未完成' : '标记为已完成'}</span>
-      </button>
+      </Button>
 
       <div className="my-1 border-t border-gray-100" />
 
-      <button
+      <Button
+        variant="ghost"
         onClick={() => {
           onClose();
         }}
-        className="w-full px-4 py-2 flex items-center gap-3 hover:bg-gray-100 transition-colors text-left text-gray-400 cursor-not-allowed"
+        className="w-full px-4 py-2 flex items-center gap-3 justify-start text-gray-400 cursor-not-allowed"
+        disabled
       >
         <Copy size={16} />
         <span>复制任务</span>
-      </button>
+      </Button>
 
       <div className="my-1 border-t border-gray-100" />
 
-      <button
+      <Button
+        variant="ghost"
         onClick={() => {
           onDelete();
           onClose();
         }}
-        className="w-full px-4 py-2 flex items-center gap-3 hover:bg-red-50 text-red-600 transition-colors text-left"
+        className="w-full px-4 py-2 flex items-center gap-3 justify-start text-red-600 hover:bg-red-50"
       >
         <Trash2 size={16} />
         <span>删除任务</span>
-      </button>
+      </Button>
     </div>
   );
 };

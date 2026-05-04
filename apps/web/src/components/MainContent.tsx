@@ -4,7 +4,6 @@ import {
   Calendar,
   ChevronRight,
   Grid2X2,
-  LayoutGrid,
   List as ListIcon,
   Menu,
   MoreHorizontal,
@@ -37,7 +36,10 @@ import {
   useToggleMyDay,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import type { Task, TaskFilter } from '@baicie/orbit';
+import type { Task } from '@baicie/orbit';
+import { Button, Input, TaskCheckbox, ViewModeToggle } from '@baicie/orbit-ui';
+import { getDueDateText } from '@baicie/orbit-utils';
+import { buildFilter, getListTitle } from '@baicie/orbit-utils';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { DatePicker } from './DatePicker';
@@ -144,7 +146,7 @@ export const MainContent = () => {
   };
 
   const getTitle = () => {
-    return getListTitle(activeListId, allTags, (k) => t(k));
+    return getListTitle(activeListId, { allTags, tFn: (k) => t(k) });
   };
 
   const activeTasks = tasks.filter((task) => !task.isCompleted);
@@ -187,28 +189,6 @@ export const MainContent = () => {
     setContextMenu({ x: e.clientX, y: e.clientY, task });
   };
 
-  const getDueDateText = (dateStr?: string | null) => {
-    if (!dateStr) return { text: '-', isOverdue: false };
-    const date = new Date(dateStr);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const isToday = date.toDateString() === today.toDateString();
-    const isYesterday = date.toDateString() === yesterday.toDateString();
-    const isTomorrow = date.toDateString() === tomorrow.toDateString();
-    const isOverdue = date < today && !isToday;
-
-    let text = date.toLocaleDateString();
-    if (isToday) text = '今天';
-    if (isYesterday) text = '昨天';
-    if (isTomorrow) text = '明天';
-
-    return { text, isOverdue };
-  };
-
   const handleDateChange = (task: Task, dateStr: string | null) => {
     updateTask.mutate({ id: task.id, input: { dueDate: dateStr } });
   };
@@ -219,64 +199,35 @@ export const MainContent = () => {
         <header className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              <button
-                className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-md"
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden text-gray-600 hover:bg-gray-100"
                 onClick={() => setIsSidebarOpen(true)}
               >
                 <Menu size={24} />
-              </button>
+              </Button>
 
               <div className="flex items-center gap-2 text-[var(--theme-primary)]">
                 <ListIcon size={24} className="text-[var(--theme-primary)]" />
                 <h1 className="text-xl sm:text-2xl font-bold">{getTitle()}</h1>
               </div>
 
-              <button className="p-1 text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-[var(--theme-primary)] hover:bg-white/50"
+              >
                 <MoreHorizontal size={20} />
-              </button>
+              </Button>
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all relative ${
-                    viewMode === 'table'
-                      ? 'text-[var(--theme-primary)]'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <LayoutGrid size={16} />
-                  <span>网格</span>
-                  {viewMode === 'table' && (
-                    <motion.div
-                      layoutId="viewModeIndicator"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--theme-primary)]"
-                    />
-                  )}
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all relative ${
-                    viewMode === 'list'
-                      ? 'text-[var(--theme-primary)]'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <ListIcon size={16} />
-                  <span>列表</span>
-                  {viewMode === 'list' && (
-                    <motion.div
-                      layoutId="viewModeIndicator"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--theme-primary)]"
-                    />
-                  )}
-                </button>
-              </div>
+              <ViewModeToggle value={viewMode} onChange={setViewMode} />
             </div>
 
             <div className="flex items-center gap-1">
-              <button
+              <div
                 onClick={() => setIsSortMenuOpen((v) => !v)}
-                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors relative"
+                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors relative cursor-pointer"
               >
                 <ArrowUpDown size={16} />
                 <span>排序</span>
@@ -291,10 +242,15 @@ export const MainContent = () => {
                         { key: 'importance', label: '重要性' },
                       ] as const
                     ).map(({ key, label }) => (
-                      <button
+                      <Button
                         key={key}
-                        onClick={() => setSortBy(key)}
-                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors ${
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSortBy(key);
+                        }}
+                        className={`w-full justify-between text-left ${
                           sortBy === key
                             ? 'bg-blue-50 text-blue-600'
                             : 'text-gray-700 hover:bg-gray-50'
@@ -304,24 +260,35 @@ export const MainContent = () => {
                         {sortBy === key && (
                           <span className="text-xs">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                         )}
-                      </button>
+                      </Button>
                     ))}
                     <div className="border-t border-gray-100 my-1" />
-                    <button
-                      onClick={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+                      }}
+                      className="w-full justify-between text-left text-gray-500 hover:bg-gray-50"
                     >
                       <span>方向</span>
                       <span>{sortOrder === 'asc' ? '升序 ↑' : '降序 ↓'}</span>
-                    </button>
+                    </Button>
                   </div>
                 )}
-              </button>
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex items-center gap-1 text-[var(--theme-primary)] hover:bg-white/50"
+              >
                 <Grid2X2 size={16} />
                 <span>组</span>
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   const smartSet = new Set(['my-day', 'important', 'planned', 'tasks']);
                   if (smartSet.has(activeListId)) {
@@ -330,11 +297,11 @@ export const MainContent = () => {
                   }
                   setIsShareDialogOpen(true);
                 }}
-                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors"
+                className="flex items-center gap-1 text-[var(--theme-primary)] hover:bg-white/50"
               >
                 <UserPlus size={16} />
                 <span>共享</span>
-              </button>
+              </Button>
             </div>
           </div>
         </header>
@@ -348,7 +315,7 @@ export const MainContent = () => {
                 className={`${isInputFocused ? 'text-[var(--theme-primary)]' : 'text-gray-400'}`}
                 size={24}
               />
-              <input
+              <Input
                 ref={taskInputRef}
                 type="text"
                 value={newTask}
@@ -356,22 +323,26 @@ export const MainContent = () => {
                 onFocus={() => setIsInputFocused(true)}
                 onBlur={() => !newTask && setIsInputFocused(false)}
                 placeholder={t('main.addTask')}
-                className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-gray-500 text-gray-900 focus:ring-0"
+                className="flex-1 shadow-none bg-transparent border-none outline-none focus-visible:ring-0 px-0"
               />
               {newTask && (
-                <button
+                <Button
                   type="submit"
                   disabled={createTask.isPending}
-                  className="text-xs font-medium text-[var(--theme-primary)] uppercase px-2"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs font-medium text-[var(--theme-primary)] uppercase px-2 hover:bg-transparent hover:text-[var(--theme-primary)]"
                 >
                   {createTask.isPending ? t('main.adding') : t('main.add')}
-                </button>
+                </Button>
               )}
             </form>
             {isInputFocused && (
               <div className="flex items-center justify-between px-3 pb-2 bg-gray-50/50 rounded-b-md border-t border-gray-100 pt-2">
                 <div className="flex items-center gap-1 relative">
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500 relative"
                     title={t('main.options.addDueDate')}
                     onClick={() => setIsDatePickerOpen((v) => !v)}
@@ -380,7 +351,7 @@ export const MainContent = () => {
                       size={18}
                       className={newTaskDueDate ? 'text-[var(--theme-primary)]' : ''}
                     />
-                  </button>
+                  </Button>
                   <AnimatePresence>
                     {isDatePickerOpen && (
                       <motion.div
@@ -406,18 +377,22 @@ export const MainContent = () => {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500"
                     title={t('main.options.remindMe')}
                   >
                     <Bell size={18} />
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500"
                     title={t('main.options.repeat')}
                   >
                     <Repeat size={18} />
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -437,20 +412,18 @@ export const MainContent = () => {
             <SortableTaskList
               tasks={sortedActiveTasks}
               activeTaskId={selectedTask?.id ?? null}
-              isChecked={batchOps.isSelected}
               onSelectTask={setSelectedTaskId}
-              onToggleCheck={batchOps.toggleSelection}
               onContextMenu={handleContextMenu}
               onToggleComplete={toggleComplete}
               onToggleImportant={toggleImportant}
               onDateChange={handleDateChange}
               onReorder={(activeId, overId) => {
-                const activeTask = tasks.find((t) => t.id === activeId);
-                const overTask = tasks.find((t) => t.id === overId);
+                const activeTask = sortedActiveTasks.find((t) => t.id === activeId);
+                const overTask = sortedActiveTasks.find((t) => t.id === overId);
                 if (activeTask && overTask) {
-                  const updatedTasks = reorderTasksOptimistic(activeTask, overTask);
+                  const updatedTasks = reorderTasksOptimistic(activeTask, overTask, filter);
                   if (updatedTasks.length > 0) {
-                    void reorderTasks(updatedTasks);
+                    void reorderTasks(updatedTasks, filter);
                     setHasReordered(true);
                   }
                 }
@@ -462,7 +435,9 @@ export const MainContent = () => {
 
           {completedTasks.length > 0 && (
             <div className="mt-6">
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setIsCompletedCollapsed(!isCompletedCollapsed)}
                 className="flex items-center gap-2 mb-2 px-2 py-1 hover:bg-gray-100 rounded transition-colors cursor-pointer w-full text-left"
               >
@@ -472,7 +447,7 @@ export const MainContent = () => {
                 />
                 <span className="text-sm font-medium text-gray-600">{t('main.completed')}</span>
                 <span className="text-xs text-gray-400">{completedTasks.length}</span>
-              </button>
+              </Button>
 
               {!isCompletedCollapsed && (
                 <motion.div
@@ -499,23 +474,7 @@ export const MainContent = () => {
                         <div
                           className={`flex items-center gap-3 w-full ${viewMode === 'table' ? 'col-span-6' : ''}`}
                         >
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleComplete(task);
-                            }}
-                            className="w-5 h-5 rounded-full border-2 bg-[var(--theme-primary)] border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="3"
-                              className="w-3 h-3 text-white"
-                            >
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          </button>
+                          <TaskCheckbox checked={true} onChange={() => toggleComplete(task)} />
                           <span className="flex-1 text-sm text-gray-400 line-through break-words line-clamp-2">
                             <div className="flex flex-col">
                               <span>{task.title}</span>
@@ -541,8 +500,10 @@ export const MainContent = () => {
                                     className={`flex items-center gap-2 ${isOverdue ? 'text-red-500' : 'text-gray-500 hover:text-gray-700'}`}
                                   >
                                     {task.dueDate && <Calendar size={14} />}
-                                    <button
-                                      className="text-left flex-1 cursor-pointer"
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-left flex-1 cursor-pointer p-0 h-auto hover:bg-transparent"
                                       onClick={() => {
                                         if (activeDatePickerTaskId === task.id) {
                                           setActiveDatePickerTaskId(null);
@@ -552,7 +513,7 @@ export const MainContent = () => {
                                       }}
                                     >
                                       {text}
-                                    </button>
+                                    </Button>
                                     {activeDatePickerTaskId === task.id && (
                                       <div className="absolute top-full left-0 mt-1 z-50">
                                         <DatePicker
@@ -578,7 +539,9 @@ export const MainContent = () => {
                               })()}
                             </div>
                             <div className="col-span-3 flex items-center justify-between">
-                              <button
+                              <Button
+                                variant="ghost"
+                                size="icon"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   toggleImportant(task);
@@ -588,11 +551,13 @@ export const MainContent = () => {
                                 }`}
                               >
                                 <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                              </button>
+                              </Button>
                             </div>
                           </>
                         ) : (
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={(e) => {
                               e.stopPropagation();
                               toggleImportant(task);
@@ -602,7 +567,7 @@ export const MainContent = () => {
                             }`}
                           >
                             <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                          </button>
+                          </Button>
                         )}
                       </motion.div>
                     ))}
@@ -614,7 +579,7 @@ export const MainContent = () => {
         </motion.div>
       </div>
 
-      <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+      <TaskDetailDrawer taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
 
       <AnimatePresence>
         {isSidebarOpen && (
@@ -677,35 +642,3 @@ export const MainContent = () => {
     </div>
   );
 };
-
-function buildFilter(listId: string): TaskFilter | undefined {
-  const smartSet = new Set(['my-day', 'important', 'planned', 'tasks']);
-  if (smartSet.has(listId)) {
-    if (listId === 'my-day') return { addToMyDay: true };
-    if (listId === 'important') return { isImportant: true };
-    if (listId === 'planned') return { hasDueDate: true };
-    return {};
-  }
-  if (listId.startsWith('tag:')) {
-    const tagId = listId.slice(4);
-    return { tagIds: [tagId] };
-  }
-  return { listId };
-}
-
-function getListTitle(
-  listId: string,
-  allTags?: Array<{ id: string; name: string }>,
-  tFn?: (key: string) => string,
-): string {
-  if (listId === 'my-day') return tFn ? tFn('sidebar.myDay') : '我的一天';
-  if (listId === 'important') return tFn ? tFn('sidebar.important') : '重要';
-  if (listId === 'planned') return tFn ? tFn('sidebar.planned') : '计划内';
-  if (listId === 'tasks') return tFn ? tFn('sidebar.tasks') : '所有任务';
-  if (listId.startsWith('tag:')) {
-    const tagId = listId.slice(4);
-    const tag = allTags?.find((t) => t.id === tagId);
-    return tag ? `${tag.name}` : '标签';
-  }
-  return '任务';
-}

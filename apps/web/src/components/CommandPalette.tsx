@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { List } from '@baicie/orbit';
 import { useCreateTask, useList } from '@baicie/orbit-hooks';
+import { Button, Input } from '@baicie/orbit-ui';
 import { CalendarIcon, ListIcon, PlusIcon, StarIcon, SunIcon } from './CommandPaletteIcons';
 
 interface Command {
@@ -207,18 +208,18 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
         >
           <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
             <Search size={18} className="text-gray-400 flex-shrink-0" />
-            <input
-              ref={inputRef}
+            <Input
+              ref={inputRef as React.RefObject<HTMLInputElement>}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="输入命令或搜索..."
-              className="flex-1 bg-transparent border-none outline-none text-gray-900 placeholder:text-gray-400 text-sm"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
+              className="flex-1 bg-transparent border-none outline-none text-gray-900 placeholder:text-gray-400 text-sm"
             />
             <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-xs text-gray-400 bg-gray-100 rounded border border-gray-200">
               Esc
@@ -239,9 +240,10 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
                     const currentIndex = flatIndex;
                     flatIndex++;
                     return (
-                      <button
+                      <Button
                         key={cmd.id}
-                        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+                        variant="ghost"
+                        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left justify-start ${
                           isSelected ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
                         }`}
                         onClick={cmd.action}
@@ -260,7 +262,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
                             {cmd.shortcut}
                           </kbd>
                         )}
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>

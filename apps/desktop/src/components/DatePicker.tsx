@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { Button } from '@baicie/orbit-ui';
 
 interface DatePickerProps {
   value: string | null;
@@ -98,21 +99,15 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
   return (
     <div className="w-[280px] bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50">
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50/50">
-        <button
-          onClick={prevMonth}
-          className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500"
-        >
+        <Button variant="ghost" size="icon" onClick={prevMonth} className="text-gray-500">
           <ChevronLeft size={16} />
-        </button>
+        </Button>
         <span className="text-sm font-semibold text-gray-800">
           {viewYear} 年 {MONTHS[viewMonth]}
         </span>
-        <button
-          onClick={nextMonth}
-          className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500"
-        >
+        <Button variant="ghost" size="icon" onClick={nextMonth} className="text-gray-500">
           <ChevronRight size={16} />
-        </button>
+        </Button>
       </div>
 
       <div className="grid grid-cols-7 px-2 pt-2">
@@ -134,21 +129,27 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
           const isOverdue = isPast(date) && !isSelected;
 
           return (
-            <button
+            <Button
               key={day}
+              variant="ghost"
+              size="icon"
               onClick={() => onChange(formatDate(date))}
-              className={`h-8 w-8 rounded-full text-xs flex items-center justify-center transition-colors ${
-                isSelected
-                  ? 'bg-blue-500 text-white font-semibold'
-                  : isTodayDate
-                    ? 'bg-blue-50 text-blue-600 font-semibold hover:bg-blue-100'
-                    : isOverdue
-                      ? 'text-gray-300 hover:bg-gray-50'
-                      : 'text-gray-700 hover:bg-gray-100'
-              }`}
+              className={`h-8 w-8 p-0 text-xs ${isSelected ? 'text-white' : ''}`}
             >
-              {day}
-            </button>
+              <div
+                className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${
+                  isSelected
+                    ? 'bg-blue-500 text-white font-semibold'
+                    : isTodayDate
+                      ? 'bg-blue-50 text-blue-600 font-semibold'
+                      : isOverdue
+                        ? 'text-gray-300'
+                        : 'text-gray-700'
+                }`}
+              >
+                {day}
+              </div>
+            </Button>
           );
         })}
       </div>
@@ -159,19 +160,23 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
         </div>
         <div className="flex gap-2">
           {value && (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleClear}
-              className="text-xs text-gray-500 hover:text-red-500 transition-colors px-2 py-1 rounded hover:bg-red-50"
+              className="text-xs text-gray-500 hover:text-red-500 hover:bg-red-50"
             >
               清除
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => onChange(formatDate(new Date()))}
-            className="text-xs text-blue-500 hover:text-blue-600 transition-colors px-2 py-1 rounded hover:bg-blue-50"
+            className="text-xs text-blue-500 hover:text-blue-600 hover:bg-blue-50"
           >
             今天
-          </button>
+          </Button>
         </div>
       </div>
     </div>

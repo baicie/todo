@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@baicie/orbit-ui';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -31,21 +32,18 @@ export function SettingsDrawer({ isOpen, onClose }: SettingsDrawerProps) {
           >
             <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">设置</h2>
-              <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+              <Button variant="ghost" size="icon" onClick={onClose}>
                 <X size={20} className="text-gray-500" />
-              </button>
+              </Button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
               <section>
                 <h3 className="text-sm font-semibold text-gray-500 mb-3">主题</h3>
                 <div className="space-y-2">
                   {['浅色', '深色', '跟随系统'].map((theme) => (
-                    <button
-                      key={theme}
-                      className="w-full text-left px-3 py-2 text-sm rounded hover:bg-gray-100 text-gray-700"
-                    >
+                    <Button key={theme} variant="ghost" className="w-full justify-start">
                       {theme}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </section>
@@ -58,9 +56,9 @@ export function SettingsDrawer({ isOpen, onClose }: SettingsDrawerProps) {
               </section>
               <section>
                 <h3 className="text-sm font-semibold text-gray-500 mb-3">账号</h3>
-                <button className="w-full text-left px-3 py-2 text-sm rounded hover:bg-gray-100 text-gray-700">
+                <Button variant="ghost" className="w-full justify-start text-gray-700">
                   退出登录
-                </button>
+                </Button>
               </section>
             </div>
           </motion.div>

@@ -2,6 +2,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '@baicie/orbit';
 import { Check, GripVertical, Star } from 'lucide-react';
+import { Button } from '@baicie/orbit-ui';
 
 interface SortableTaskItemProps {
   task: Task;
@@ -44,39 +45,49 @@ export function SortableTaskItem({
       onClick={onSelect}
     >
       {/* Selection checkbox */}
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         onClick={onToggleCheck}
-        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-          isChecked
-            ? 'bg-[var(--theme-primary)] border-[var(--theme-primary)] text-white'
-            : 'border-gray-300 hover:border-[var(--theme-primary)]'
-        }`}
+        className={`w-5 h-5 p-0 ${isChecked ? 'text-white' : ''}`}
       >
-        {isChecked && <Check size={12} strokeWidth={3} />}
-      </button>
+        <div
+          className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+            isChecked
+              ? 'bg-[var(--theme-primary)] border-[var(--theme-primary)]'
+              : 'border-gray-300 hover:border-[var(--theme-primary)]'
+          }`}
+        >
+          {isChecked && <Check size={12} strokeWidth={3} />}
+        </div>
+      </Button>
 
       <div className={`flex items-center gap-3 ${viewMode === 'table' ? 'col-span-5' : ''}`}>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={(e) => {
             e.stopPropagation();
             onToggleComplete(task);
           }}
-          className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-5 h-5 p-0"
         >
-          {task.isCompleted && (
-            <div className="w-full h-full rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                className="w-3 h-3 text-white"
-              >
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            </div>
-          )}
-        </button>
+          <div className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors">
+            {task.isCompleted && (
+              <div className="w-full h-full rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  className="w-3 h-3 text-white"
+                >
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
+            )}
+          </div>
+        </Button>
         <span className="flex-1 text-sm text-gray-900 break-words line-clamp-2">{task.title}</span>
       </div>
 
@@ -86,39 +97,43 @@ export function SortableTaskItem({
             {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : '-'}
           </div>
           <div className="col-span-3">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleImportant(task);
               }}
-              className={`p-1.5 rounded hover:bg-gray-100 ${task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'}`}
+              className={task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'}
             >
               <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-            </button>
+            </Button>
           </div>
         </>
       ) : (
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={(e) => {
             e.stopPropagation();
             onToggleImportant(task);
           }}
-          className={`p-1.5 rounded hover:bg-gray-100 flex-shrink-0 ${
-            task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
-          }`}
+          className={`flex-shrink-0 ${task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'}`}
         >
           <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-        </button>
+        </Button>
       )}
 
-      <button
+      <Button
         {...attributes}
         {...listeners}
-        className="p-1 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+        variant="ghost"
+        size="icon"
+        className="cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
         <GripVertical size={16} />
-      </button>
+      </Button>
     </div>
   );
 }

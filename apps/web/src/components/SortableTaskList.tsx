@@ -20,9 +20,7 @@ import { SortableTaskItem } from './SortableTaskItem';
 interface SortableTaskListProps {
   tasks: Task[];
   activeTaskId: string | null;
-  isChecked: (id: string) => boolean;
   onSelectTask: (id: string) => void;
-  onToggleCheck: (taskId: string) => void;
   onContextMenu: (e: React.MouseEvent, task: Task) => void;
   onToggleComplete: (task: Task) => void;
   onToggleImportant: (task: Task) => void;
@@ -35,9 +33,7 @@ interface SortableTaskListProps {
 export function SortableTaskList({
   tasks,
   activeTaskId,
-  isChecked,
   onSelectTask,
-  onToggleCheck,
   onContextMenu,
   onToggleComplete,
   onToggleImportant,
@@ -51,7 +47,8 @@ export function SortableTaskList({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8,
+        delay: 250,
+        tolerance: 5,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -95,12 +92,7 @@ export function SortableTaskList({
                 isSelected={activeTaskId === task.id}
                 focusedIndex={focusedIndex}
                 activeIndex={tasks.findIndex((t) => t.id === activeId)}
-                isChecked={isChecked(task.id)}
                 onSelect={() => onSelectTask(task.id)}
-                onToggleCheck={(e) => {
-                  e.stopPropagation();
-                  onToggleCheck(task.id);
-                }}
                 onContextMenu={onContextMenu}
                 onToggleComplete={onToggleComplete}
                 onToggleImportant={onToggleImportant}

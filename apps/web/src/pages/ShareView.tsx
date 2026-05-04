@@ -1,8 +1,18 @@
-import { Calendar, CheckCircle2, Circle, Link, List, Star, Sun, UserPlus } from 'lucide-react';
+import {
+  Calendar,
+  CheckCircle2,
+  Circle,
+  Link as LinkIcon,
+  List,
+  Star,
+  Sun,
+  UserPlus,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { type ShareViewData, buildShareUrl, getShareView } from '../lib/share';
+import { Button } from '@baicie/orbit-ui';
 
 function formatDueDate(dateStr: string | null): string | null {
   if (!dateStr) return null;
@@ -121,7 +131,7 @@ export function ShareView() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center max-w-md mx-auto px-4">
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Link size={32} className="text-red-500" />
+            <LinkIcon size={32} className="text-red-500" />
           </div>
           <h1 className="text-xl font-semibold text-gray-900 mb-2">无法加载分享</h1>
           <p className="text-gray-500 mb-6">{error}</p>
@@ -169,17 +179,13 @@ export function ShareView() {
                 ? '可编辑'
                 : '仅查看'}
             </div>
-            <button
+            <Button
               onClick={handleCopyLink}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isCopied
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-blue-500 text-white hover:bg-blue-600'
-              }`}
+              className={`flex items-center gap-2 ${isCopied ? 'bg-green-100 text-green-700' : ''}`}
             >
-              <Link size={14} />
+              <LinkIcon size={14} />
               {isCopied ? '已复制' : '复制链接'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

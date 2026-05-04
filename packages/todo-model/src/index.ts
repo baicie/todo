@@ -78,6 +78,8 @@ export interface List extends BaseEntity {
   theme: string | null;
   isSmart: boolean;
   userId: number | null;
+  groupId: string | null;
+  sortOrder: number;
   tasks?: Task[];
 }
 
@@ -86,6 +88,16 @@ export interface Tag extends BaseEntity {
   name: string;
   color: string;
   userId: number | null;
+}
+
+export interface Group extends BaseEntity {
+  id: string;
+  name: string;
+  icon: string | null;
+  color: string;
+  sortOrder: number;
+  userId: number | null;
+  lists?: List[];
 }
 
 export interface TaskFilter {
@@ -133,12 +145,15 @@ export interface CreateListInput {
   title: string;
   icon?: string;
   theme?: string;
+  groupId?: string;
 }
 
 export interface UpdateListInput {
   title?: string;
   icon?: string | null;
   theme?: string | null;
+  groupId?: string | null;
+  sortOrder?: number;
 }
 
 export interface CreateStepInput {
@@ -149,6 +164,19 @@ export interface CreateStepInput {
 export interface UpdateStepInput {
   title?: string;
   isCompleted?: boolean;
+}
+
+export interface CreateGroupInput {
+  name: string;
+  icon?: string;
+  color?: string;
+}
+
+export interface UpdateGroupInput {
+  name?: string;
+  icon?: string | null;
+  color?: string;
+  sortOrder?: number;
 }
 
 export type SyncOperationType = 'create' | 'update' | 'delete';
@@ -229,6 +257,7 @@ export class TodoDatabase extends Dexie {
   lists!: Table<List, string>;
   steps!: Table<Step, string>;
   tags!: Table<Tag, string>;
+  groups!: Table<Group, string>;
   syncQueue!: Table<SyncOperation, number>;
 
   constructor() {
@@ -248,6 +277,16 @@ export class TodoDatabase extends Dexie {
       lists: 'id, userId, isSmart, createdAt, updatedAt',
       steps: 'id, taskId, isCompleted, createdAt, updatedAt',
       tags: 'id, userId, createdAt, updatedAt',
+      syncQueue: '++id, entityType, entityId, operation, status, createdAt',
+    });
+
+    this.version(3).stores({
+      tasks:
+        'id, listId, userId, isCompleted, isImportant, addToMyDay, dueDate, reminderDate, category, createdAt, updatedAt, sortOrder, *tagIds',
+      lists: 'id, userId, groupId, isSmart, createdAt, updatedAt',
+      steps: 'id, taskId, isCompleted, createdAt, updatedAt',
+      tags: 'id, userId, createdAt, updatedAt',
+      groups: 'id, userId, createdAt, updatedAt',
       syncQueue: '++id, entityType, entityId, operation, status, createdAt',
     });
   }
@@ -319,6 +358,14 @@ export interface UpdateTagInput {
   color?: string;
 }
 
+export interface IGroupStorage {
+  getGroups(): Promise<Group[]>;
+  getGroup(id: string): Promise<Group | null>;
+  createGroup(input: CreateGroupInput): Promise<Group>;
+  updateGroup(id: string, input: UpdateGroupInput): Promise<Group>;
+  deleteGroup(id: string): Promise<void>;
+}
+
 // ============================================================================
 // IStorage — Unified storage facade
 // ============================================================================
@@ -329,6 +376,7 @@ export interface IStorage {
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
   readonly tags: ITagStorage;
+  readonly groups: IGroupStorage;
   initialize(): Promise<void>;
   destroy(): Promise<void>;
 }
@@ -479,6 +527,8 @@ class LocalListStorageImpl implements IListStorage {
       theme: input.theme ?? null,
       isSmart: false,
       userId: null,
+      groupId: input.groupId ?? null,
+      sortOrder: 0,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -619,6 +669,44 @@ class LocalTagStorageImpl implements ITagStorage {
       }
       await db.tags.delete(id);
     });
+  }
+}
+
+class LocalGroupStorageImpl implements IGroupStorage {
+  async getGroups(): Promise<Group[]> {
+    return db.groups.toArray();
+  }
+
+  async getGroup(id: string): Promise<Group | null> {
+    return (await db.groups.get(id)) ?? null;
+  }
+
+  async createGroup(input: CreateGroupInput): Promise<Group> {
+    const group: Group = {
+      id: uuidv4(),
+      name: input.name,
+      icon: input.icon ?? null,
+      color: input.color ?? '#6366f1',
+      sortOrder: 0,
+      userId: null,
+      lists: [],
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    await db.groups.add(group);
+    return group;
+  }
+
+  async updateGroup(id: string, input: UpdateGroupInput): Promise<Group> {
+    const existing = await db.groups.get(id);
+    if (!existing) throw new Error(`Group ${id} not found`);
+    const updated: Group = { ...existing, ...input, updatedAt: now() };
+    await db.groups.put(updated);
+    return updated;
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    await db.groups.delete(id);
   }
 }
 
@@ -843,6 +931,41 @@ class RemoteTagStorageImpl implements ITagStorage {
   }
 }
 
+class RemoteGroupStorageImpl implements IGroupStorage {
+  constructor(private readonly api: AxiosInstance) {}
+
+  async getGroups(): Promise<Group[]> {
+    const { data } = await this.api.get<{ success: boolean; data: Group[] }>('/groups');
+    return data.data;
+  }
+
+  async getGroup(id: string): Promise<Group | null> {
+    try {
+      const { data } = await this.api.get<{ success: boolean; data: Group }>(`/groups/${id}`);
+      return data.data;
+    } catch {
+      return null;
+    }
+  }
+
+  async createGroup(input: CreateGroupInput): Promise<Group> {
+    const { data } = await this.api.post<{ success: boolean; data: Group }>('/groups', input);
+    return data.data;
+  }
+
+  async updateGroup(id: string, input: UpdateGroupInput): Promise<Group> {
+    const { data } = await this.api.patch<{ success: boolean; data: Group }>(
+      `/groups/${id}`,
+      input,
+    );
+    return data.data;
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    await this.api.delete(`/groups/${id}`);
+  }
+}
+
 // ============================================================================
 // Unified Storage Classes
 // ============================================================================
@@ -853,6 +976,7 @@ export class LocalStorage implements IStorage {
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
   readonly tags: ITagStorage;
+  readonly groups: IGroupStorage;
 
   constructor(config: StorageConfig) {
     this.config = config;
@@ -860,6 +984,7 @@ export class LocalStorage implements IStorage {
     this.lists = new LocalListStorageImpl();
     this.auth = new LocalAuthStorageImpl();
     this.tags = new LocalTagStorageImpl();
+    this.groups = new LocalGroupStorageImpl();
   }
 
   async initialize(): Promise<void> {}
@@ -872,6 +997,7 @@ export class RemoteStorage implements IStorage {
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
   readonly tags: ITagStorage;
+  readonly groups: IGroupStorage;
 
   constructor(config: StorageConfig) {
     const baseUrl = config.apiBaseUrl ?? 'http://localhost:3001/api';
@@ -890,6 +1016,7 @@ export class RemoteStorage implements IStorage {
     this.tasks = new RemoteTaskStorageImpl(sharedApi);
     this.lists = new RemoteListStorageImpl(sharedApi);
     this.tags = new RemoteTagStorageImpl(sharedApi);
+    this.groups = new RemoteGroupStorageImpl(sharedApi);
   }
 
   async initialize(): Promise<void> {}

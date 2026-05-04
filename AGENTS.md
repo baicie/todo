@@ -374,6 +374,80 @@ refactor(parser): simplify AST node creation
 - 启用 `esModuleInterop`
 - 启用装饰器支持（在 NestJS 项目中）
 
+## 代码重构与组件化规范
+
+### 文件大小与逻辑拆分
+
+单文件应控制在合理行数内（建议不超过 400 行），避免形成"上帝组件"。超过 400 行的文件应主动拆分。
+
+### shadcn/ui 组件规范
+
+项目在 `packages/ui/` 目录下维护了一套基于 shadcn/ui 设计规范的组件库（`@baicie/orbit-ui`）。所有前端应用（web、desktop、browser-ext）**必须优先使用该组件库**，禁止在业务代码中直接使用原生 HTML 标签替代。
+
+**`@baicie/orbit-ui` 已有组件：**
+
+| 组件 | 说明 |
+|------|------|
+| `Button` | 按钮（支持 variant/size） |
+| `Input` | 文本输入框 |
+| `Checkbox` | 复选框 |
+| `Select` | 下拉选择 |
+| `Textarea` | 多行文本 |
+| `Switch` | 开关控件 |
+| `Drawer` | 侧边抽屉 |
+| `Modal` | 模态框 |
+| `DatePicker` | 日期选择器 |
+| `Avatar` | 用户头像 |
+| `Badge` | 徽章 |
+| `DropdownMenu` | 下拉菜单 |
+| `ScrollArea` | 滚动区域 |
+| `Separator` | 分割线 |
+| `TaskDetailDropdownMenu` | 任务详情复合下拉菜单 |
+| `TaskCheckbox` | 任务完成复选框 |
+| `ViewModeToggle` | 视图模式切换 |
+| `Toast` | 轻提示 |
+| `MarkdownEditor` | Markdown 编辑器 |
+
+**需要补充到 `@baicie/orbit-ui` 的组件：**
+
+| 组件 | 优先级 |
+|------|-------|
+| `Label` | 低 |
+
+### 图标复用规范
+
+web / desktop / browser-ext 统一使用 `lucide-react` 作为图标库。图标配置集中在 `apps/*/src/config/icons.tsx` 中管理，通过 `getIcon` 函数按 key 获取，避免在组件中直接引入。通用业务图标应抽到 `@baicie/orbit-ui` 供全平台复用。
+
+### 当前重构进度
+
+##### 已完成
+
+- `getDueDateText` → `packages/utils/src/date.ts`
+- `buildFilter` + `getListTitle` → `packages/utils/src/filter.ts`
+- `Textarea` 组件 → `packages/ui/src/components/ui/textarea.tsx`
+- `ScrollArea` / `Separator` / `Switch` 组件 → `packages/ui`
+- `TaskDetailDropdownMenu` 复合组件 → `packages/ui/src/components/ui/task-detail-dropdown.tsx`
+- `TaskCheckbox` 组件 → `packages/ui/src/components/ui/task-checkbox.tsx`
+- `ViewModeToggle` 组件 → `packages/ui/src/components/ui/view-mode-toggle.tsx`
+- **全部前端应用原生标签替换**：apps/web、apps/desktop、apps/browser-ext 中所有原生 `<button>` / `<input>` 已替换为 `Button` / `Input`
+- **web/MainContent.tsx** 提取视图切换逻辑，使用 `ViewModeToggle` 组件（710→637 行）
+- **web & desktop/MainContent.tsx** 提取完成复选框逻辑，使用 `TaskCheckbox` 组件
+
+##### 待完成（按优先级）
+
+| 任务 | 优先级 |
+|-----|-------|
+| 拆分 web/TaskDetailDrawer.tsx（~990行） | 高 |
+| 拆分 desktop/TaskDetailDrawer.tsx（~924行） | 高 |
+| 拆分 web/Settings.tsx（~620行） | 高 |
+| 拆分 desktop/Settings.tsx（~544行） | 高 |
+| 拆分 web/Sidebar.tsx（~410行） | 高 |
+| 将 TaskDetailDrawer 下拉菜单替换为 TaskDetailDropdownMenu | 中 |
+| 抽取 useMainContentState 自定义 hook（17个 useState） | 中 |
+| 拆分 desktop/MainContent.tsx（~548行） | 中 |
+| 拆分 desktop/Sidebar.tsx（~226行） | 中 |
+| 添加 `Label` 组件 | 低 |
+
 ## 特别说明
 
 如果使用 AI 编程助手（如 Cursor）进行开发，请在提交 PR 时在末尾标注：`> Submitted by Cursor`

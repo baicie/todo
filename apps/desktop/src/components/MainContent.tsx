@@ -4,7 +4,6 @@ import {
   Calendar,
   ChevronRight,
   Grid2X2,
-  LayoutGrid,
   List as ListIcon,
   Menu,
   MoreHorizontal,
@@ -32,6 +31,7 @@ import {
   useToggleMyDay,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
+import { Button, Input, TaskCheckbox, ViewModeToggle } from '@baicie/orbit-ui';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { Sidebar } from './Sidebar';
@@ -187,63 +187,29 @@ export function MainContent() {
         <header className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              <button
-                className="p-2 text-gray-600 hover:bg-gray-100 rounded-md"
-                onClick={() => setIsSidebarOpen(true)}
-              >
+              <Button variant="ghost" size="icon" onClick={() => setIsSidebarOpen(true)}>
                 <Menu size={24} />
-              </button>
+              </Button>
               <div className="flex items-center gap-2 text-[var(--theme-primary)]">
                 <ListIcon size={24} />
                 <h1 className="text-xl sm:text-2xl font-bold">{getTitle()}</h1>
               </div>
-              <button className="p-1 text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <Button variant="ghost" size="icon">
                 <MoreHorizontal size={20} />
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all relative ${
-                    viewMode === 'table'
-                      ? 'text-[var(--theme-primary)]'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <LayoutGrid size={16} />
-                  <span>网格</span>
-                  {viewMode === 'table' && (
-                    <motion.div
-                      layoutId="viewModeIndicator"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--theme-primary)]"
-                    />
-                  )}
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all relative ${
-                    viewMode === 'list'
-                      ? 'text-[var(--theme-primary)]'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <ListIcon size={16} />
-                  <span>列表</span>
-                  {viewMode === 'list' && (
-                    <motion.div
-                      layoutId="viewModeIndicator"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--theme-primary)]"
-                    />
-                  )}
-                </button>
-              </div>
+              </Button>
+              <ViewModeToggle value={viewMode} onChange={setViewMode} />
             </div>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => setIsSortMenuOpen((v) => !v)}
-                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors relative"
-              >
-                <ArrowUpDown size={16} />
-                <span>排序</span>
+              <div className="relative">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsSortMenuOpen((v) => !v)}
+                  className="flex items-center gap-1"
+                >
+                  <ArrowUpDown size={16} />
+                  <span>排序</span>
+                </Button>
                 {isSortMenuOpen && (
                   <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
                     {(
@@ -255,10 +221,11 @@ export function MainContent() {
                         { key: 'importance', label: '重要性' },
                       ] as const
                     ).map(({ key, label }) => (
-                      <button
+                      <Button
                         key={key}
+                        variant="ghost"
                         onClick={() => setSortBy(key)}
-                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors ${
+                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between ${
                           sortBy === key
                             ? 'bg-blue-50 text-blue-600'
                             : 'text-gray-700 hover:bg-gray-50'
@@ -268,31 +235,34 @@ export function MainContent() {
                         {sortBy === key && (
                           <span className="text-xs">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                         )}
-                      </button>
+                      </Button>
                     ))}
                     <div className="border-t border-gray-100 my-1" />
-                    <button
+                    <Button
+                      variant="ghost"
                       onClick={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                      className="w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 flex items-center justify-between"
                     >
                       <span>方向</span>
                       <span>{sortOrder === 'asc' ? '升序 ↑' : '降序 ↓'}</span>
-                    </button>
+                    </Button>
                   </div>
                 )}
-              </button>
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              </div>
+              <Button variant="ghost" size="sm" className="flex items-center gap-1">
                 <Grid2X2 size={16} />
                 <span>组</span>
-              </button>
-              <button
-                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors"
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setIsShareDialogOpen(true)}
+                className="flex items-center gap-1"
                 title="分享"
               >
                 <UserPlus size={16} />
                 <span>共享</span>
-              </button>
+              </Button>
             </div>
           </div>
         </header>
@@ -305,7 +275,7 @@ export function MainContent() {
                 className={isInputFocused ? 'text-[var(--theme-primary)]' : 'text-gray-400'}
                 size={24}
               />
-              <input
+              <Input
                 type="text"
                 value={newTask}
                 onChange={(e) => setNewTask(e.target.value)}
@@ -315,20 +285,23 @@ export function MainContent() {
                 className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-gray-500 text-gray-900 focus:ring-0"
               />
               {newTask && (
-                <button
+                <Button
                   type="submit"
+                  size="sm"
                   disabled={createTask.isPending}
+                  variant="ghost"
                   className="text-xs font-medium text-[var(--theme-primary)] uppercase px-2"
                 >
                   {createTask.isPending ? t('main.adding') : t('main.add')}
-                </button>
+                </Button>
               )}
             </form>
             {isInputFocused && (
               <div className="flex items-center gap-1 px-3 pb-2 bg-gray-50/50 rounded-b-md border-t border-gray-100 pt-2 relative">
                 <div className="relative">
-                  <button
-                    className="p-1.5 hover:bg-gray-200 rounded text-gray-500"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     title="设置截止日期"
                     onClick={() => setIsDatePickerOpen((v) => !v)}
                   >
@@ -336,7 +309,7 @@ export function MainContent() {
                       size={18}
                       className={newTaskDueDate ? 'text-[var(--theme-primary)]' : ''}
                     />
-                  </button>
+                  </Button>
                   <AnimatePresence>
                     {isDatePickerOpen && (
                       <motion.div
@@ -363,12 +336,12 @@ export function MainContent() {
                     )}
                   </AnimatePresence>
                 </div>
-                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-500" title="设置提醒">
+                <Button variant="ghost" size="icon" title="设置提醒">
                   <Bell size={18} />
-                </button>
-                <button className="p-1.5 hover:bg-gray-200 rounded text-gray-500" title="设置重复">
+                </Button>
+                <Button variant="ghost" size="icon" title="设置重复">
                   <Repeat size={18} />
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -404,9 +377,10 @@ export function MainContent() {
           {/* Completed Tasks */}
           {completedTasks.length > 0 && (
             <div className="mt-6">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsCompletedCollapsed(!isCompletedCollapsed)}
-                className="flex items-center gap-2 mb-2 px-2 py-1 hover:bg-gray-100 rounded cursor-pointer"
+                className="flex items-center gap-2 mb-2 px-2 py-1 cursor-pointer"
               >
                 <ChevronRight
                   size={16}
@@ -414,7 +388,7 @@ export function MainContent() {
                 />
                 <span className="text-sm font-medium text-gray-600">{t('main.completed')}</span>
                 <span className="text-xs text-gray-400">{completedTasks.length}</span>
-              </button>
+              </Button>
               {!isCompletedCollapsed && (
                 <motion.div layout className="space-y-1">
                   <AnimatePresence initial={false} mode="popLayout">
@@ -432,23 +406,7 @@ export function MainContent() {
                         }`}
                       >
                         <div className="flex items-center gap-3 flex-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleComplete(task);
-                            }}
-                            className="w-5 h-5 rounded-full border-2 bg-[var(--theme-primary)] border-[var(--theme-primary)] flex items-center justify-center flex-shrink-0"
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="3"
-                              className="w-3 h-3 text-white"
-                            >
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          </button>
+                          <TaskCheckbox checked={true} onChange={() => toggleComplete(task)} />
                           <span className="flex-1 text-sm text-gray-400 line-through">
                             {task.title}
                           </span>

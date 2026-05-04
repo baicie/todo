@@ -2,6 +2,7 @@ import { Bell, Grid, HelpCircle, Search, Settings, User } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@baicie/orbit-ui';
 import { useAuth } from '../contexts/AuthContext';
 import { NotificationPanel } from './NotificationPanel';
 import { SearchPanel } from './SearchPanel';
@@ -28,35 +29,35 @@ export const Header = () => {
 
         {/* Center: Search */}
         <div className="flex-1 max-w-xl mx-4">
-          <button
+          <Button
             onClick={() => setIsSearchOpen(true)}
-            className="relative group w-full flex items-center gap-2 pl-3 pr-3 py-1.5 border-none rounded bg-blue-600/50 text-blue-200 hover:bg-blue-600/60 transition-all text-sm h-8 text-left"
+            variant="secondary"
+            className="relative group w-full flex items-center gap-2 pl-3 pr-3 py-1.5 h-8 text-left justify-start"
           >
             <Search size={16} />
             <span className="flex-1">{t('header.search')}</span>
             <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-xs text-blue-200/70 bg-blue-500/30 rounded border border-blue-400/30">
               Ctrl+K
             </kbd>
-          </button>
+          </Button>
         </div>
 
         {/* Right: Actions & Profile */}
         <div className="flex items-center gap-1">
-          <button
+          <Button
             onClick={() => navigate('/settings')}
-            className="p-2 hover:bg-black/10 rounded transition-colors"
+            variant="ghost"
+            className="p-2"
             title={t('header.settings')}
           >
             <Settings size={20} strokeWidth={1.5} />
-          </button>
-          <button
-            className="p-2 hover:bg-black/10 rounded transition-colors"
-            title={t('header.help')}
-          >
+          </Button>
+          <Button variant="ghost" className="p-2" title={t('header.help')}>
             <HelpCircle size={20} strokeWidth={1.5} />
-          </button>
-          <button
-            className="p-2 hover:bg-black/10 rounded transition-colors relative"
+          </Button>
+          <Button
+            variant="ghost"
+            className="p-2 relative"
             title={t('header.notifications')}
             onClick={() => setIsNotificationOpen(true)}
           >
@@ -66,7 +67,7 @@ export const Header = () => {
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
-          </button>
+          </Button>
 
           <div className="ml-2 relative group cursor-pointer">
             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-sm font-medium hover:bg-white/30 transition-colors border border-white/30">
@@ -79,12 +80,13 @@ export const Header = () => {
                 <p className="text-sm font-medium text-gray-900">{user?.name}</p>
                 <p className="text-xs text-gray-500 truncate">{user?.email}</p>
               </div>
-              <button
+              <Button
                 onClick={logout}
-                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50 transition-colors"
+                variant="ghost"
+                className="w-full justify-start text-red-600 hover:bg-gray-50"
               >
                 {t('header.logout')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

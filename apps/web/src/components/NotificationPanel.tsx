@@ -1,20 +1,9 @@
-import {
-  Bell,
-  BellOff,
-  Check,
-  CheckCheck,
-  Clock,
-  Cloud,
-  CloudOff,
-  Sparkles,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { Bell, BellOff, Check, CheckCheck, Clock, Cloud, Sparkles, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '@baicie/orbit-hooks';
 import type { AppNotification, NotificationType } from '@baicie/orbit-hooks';
+import { Button } from '@baicie/orbit-ui';
 import { useState } from 'react';
 
 interface NotificationPanelProps {
@@ -74,12 +63,10 @@ function formatTime(isoString: string): string {
 function NotificationItem({
   notification,
   onRead,
-  onDismiss,
   onNavigate,
 }: {
   notification: AppNotification;
   onRead: () => void;
-  onDismiss: () => void;
   onNavigate: () => void;
 }) {
   return (
@@ -115,10 +102,8 @@ function NotificationItem({
 }
 
 export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
-  const { t } = useTranslation();
   const navigate = useNavigate();
-  const { notifications, unreadCount, markRead, markAllRead, dismiss, clearAll } =
-    useNotifications();
+  const { notifications, unreadCount, markRead, markAllRead, clearAll } = useNotifications();
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
 
   const filteredNotifications =
@@ -162,54 +147,51 @@ export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
               </div>
               <div className="flex items-center gap-1">
                 {unreadCount > 0 && (
-                  <button
-                    onClick={markAllRead}
-                    className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
-                    title="全部标为已读"
-                  >
+                  <Button variant="ghost" size="icon" onClick={markAllRead} title="全部标为已读">
                     <CheckCheck size={16} />
-                  </button>
+                  </Button>
                 )}
                 {notifications.length > 0 && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={clearAll}
-                    className="p-1.5 hover:bg-red-50 rounded transition-colors text-gray-400 hover:text-red-500"
                     title="清空所有通知"
+                    className="text-gray-400 hover:text-red-500"
                   >
                     <Trash2 size={16} />
-                  </button>
+                  </Button>
                 )}
-                <button
-                  onClick={onClose}
-                  className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
-                >
+                <Button variant="ghost" size="icon" onClick={onClose}>
                   <X size={16} />
-                </button>
+                </Button>
               </div>
             </div>
 
             {/* Filter Tabs */}
             <div className="flex border-b border-gray-200 px-4">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setActiveFilter('all')}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px rounded-none ${
                   activeFilter === 'all'
                     ? 'border-blue-500 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
               >
                 全部 {notifications.length > 0 && `(${notifications.length})`}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
                 onClick={() => setActiveFilter('unread')}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px rounded-none ${
                   activeFilter === 'unread'
                     ? 'border-blue-500 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
               >
                 未读 {unreadCount > 0 && `(${unreadCount})`}
-              </button>
+              </Button>
             </div>
 
             {/* Notification List */}
@@ -229,7 +211,6 @@ export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
                       key={notification.id}
                       notification={notification}
                       onRead={() => markRead(notification.id)}
-                      onDismiss={() => dismiss(notification.id)}
                       onNavigate={() => handleNavigate(notification)}
                     />
                   ))}

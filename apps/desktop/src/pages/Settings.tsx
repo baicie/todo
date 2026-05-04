@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { notificationService, useList, useSync, useTask } from '@baicie/orbit-hooks';
+import { Button, Input } from '@baicie/orbit-ui';
 import { useEffect, useRef, useState } from 'react';
 
 type ThemeMode = 'system' | 'light' | 'dark';
@@ -192,12 +193,14 @@ export function Settings() {
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => navigate(-1)}
-            className="p-2 hover:bg-gray-100 rounded-md transition-colors text-gray-600"
+            className="text-gray-600 hover:bg-gray-100"
           >
             <ArrowLeft size={20} />
-          </button>
+          </Button>
           <h1 className="text-xl font-bold text-gray-900">设置</h1>
         </div>
       </div>
@@ -207,18 +210,19 @@ export function Settings() {
           <div className="w-56 flex-shrink-0">
             <nav className="space-y-1">
               {tabs.map((tab) => (
-                <button
+                <Button
                   key={tab.id}
+                  variant={activeTab === tab.id ? 'secondary' : 'ghost'}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                  className={`w-full justify-start gap-3 ${
                     activeTab === tab.id
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'text-gray-600 hover:bg-gray-100'
+                      ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                      : 'text-gray-600'
                   }`}
                 >
                   {tab.icon}
                   <span>{tab.label}</span>
-                </button>
+                </Button>
               ))}
             </nav>
           </div>
@@ -256,43 +260,37 @@ export function Settings() {
                         <div className="flex items-center gap-2">
                           {editingName ? (
                             <>
-                              <input
+                              <Input
                                 type="text"
                                 value={nameValue}
                                 onChange={(e) => setNameValue(e.target.value)}
-                                className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="flex-1"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleSaveName();
                                 }}
                               />
-                              <button
-                                onClick={handleSaveName}
-                                className="px-3 py-2 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors flex items-center gap-1"
-                              >
+                              <Button onClick={handleSaveName} className="flex items-center gap-1">
                                 <Save size={14} /> 保存
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                variant="outline"
                                 onClick={() => {
                                   setEditingName(false);
                                   setNameValue(user?.name || '');
                                 }}
-                                className="px-3 py-2 bg-gray-100 text-gray-600 text-sm rounded-md hover:bg-gray-200 transition-colors"
                               >
                                 取消
-                              </button>
+                              </Button>
                             </>
                           ) : (
                             <>
                               <span className="flex-1 text-sm text-gray-900 py-2">
                                 {nameValue || user?.name}
                               </span>
-                              <button
-                                onClick={() => setEditingName(true)}
-                                className="px-3 py-2 bg-blue-50 text-blue-600 text-sm rounded-md hover:bg-blue-100 transition-colors"
-                              >
+                              <Button variant="secondary" onClick={() => setEditingName(true)}>
                                 编辑
-                              </button>
+                              </Button>
                               {nameSaved && (
                                 <span className="text-xs text-green-600 flex items-center gap-1">
                                   <Eye size={12} /> 已保存
@@ -340,18 +338,19 @@ export function Settings() {
                   <SectionCard title="主题" icon={<Palette size={18} />}>
                     <div className="grid grid-cols-3 gap-3">
                       {themeModes.map(({ value, label, icon }) => (
-                        <button
+                        <Button
                           key={value}
+                          variant={themeMode === value ? 'secondary' : 'outline'}
                           onClick={() => setThemeMode(value)}
-                          className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-colors ${
+                          className={`flex flex-col items-center gap-2 p-4 h-auto ${
                             themeMode === value
                               ? 'border-blue-500 bg-blue-50 text-blue-700'
-                              : 'border-gray-200 hover:border-gray-300 text-gray-600 hover:bg-gray-50'
+                              : 'text-gray-600'
                           }`}
                         >
                           <div className="p-3 bg-gray-100 rounded-lg">{icon}</div>
                           <span className="text-sm font-medium">{label}</span>
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   </SectionCard>
@@ -361,16 +360,15 @@ export function Settings() {
                         { code: 'zh', label: '简体中文', native: '中文' },
                         { code: 'en', label: 'English', native: 'English' },
                       ].map((lang) => (
-                        <button
+                        <Button
                           key={lang.code}
+                          variant={currentLang === lang.code ? 'secondary' : 'outline'}
                           onClick={() => handleLangChange(lang.code)}
-                          className={`w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-colors ${
-                            currentLang === lang.code
-                              ? 'border-blue-500 bg-blue-50'
-                              : 'border-gray-200 hover:border-gray-300'
+                          className={`w-full justify-between ${
+                            currentLang === lang.code ? 'border-blue-500 bg-blue-50' : ''
                           }`}
                         >
-                          <div>
+                          <div className="text-left">
                             <p
                               className={`text-sm font-medium ${currentLang === lang.code ? 'text-blue-700' : 'text-gray-900'}`}
                             >
@@ -387,7 +385,7 @@ export function Settings() {
                               <div className="w-2 h-2 rounded-full bg-white" />
                             </div>
                           )}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   </SectionCard>
@@ -442,12 +440,9 @@ export function Settings() {
                       <p className="text-sm text-gray-600">
                         将所有任务、清单和个人资料导出为 JSON 文件，以便备份或迁移。
                       </p>
-                      <button
-                        onClick={handleExportData}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors"
-                      >
+                      <Button onClick={handleExportData}>
                         <FileJson size={16} /> 导出为 JSON
-                      </button>
+                      </Button>
                     </div>
                   </SectionCard>
                   <SectionCard title="数据导入" icon={<Upload size={18} />}>
@@ -460,12 +455,9 @@ export function Settings() {
                         onChange={handleImportData}
                         className="hidden"
                       />
-                      <button
-                        onClick={() => jsonInputRef.current?.click()}
-                        className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm rounded-md hover:bg-gray-50 transition-colors"
-                      >
+                      <Button variant="outline" onClick={() => jsonInputRef.current?.click()}>
                         <Upload size={16} /> 选择 JSON 文件
-                      </button>
+                      </Button>
                     </div>
                   </SectionCard>
                 </motion.div>
@@ -489,23 +481,22 @@ export function Settings() {
                           后端 API 地址
                         </label>
                         <div className="flex items-center gap-2">
-                          <input
+                          <Input
                             type="text"
                             value={apiUrl}
                             onChange={(e) => setApiUrl(e.target.value)}
                             placeholder="http://localhost:3001/api"
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="flex-1"
                           />
-                          <button
+                          <Button
                             onClick={() => {
                               localStorage.setItem('orbit_api_url', apiUrl);
                               setNameSaved(true);
                               setTimeout(() => setNameSaved(false), 2000);
                             }}
-                            className="px-4 py-2 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors"
                           >
                             保存
-                          </button>
+                          </Button>
                         </div>
                         <p className="text-xs text-gray-500 mt-1.5">修改后需要刷新页面生效</p>
                       </div>
@@ -517,7 +508,8 @@ export function Settings() {
                       <p className="text-xs text-red-600 mb-3">
                         删除 IndexedDB 中的所有任务和清单。此操作不可撤销。
                       </p>
-                      <button
+                      <Button
+                        variant="destructive"
                         onClick={() => {
                           if (confirm('确定要清除所有本地数据吗？此操作不可撤销！')) {
                             indexedDB.deleteDatabase('OrbitDB');
@@ -525,10 +517,10 @@ export function Settings() {
                             window.location.href = '/';
                           }
                         }}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-xs rounded-md hover:bg-red-700 transition-colors"
+                        className="flex items-center gap-1"
                       >
                         <Trash2 size={12} /> 清除数据
-                      </button>
+                      </Button>
                     </div>
                   </SectionCard>
                 </motion.div>

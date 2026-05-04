@@ -1,17 +1,6 @@
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  Check,
-  Clock,
-  History,
-  Search,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Clock, History, Search, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   type SortOption,
@@ -19,6 +8,7 @@ import {
   useSearch,
   useSearchHistory,
 } from '@baicie/orbit-hooks';
+import { Button, Input } from '@baicie/orbit-ui';
 import type { Task } from '@baicie/orbit';
 
 interface SearchPanelProps {
@@ -43,7 +33,8 @@ function TaskResult({ task, onClose }: { task: Task; onClose: () => void }) {
   };
 
   return (
-    <button
+    <Button
+      variant="ghost"
       onClick={handleClick}
       className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
     >
@@ -83,7 +74,7 @@ function TaskResult({ task, onClose }: { task: Task; onClose: () => void }) {
           </div>
         </div>
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -98,10 +89,8 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     toggleSortOrder,
     tasks: searchResults,
     isLoading,
-    isTaskMatched,
   } = useSearch();
   const { history, removeHistory, clearHistory } = useSearchHistory();
-  const [showHistory, setShowHistory] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -146,13 +135,12 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
           {/* Search Input */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
             <Search size={18} className="text-gray-400 flex-shrink-0" />
-            <input
-              ref={inputRef}
+            <Input
+              ref={inputRef as React.RefObject<HTMLInputElement>}
               type="text"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
-                setShowHistory(e.target.value.length === 0);
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSubmit(query);
@@ -165,21 +153,27 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
               spellCheck={false}
             />
             {query && (
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => {
                   setQuery('');
-                  setShowHistory(true);
                 }}
                 className="p-1 hover:bg-gray-100 rounded text-gray-400"
               >
                 <X size={14} />
-              </button>
+              </Button>
             )}
-            <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded text-gray-400">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              className="p-1 hover:bg-gray-100 rounded text-gray-400"
+            >
               <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-xs text-gray-400 bg-gray-100 rounded border border-gray-200">
                 Esc
               </kbd>
-            </button>
+            </Button>
           </div>
 
           {/* Search Results */}
@@ -190,8 +184,10 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                 <span className="text-xs text-gray-500">排序：</span>
                 <div className="flex items-center gap-1">
                   {(Object.keys(SORT_LABELS) as SortOption[]).map((opt) => (
-                    <button
+                    <Button
                       key={opt}
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setSort(opt)}
                       className={`px-2 py-1 text-xs rounded transition-colors ${
                         sortBy === opt
@@ -200,16 +196,18 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                       }`}
                     >
                       {SORT_LABELS[opt]}
-                    </button>
+                    </Button>
                   ))}
                 </div>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={toggleSortOrder}
                   className="p-1 hover:bg-gray-100 rounded text-gray-400"
                   title={sortOrder === 'asc' ? '升序' : '降序'}
                 >
                   {sortOrder === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-                </button>
+                </Button>
               </div>
 
               {isLoading ? (
@@ -249,12 +247,14 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                     <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
                       搜索历史
                     </span>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={clearHistory}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
                     >
                       清空
-                    </button>
+                    </Button>
                   </div>
                   {history.map((item) => (
                     <div
@@ -262,16 +262,18 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                       className="flex items-center gap-2 px-4 py-2 hover:bg-gray-50 group"
                     >
                       <Clock size={14} className="text-gray-300 flex-shrink-0" />
-                      <button
+                      <Button
+                        variant="ghost"
                         onClick={() => {
                           setQuery(item);
-                          setShowHistory(false);
                         }}
-                        className="flex-1 text-sm text-gray-700 text-left truncate"
+                        className="flex-1 text-sm text-gray-700 text-left truncate justify-start"
                       >
                         {item}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={(e) => {
                           e.stopPropagation();
                           removeHistory(item);
@@ -279,7 +281,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                         className="p-1 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all"
                       >
                         <X size={12} />
-                      </button>
+                      </Button>
                     </div>
                   ))}
                 </>
@@ -300,15 +302,16 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
               </span>
             </div>
             {showResults && query.trim() && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setQuery('');
-                  setShowHistory(true);
                 }}
                 className="text-blue-500 hover:text-blue-600"
               >
                 清除搜索
-              </button>
+              </Button>
             )}
           </div>
         </motion.div>

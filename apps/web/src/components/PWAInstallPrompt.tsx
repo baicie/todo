@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@baicie/orbit-ui';
 
 interface BeforeInstallPromptEvent extends Event {
   readonly platform: string;
@@ -91,18 +92,22 @@ export function PWAInstallPrompt() {
           <h3 className="text-sm font-semibold text-gray-900 mb-1">{t('pwa.installTitle')}</h3>
           <p className="text-xs text-gray-500 mb-3">{t('pwa.installDesc')}</p>
           <div className="flex items-center gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={handleInstall}
-              className="flex-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              className="flex-1 px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700"
             >
               {t('pwa.install')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleDismiss}
-              className="px-3 py-1.5 text-gray-500 text-xs hover:text-gray-700 transition-colors"
+              className="px-3 py-1.5 text-gray-500 text-xs"
             >
               {t('pwa.dismiss')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

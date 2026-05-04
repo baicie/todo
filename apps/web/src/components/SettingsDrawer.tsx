@@ -9,13 +9,16 @@ import {
   Moon,
   Shield,
   Sun,
+  Tag,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { notificationService, switchStorageMode, useSync } from '@baicie/orbit-hooks';
+import { Button } from '@baicie/orbit-ui';
 import { useEffect, useState } from 'react';
+import { setTagsEnabled, useTagsEnabled } from '../hooks/useTagsEnabled';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -44,6 +47,7 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredThemeMode);
   const [notificationsEnabled, setNotificationsEnabled] = useState(getStoredNotificationsEnabled);
+  const tagsEnabled = useTagsEnabled();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -74,6 +78,11 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
     if (newVal) {
       void notificationService.requestPermission();
     }
+  };
+
+  const handleTagsToggle = () => {
+    const newVal = !tagsEnabled;
+    setTagsEnabled(newVal);
   };
 
   const handleSwitchMode = async () => {
@@ -121,12 +130,9 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900">{t('settings.title')}</h2>
-              <button
-                onClick={onClose}
-                className="p-2 hover:bg-gray-100 rounded-md transition-colors text-gray-500"
-              >
+              <Button variant="ghost" size="icon" onClick={onClose} className="p-2">
                 <X size={20} />
-              </button>
+              </Button>
             </div>
 
             {/* Content */}
@@ -159,13 +165,15 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                       </div>
                     </div>
                     {isOnline && pendingCount > 0 && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={triggerSync}
                         disabled={isSyncing}
-                        className="text-xs text-blue-500 hover:text-blue-600 disabled:opacity-50"
+                        className="text-xs"
                       >
                         {isSyncing ? '同步中' : '立即同步'}
-                      </button>
+                      </Button>
                     )}
                   </div>
 
@@ -212,19 +220,21 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                     </div>
                     <div className="flex gap-1">
                       {themeModes.map(({ value, label, icon }) => (
-                        <button
+                        <Button
                           key={value}
+                          variant={themeMode === value ? 'secondary' : 'ghost'}
+                          size="sm"
                           onClick={() => setThemeMode(value)}
-                          className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                          className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium ${
                             themeMode === value
                               ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                              : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                              : 'text-gray-600'
                           }`}
                           aria-pressed={themeMode === value}
                         >
                           {icon}
                           <span className="hidden sm:inline">{label}</span>
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   </div>
@@ -237,10 +247,12 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                       </div>
                       <span className="text-sm text-gray-700">{t('settings.notifications')}</span>
                     </div>
-                    <button
+                    <Button
                       role="switch"
                       aria-checked={notificationsEnabled}
                       onClick={handleNotificationToggle}
+                      variant={notificationsEnabled ? 'secondary' : 'ghost'}
+                      size="sm"
                       className={`w-10 h-5 rounded-full relative transition-colors ${
                         notificationsEnabled ? 'bg-blue-500' : 'bg-gray-300'
                       }`}
@@ -250,7 +262,33 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                           notificationsEnabled ? 'translate-x-5' : 'translate-x-0.5'
                         }`}
                       />
-                    </button>
+                    </Button>
+                  </div>
+
+                  {/* Tags Feature */}
+                  <div className="flex items-center justify-between p-3 rounded-md hover:bg-gray-50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-green-50 rounded-md text-green-600">
+                        <Tag size={18} />
+                      </div>
+                      <span className="text-sm text-gray-700">标签功能</span>
+                    </div>
+                    <Button
+                      role="switch"
+                      aria-checked={tagsEnabled}
+                      onClick={handleTagsToggle}
+                      variant={tagsEnabled ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className={`w-10 h-5 rounded-full relative transition-colors ${
+                        tagsEnabled ? 'bg-blue-500' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          tagsEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </Button>
                   </div>
                 </div>
               </section>

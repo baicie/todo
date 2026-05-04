@@ -17,6 +17,7 @@ export {
   addDays,
   getWeekdayName,
   getDayOfWeek,
+  getDueDateText,
 } from './date';
 
 // String utilities
@@ -66,3 +67,7 @@ export {
   min,
   max,
 } from './array';
+
+// Filter utilities
+export { SMART_LISTS, buildFilter, getListTitle } from './filter';
+export type { SmartListId, GetListTitleOptions } from './filter';

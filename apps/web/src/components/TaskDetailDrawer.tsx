@@ -4,7 +4,6 @@ import {
   Check,
   Circle,
   File as FileIcon,
-  Hash,
   Paperclip,
   Plus,
   Repeat,
@@ -14,7 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import {
@@ -23,29 +22,42 @@ import {
   useDeleteStep,
   useDeleteTask,
   useTag,
+  useTaskDetail,
   useToggleComplete,
   useToggleImportant,
   useToggleMyDay,
   useUpdateStep,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import { MarkdownEditor } from '@baicie/orbit-ui';
-import type { Tag as TagType, Task, TaskCategory } from '@baicie/orbit';
-
-interface TaskDetailDrawerProps {
-  task: Task | null;
-  onClose: () => void;
-}
+import { Button, Input } from '@baicie/orbit-ui';
+import type { Tag as TagType, TaskCategory } from '@baicie/orbit';
+import { useTagsEnabled } from '../hooks/useTagsEnabled';
+import { useAppDnD } from '../contexts/AppDnDContext';
 
 interface TaskDetailContentProps {
-  task: Task;
+  taskId: string;
   onClose: () => void;
 }
 
-const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
+const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
   const { t } = useTranslation();
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description || '');
+  const { data: task } = useTaskDetail(taskId);
+  const updateTask = useUpdateTask();
+  const addStep = useAddStep();
+  const updateStep = useUpdateStep();
+  const deleteStep = useDeleteStep();
+  const deleteTask = useDeleteTask();
+  const toggleComplete = useToggleComplete();
+  const toggleImportant = useToggleImportant();
+  const toggleMyDay = useToggleMyDay();
+  const { data: allTags = [] } = useTag();
+  const createTag = useCreateTag();
+  const tagsEnabled = useTagsEnabled();
+  const { startTaskDrag, endTaskDrag } = useAppDnD();
+
+  const prevTaskIdRef = useRef<string | null>(null);
+  const [title, setTitle] = useState(() => task?.title ?? '');
+  const [description, setDescription] = useState(() => task?.description ?? '');
   const [newStep, setNewStep] = useState('');
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editingStepTitle, setEditingStepTitle] = useState('');
@@ -57,25 +69,27 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const [isTagMenuOpen, setIsTagMenuOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
 
-  const updateTask = useUpdateTask();
-  const addStep = useAddStep();
-  const updateStep = useUpdateStep();
-  const deleteStep = useDeleteStep();
-  const deleteTask = useDeleteTask();
-  const toggleComplete = useToggleComplete();
-  const toggleImportant = useToggleImportant();
-  const toggleMyDay = useToggleMyDay();
-  const { data: allTags = [] } = useTag();
-  const createTag = useCreateTag();
+  useEffect(() => {
+    if (task && task.id !== prevTaskIdRef.current) {
+      prevTaskIdRef.current = task.id;
+      setTitle(task.title);
+      setDescription(task.description || '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id]);
+
+  if (!task) {
+    return <div className="flex-1 flex items-center justify-center text-gray-400">加载中...</div>;
+  }
 
   const handleTitleBlur = () => {
-    if (title !== task.title) {
+    if (task && title !== task.title) {
       updateTask.mutate({ id: task.id, input: { title } });
     }
   };
 
   const handleDescriptionBlur = () => {
-    if (description !== (task.description || '')) {
+    if (task && description !== (task.description || '')) {
       updateTask.mutate({ id: task.id, input: { description } });
     }
   };
@@ -114,11 +128,11 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
       size: file.size,
       path: URL.createObjectURL(file),
     };
-    updateTask.mutate({ id: task.id, input: { files: [...task.files, newFile] } });
+    updateTask.mutate({ id: task.id, input: { files: [...(task.files ?? []), newFile] } });
   };
 
   const removeFile = (index: number) => {
-    const updatedFiles = [...task.files];
+    const updatedFiles = [...(task.files ?? [])];
     updatedFiles.splice(index, 1);
     updateTask.mutate({ id: task.id, input: { files: updatedFiles } });
   };
@@ -190,8 +204,20 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
     <>
       <div className="px-4 pt-4 z-10 bg-[#faf9f8]">
         <div className="bg-white rounded-md shadow-sm p-4">
-          <div className="flex items-start gap-3">
-            <button
+          <div
+            className="flex items-start gap-3 cursor-grab active:cursor-grabbing select-none"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move';
+              startTaskDrag(task.id);
+            }}
+            onDragEnd={() => {
+              endTaskDrag();
+            }}
+          >
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleComplete(task)}
               className="mt-1 text-gray-400 hover:text-[var(--theme-primary)] transition-colors"
             >
@@ -202,26 +228,28 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               ) : (
                 <Circle size={24} />
               )}
-            </button>
+            </Button>
             <div className="flex-1">
-              <input
+              <Input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onBlur={handleTitleBlur}
-                className={`w-full bg-transparent border-none outline-none text-xl font-bold ${
+                className={`w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-xl font-bold ${
                   task.isCompleted ? 'text-gray-500 line-through' : 'text-gray-900'
                 }`}
               />
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => toggleImportant(task)}
               className={`p-1 rounded hover:bg-gray-100 transition-colors ${
                 task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
               }`}
             >
               <Star size={24} fill={task.isImportant ? 'currentColor' : 'none'} />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -242,7 +270,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       editingStepId === step.id ? 'bg-gray-100' : ''
                     }`}
                   >
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={(e) => {
                         e.stopPropagation();
                         updateStep.mutate({
@@ -259,10 +289,10 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       ) : (
                         <Circle size={18} />
                       )}
-                    </button>
+                    </Button>
 
                     {editingStepId === step.id ? (
-                      <input
+                      <Input
                         type="text"
                         value={editingStepTitle}
                         onChange={(e) => setEditingStepTitle(e.target.value)}
@@ -284,12 +314,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       </span>
                     )}
 
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setStepToDelete(step.id)}
                       className="text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1"
                     >
                       <X size={16} />
-                    </button>
+                    </Button>
                   </div>
                 ))}
 
@@ -298,7 +330,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                 className="flex items-center gap-3 text-[var(--theme-primary)] hover:text-blue-700 w-full py-1 transition-colors"
               >
                 <Plus size={18} />
-                <input
+                <Input
                   type="text"
                   value={newStep}
                   onChange={(e) => setNewStep(e.target.value)}
@@ -312,7 +344,8 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           </div>
 
           <div className="bg-white rounded-md shadow-sm overflow-hidden">
-            <button
+            <Button
+              variant="ghost"
               onClick={() => toggleMyDay(task)}
               className={`flex items-center gap-3 w-full p-4 text-sm hover:bg-gray-50 transition-colors ${
                 task.addToMyDay ? 'text-blue-600' : 'text-gray-600'
@@ -321,21 +354,25 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               <Sun size={18} />
               <span>{task.addToMyDay ? t('drawer.addedToMyDay') : t('drawer.addToMyDay')}</span>
               {task.addToMyDay && (
-                <X
-                  size={16}
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className="ml-auto text-gray-400 hover:text-gray-600"
                   onClick={(e) => {
                     e.stopPropagation();
                     updateField({ addToMyDay: false });
                   }}
-                />
+                >
+                  <X size={16} />
+                </Button>
               )}
-            </button>
+            </Button>
           </div>
 
           <div className="bg-white rounded-md shadow-sm">
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsRemindMenuOpen(!isRemindMenuOpen)}
                 className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
@@ -346,7 +383,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     : t('drawer.remindMe')}
                 </span>
                 {task.reminderDate && (
-                  <div
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -354,9 +393,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     }}
                   >
                     <X size={16} />
-                  </div>
+                  </Button>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isRemindMenuOpen && (
                   <>
@@ -398,8 +437,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           },
                         },
                       ].map((option, index) => (
-                        <button
+                        <Button
                           key={index}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ reminderDate: option.getDate().toISOString() });
                             setIsRemindMenuOpen(false);
@@ -413,15 +453,26 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           <span className="text-gray-400 text-xs">
                             {index === 0 ? '20:00' : index === 1 ? '周日, 9:00' : '周一, 9:00'}
                           </span>
-                        </button>
+                        </Button>
                       ))}
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          updateField({ reminderDate: null });
+                          setIsRemindMenuOpen(false);
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-500"
+                      >
+                        <X size={16} className="text-gray-400" />
+                        <span>无</span>
+                      </Button>
                       <div className="border-t border-gray-100 my-1" />
                       <div className="relative">
-                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                        <Button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
                           <Calendar size={16} className="text-gray-400" />
                           <span>选择日期和时间</span>
-                        </button>
-                        <input
+                        </Button>
+                        <Input
                           type="datetime-local"
                           className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                           onChange={(e) => {
@@ -440,7 +491,8 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             </div>
 
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsDueDateMenuOpen(!isDueDateMenuOpen)}
                 className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
@@ -450,7 +502,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                   return <span className={isOverdue ? 'text-red-500' : ''}>{text}</span>;
                 })()}
                 {task.dueDate && (
-                  <div
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -458,9 +512,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     }}
                   >
                     <X size={16} />
-                  </div>
+                  </Button>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isDueDateMenuOpen && (
                   <>
@@ -496,8 +550,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           },
                         },
                       ].map((option, index) => (
-                        <button
+                        <Button
                           key={index}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ dueDate: option.getDate().toISOString() });
                             setIsDueDateMenuOpen(false);
@@ -511,15 +566,26 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                           <span className="text-gray-400 text-xs">
                             {option.getDate().toLocaleDateString('zh-CN', { weekday: 'short' })}
                           </span>
-                        </button>
+                        </Button>
                       ))}
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          updateField({ dueDate: null });
+                          setIsDueDateMenuOpen(false);
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-500"
+                      >
+                        <X size={16} className="text-gray-400" />
+                        <span>无</span>
+                      </Button>
                       <div className="border-t border-gray-100 my-1" />
                       <div className="relative">
-                        <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+                        <Button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
                           <Calendar size={16} className="text-gray-400" />
                           <span>选择日期</span>
-                        </button>
-                        <input
+                        </Button>
+                        <Input
                           type="date"
                           className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                           onChange={(e) => {
@@ -537,14 +603,17 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               </AnimatePresence>
             </div>
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsRepeatMenuOpen(!isRepeatMenuOpen)}
                 className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 <Repeat size={18} />
                 <span>{getRepeatText(task.repeatPattern)}</span>
                 {task.repeatPattern && (
-                  <div
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -552,9 +621,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     }}
                   >
                     <X size={16} />
-                  </div>
+                  </Button>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isRepeatMenuOpen && (
                   <>
@@ -569,8 +638,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
                       {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((value) => (
-                        <button
+                        <Button
                           key={value}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ repeatPattern: value });
                             setIsRepeatMenuOpen(false);
@@ -583,7 +653,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                         >
                           <span>{getRepeatText(value)}</span>
                           {task.repeatPattern === value && <Check size={16} />}
-                        </button>
+                        </Button>
                       ))}
                     </motion.div>
                   </>
@@ -594,14 +664,17 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
 
           <div className="bg-white rounded-md shadow-sm">
             <div className="relative">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setIsCategoryMenuOpen(!isCategoryMenuOpen)}
                 className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
                 <Tag size={18} />
                 <span>{getCategoryText(task.category)}</span>
                 {task.category && (
-                  <div
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -609,9 +682,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                     }}
                   >
                     <X size={16} />
-                  </div>
+                  </Button>
                 )}
-              </button>
+              </Button>
               <AnimatePresence>
                 {isCategoryMenuOpen && (
                   <>
@@ -626,8 +699,9 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1"
                     >
                       {categories.map((option) => (
-                        <button
+                        <Button
                           key={option.value}
+                          variant="ghost"
                           onClick={() => {
                             updateField({ category: option.value });
                             setIsCategoryMenuOpen(false);
@@ -643,7 +717,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                             <span>{option.label}</span>
                           </div>
                           {task.category === option.value && <Check size={16} />}
-                        </button>
+                        </Button>
                       ))}
                     </motion.div>
                   </>
@@ -651,113 +725,120 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               </AnimatePresence>
             </div>
 
-            <div className="relative">
-              <button
-                onClick={() => setIsTagMenuOpen(!isTagMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
-              >
-                <Tag size={18} />
-                <span>
-                  {task.tagIds && task.tagIds.length > 0
-                    ? `${task.tagIds.length} 个标签`
-                    : '添加标签'}
-                </span>
-                {task.tagIds && task.tagIds.length > 0 && (
-                  <div
-                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      updateField({ tagIds: [] });
-                    }}
-                  >
-                    <X size={16} />
-                  </div>
-                )}
-              </button>
-              <AnimatePresence>
-                {isTagMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-20" onClick={() => setIsTagMenuOpen(false)} />
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 10 }}
-                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1 max-h-64 overflow-y-auto"
+            {tagsEnabled && (
+              <div className="relative">
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsTagMenuOpen(!isTagMenuOpen)}
+                  className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                >
+                  <Tag size={18} />
+                  <span>
+                    {task.tagIds && task.tagIds.length > 0
+                      ? `${task.tagIds.length} 个标签`
+                      : '添加标签'}
+                  </span>
+                  {task.tagIds && task.tagIds.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateField({ tagIds: [] });
+                      }}
                     >
-                      {allTags.map((tag: TagType) => {
-                        const isSelected = task.tagIds.includes(tag.id);
-                        return (
-                          <button
-                            key={tag.id}
-                            onClick={() => {
-                              const newTagIds = isSelected
-                                ? task.tagIds.filter((id: string) => id !== tag.id)
-                                : [...task.tagIds, tag.id];
-                              updateField({ tagIds: newTagIds });
-                            }}
-                            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
-                              isSelected
-                                ? 'text-[var(--theme-primary)] bg-blue-50'
-                                : 'text-gray-700'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="w-2 h-2 rounded-full"
-                                style={{ backgroundColor: tag.color }}
-                              />
-                              <span>{tag.name}</span>
-                            </div>
-                            {isSelected && <Check size={16} />}
-                          </button>
-                        );
-                      })}
-                      <div className="border-t border-gray-100 my-1" />
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          if (!newTagName.trim()) return;
-                          createTag.mutate(
-                            { name: newTagName.trim(), color: '#3b82f6' },
-                            {
-                              onSuccess: (newTag) => {
-                                updateField({ tagIds: [...task.tagIds, newTag.id] });
-                                setNewTagName('');
-                              },
-                            },
-                          );
-                        }}
-                        className="flex items-center gap-2 px-4 py-2"
+                      <X size={16} />
+                    </Button>
+                  )}
+                </Button>
+                <AnimatePresence>
+                  {isTagMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setIsTagMenuOpen(false)} />
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1 max-h-64 overflow-y-auto"
                       >
-                        <input
-                          type="text"
-                          value={newTagName}
-                          onChange={(e) => setNewTagName(e.target.value)}
-                          placeholder="新建标签..."
-                          className="flex-1 bg-transparent border-none outline-none text-sm text-gray-900 placeholder:text-gray-400"
-                        />
-                        <button
-                          type="submit"
-                          className="text-[var(--theme-primary)] hover:text-blue-700 text-sm font-medium"
+                        {allTags.map((tag: TagType) => {
+                          const isSelected = (task.tagIds ?? []).includes(tag.id);
+                          return (
+                            <Button
+                              key={tag.id}
+                              variant="ghost"
+                              onClick={() => {
+                                const newTagIds = isSelected
+                                  ? (task.tagIds ?? []).filter((id: string) => id !== tag.id)
+                                  : [...(task.tagIds ?? []), tag.id];
+                                updateField({ tagIds: newTagIds });
+                              }}
+                              className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                                isSelected
+                                  ? 'text-[var(--theme-primary)] bg-blue-50'
+                                  : 'text-gray-700'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: tag.color }}
+                                />
+                                <span>{tag.name}</span>
+                              </div>
+                              {isSelected && <Check size={16} />}
+                            </Button>
+                          );
+                        })}
+                        <div className="border-t border-gray-100 my-1" />
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!newTagName.trim()) return;
+                            createTag.mutate(
+                              { name: newTagName.trim(), color: '#3b82f6' },
+                              {
+                                onSuccess: (newTag) => {
+                                  updateField({ tagIds: [...(task.tagIds ?? []), newTag.id] });
+                                  setNewTagName('');
+                                },
+                              },
+                            );
+                          }}
+                          className="flex items-center gap-2 px-4 py-2"
                         >
-                          添加
-                        </button>
-                      </form>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
+                          <Input
+                            type="text"
+                            value={newTagName}
+                            onChange={(e) => setNewTagName(e.target.value)}
+                            placeholder="新建标签..."
+                            className="flex-1 bg-transparent border-none outline-none text-sm text-gray-900 placeholder:text-gray-400"
+                          />
+                          <Button
+                            type="submit"
+                            variant="ghost"
+                            className="text-[var(--theme-primary)] hover:text-blue-700 text-sm font-medium"
+                          >
+                            添加
+                          </Button>
+                        </form>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
 
-            <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors relative">
+            <Button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors relative">
               <Paperclip size={18} />
               <span>{t('drawer.addFile')}</span>
-              <input
+              <Input
                 type="file"
                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 onChange={handleFileUpload}
               />
-            </button>
+            </Button>
             {task.files && task.files.length > 0 && (
               <div className="px-4 pb-4 space-y-2">
                 {task.files.map((file: import('@baicie/orbit').TaskFile, index: number) => (
@@ -769,12 +850,14 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       <FileIcon size={16} className="text-gray-400" />
                       <span className="truncate">{file.originalname}</span>
                     </div>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => removeFile(index)}
                       className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <X size={16} />
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -782,19 +865,25 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           </div>
 
           <div className="bg-white rounded-md shadow-sm p-4">
-            <MarkdownEditor
+            <textarea
               value={description}
-              onChange={setDescription}
+              onChange={(e) => setDescription(e.target.value)}
               onBlur={handleDescriptionBlur}
               placeholder={t('drawer.addNote')}
-              minHeight={100}
+              rows={3}
+              className="w-full bg-transparent border-none outline-none focus:outline-none focus:ring-0 resize-none text-sm text-gray-700 placeholder:text-gray-400"
             />
           </div>
         </div>
       </div>
 
       <div className="p-3 border-t border-gray-200 bg-[#faf9f8] flex items-center justify-between text-xs text-gray-500">
-        <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded transition-colors">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          className="p-2 hover:bg-gray-200 rounded transition-colors"
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="18"
@@ -810,13 +899,15 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
             <line x1="15" y1="3" x2="15" y2="21" />
             <path d="m9 9 3 3-3 3" />
           </svg>
-        </button>
+        </Button>
         <span>
           {t('drawer.created', {
             date: new Date(task.createdAt || new Date()).toLocaleDateString(),
           })}
         </span>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={() => {
             deleteTask.mutate(task.id);
             onClose();
@@ -825,7 +916,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           title={t('drawer.deleteTask')}
         >
           <Trash2 size={18} />
-        </button>
+        </Button>
       </div>
 
       <AnimatePresence>
@@ -847,13 +938,15 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
               <h3 className="text-lg font-semibold mb-2">删除步骤？</h3>
               <p className="text-gray-600 text-sm mb-6">确定要删除此步骤吗？此操作无法撤销。</p>
               <div className="flex justify-end gap-3">
-                <button
+                <Button
+                  variant="outline"
                   onClick={() => setStepToDelete(null)}
                   className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
                 >
                   取消
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="destructive"
                   onClick={() => {
                     deleteStep.mutate(stepToDelete);
                     setStepToDelete(null);
@@ -861,7 +954,7 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                   className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded transition-colors"
                 >
                   删除
-                </button>
+                </Button>
               </div>
             </motion.div>
           </>
@@ -871,10 +964,16 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   );
 };
 
-export const TaskDetailDrawer = ({ task, onClose }: TaskDetailDrawerProps) => {
+export const TaskDetailDrawer = ({
+  taskId,
+  onClose,
+}: {
+  taskId: string | null;
+  onClose: () => void;
+}) => {
   return (
     <AnimatePresence>
-      {task && (
+      {taskId && (
         <>
           <motion.div
             initial={{ opacity: 0 }}
@@ -890,7 +989,7 @@ export const TaskDetailDrawer = ({ task, onClose }: TaskDetailDrawerProps) => {
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
             className="fixed md:static inset-y-0 right-0 w-full md:w-[360px] bg-[#faf9f8] h-full border-l border-gray-200 flex flex-col shadow-xl z-30 md:z-20 min-w-0"
           >
-            <TaskDetailContent key={task.id} task={task} onClose={onClose} />
+            <TaskDetailContent key={taskId} taskId={taskId} onClose={onClose} />
           </motion.div>
         </>
       )}

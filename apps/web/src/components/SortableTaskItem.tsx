@@ -1,18 +1,16 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '@baicie/orbit';
-import { Calendar, Check, Circle, GripVertical, Star } from 'lucide-react';
-import { useState } from 'react';
+import { Calendar, Check, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Button, Input } from '@baicie/orbit-ui';
 
 interface SortableTaskItemProps {
   task: Task;
   isSelected: boolean;
   focusedIndex: number;
   activeIndex: number;
-  isChecked: boolean;
   onSelect: () => void;
-  onToggleCheck: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent, task: Task) => void;
   onToggleComplete: (task: Task) => void;
   onToggleImportant: (task: Task) => void;
@@ -25,9 +23,7 @@ export function SortableTaskItem({
   isSelected,
   focusedIndex,
   activeIndex,
-  isChecked,
   onSelect,
-  onToggleCheck,
   onContextMenu,
   onToggleComplete,
   onToggleImportant,
@@ -72,42 +68,34 @@ export function SortableTaskItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group bg-white rounded-md shadow-sm border p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
+      className={`group bg-white rounded-md shadow-sm border p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors ${
         isSelected ? 'bg-blue-50 border-blue-200' : 'border-gray-100'
       } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''} ${
         focusedIndex >= 0 && activeIndex >= 0 && activeIndex === focusedIndex
           ? 'ring-2 ring-[var(--theme-primary)] ring-offset-1'
           : ''
-      }`}
+      } ${isDragging ? 'opacity-50 shadow-lg ring-2 ring-blue-200' : ''}`}
       onClick={onSelect}
       onContextMenu={(e) => onContextMenu(e, task)}
+      {...attributes}
+      {...listeners}
     >
-      {/* Selection checkbox */}
-      <button
-        onClick={onToggleCheck}
-        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-          isChecked
-            ? 'bg-[var(--theme-primary)] border-[var(--theme-primary)] text-white'
-            : 'border-gray-300 hover:border-[var(--theme-primary)]'
-        }`}
-      >
-        {isChecked && <Check size={12} strokeWidth={3} />}
-      </button>
-
       <div className={`flex items-center gap-3 ${viewMode === 'table' ? 'col-span-5' : ''}`}>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={(e) => {
             e.stopPropagation();
             onToggleComplete(task);
           }}
-          className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0 p-0"
         >
           {task.isCompleted ? (
             <div className="w-full h-full rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
               <Check size={12} className="text-white" strokeWidth={3} />
             </div>
           ) : null}
-        </button>
+        </Button>
         <span className="flex-1 text-sm text-gray-900 break-words line-clamp-2">
           <div className="flex flex-col">
             <span className={task.isCompleted ? 'line-through text-gray-400' : ''}>
@@ -138,7 +126,7 @@ export function SortableTaskItem({
                 >
                   {task.dueDate && <Calendar size={14} />}
                   <span>{text}</span>
-                  <input
+                  <Input
                     type="date"
                     className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                     value={task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : ''}
@@ -153,42 +141,36 @@ export function SortableTaskItem({
             })()}
           </div>
           <div className="col-span-3 flex items-center gap-2">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleImportant(task);
               }}
-              className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
+              className={`p-1.5 flex-shrink-0 ${
                 task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
               }`}
             >
               <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-            </button>
+            </Button>
           </div>
         </>
       ) : (
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={(e) => {
             e.stopPropagation();
             onToggleImportant(task);
           }}
-          className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
+          className={`p-1.5 flex-shrink-0 ${
             task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
           }`}
         >
           <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-        </button>
+        </Button>
       )}
-
-      {/* Drag handle */}
-      <button
-        {...attributes}
-        {...listeners}
-        className="p-1 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <GripVertical size={16} />
-      </button>
     </div>
   );
 }

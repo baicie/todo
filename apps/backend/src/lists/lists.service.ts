@@ -23,7 +23,8 @@ export class ListsService {
   async findAll(user: User) {
     return this.listsRepository.find({
       where: { user: { id: user.id } },
-      order: { createdAt: 'ASC' },
+      relations: ['group'],
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
   }
 

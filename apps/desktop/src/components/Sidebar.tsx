@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useCreateList, useCreateTag, useList, useTag } from '@baicie/orbit-hooks';
+import { Button } from '@baicie/orbit-ui';
 
 interface SidebarProps {
   onItemClick?: () => void;
@@ -124,15 +125,16 @@ export function Sidebar({ onItemClick }: SidebarProps) {
         {allTags.length > 0 && (
           <>
             <div className="my-3 border-t border-gray-200 mx-4" />
-            <button
+            <Button
+              variant="ghost"
+              className="w-full justify-start py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider"
               onClick={() => setIsTagsExpanded(!isTagsExpanded)}
-              className="w-full px-4 py-1.5 flex items-center justify-between text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700"
             >
-              <span>标签</span>
+              <span className="flex-1">标签</span>
               <span className={`transition-transform ${isTagsExpanded ? 'rotate-90' : ''}`}>
                 <ChevronRight size={14} />
               </span>
-            </button>
+            </Button>
             {isTagsExpanded && (
               <div className="space-y-0.5">
                 {allTags.map((tag) => (
@@ -184,13 +186,15 @@ export function Sidebar({ onItemClick }: SidebarProps) {
               />
             </form>
           ) : (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setIsCreatingTag(true)}
-              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-[var(--sidebar-hover)] px-2 py-1 rounded transition-colors"
+              className="text-gray-500 hover:text-gray-700"
             >
               <Plus size={14} />
               <span>添加标签</span>
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -211,13 +215,14 @@ export function Sidebar({ onItemClick }: SidebarProps) {
             />
           </form>
         ) : (
-          <button
+          <Button
+            variant="ghost"
             onClick={() => setIsCreating(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 text-[var(--theme-primary)] hover:bg-[var(--sidebar-hover)] rounded transition-colors"
+            className="w-full justify-start text-[var(--theme-primary)] hover:bg-[var(--sidebar-hover)]"
           >
             <Plus size={20} />
             <span className="text-sm font-medium">{t('sidebar.createList')}</span>
-          </button>
+          </Button>
         )}
       </div>
     </div>

@@ -148,3 +148,30 @@ export function getDayOfWeek(date: Date | string | null | undefined): number {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.getDay();
 }
+
+export interface DueDateInfo {
+  text: string;
+  isOverdue: boolean;
+}
+
+export function getDueDateText(dateStr?: string | null): DueDateInfo {
+  if (!dateStr) return { text: '-', isOverdue: false };
+  const date = new Date(dateStr);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const isToday = date.toDateString() === today.toDateString();
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  const isTomorrow = date.toDateString() === tomorrow.toDateString();
+  const isOverdue = date < today && !isToday;
+
+  let text = date.toLocaleDateString();
+  if (isToday) text = '今天';
+  if (isYesterday) text = '昨天';
+  if (isTomorrow) text = '明天';
+
+  return { text, isOverdue };
+}

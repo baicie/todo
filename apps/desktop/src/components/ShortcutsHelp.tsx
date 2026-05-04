@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
+import { Button } from '@baicie/orbit-ui';
 
 interface ShortcutItem {
   keys: string[];
@@ -85,13 +86,15 @@ export function ShortcutsHelp({ isOpen, onClose }: ShortcutsHelpProps) {
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="text-lg font-semibold text-gray-900">键盘快捷键</h2>
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={onClose}
-                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600"
                 aria-label="关闭"
               >
                 <X size={18} />
-              </button>
+              </Button>
             </div>
 
             <div className="max-h-[60vh] overflow-y-auto p-6">

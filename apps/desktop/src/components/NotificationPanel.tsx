@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '@baicie/orbit-hooks';
 import type { AppNotification, NotificationType } from '@baicie/orbit-hooks';
 import { useState } from 'react';
+import { Button } from '@baicie/orbit-ui';
 
 interface NotificationPanelProps {
   isOpen: boolean;
@@ -103,47 +104,49 @@ export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
               </div>
               <div className="flex items-center gap-1">
                 {unreadCount > 0 && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={markAllRead}
-                    className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
+                    className="text-gray-500"
                     title="全部标为已读"
                   >
                     <CheckCheck size={16} />
-                  </button>
+                  </Button>
                 )}
                 {notifications.length > 0 && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={clearAll}
-                    className="p-1.5 hover:bg-red-50 rounded transition-colors text-gray-400 hover:text-red-500"
+                    className="text-gray-400 hover:text-red-500"
                     title="清空"
                   >
                     <Trash2 size={16} />
-                  </button>
+                  </Button>
                 )}
-                <button
-                  onClick={onClose}
-                  className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
-                >
+                <Button variant="ghost" size="icon" onClick={onClose} className="text-gray-500">
                   <X size={16} />
-                </button>
+                </Button>
               </div>
             </div>
 
             {/* Filter Tabs */}
             <div className="flex border-b border-gray-200 px-4">
               {(['all', 'unread'] as const).map((filter) => (
-                <button
+                <Button
                   key={filter}
+                  variant="ghost"
                   onClick={() => setActiveFilter(filter)}
-                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px rounded-none ${
                     activeFilter === filter
-                      ? 'border-blue-500 text-blue-600'
+                      ? 'border-blue-500 text-blue-600 bg-transparent'
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
                   {filter === 'all' ? '全部' : '未读'} (
                   {filter === 'all' ? notifications.length : unreadCount})
-                </button>
+                </Button>
               ))}
             </div>
 

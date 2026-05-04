@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { Button, Input } from '@baicie/orbit-ui';
 
 export const Register = () => {
   const [name, setName] = useState('');
@@ -38,45 +39,38 @@ export const Register = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
-            <input
+            <Input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--theme-primary)] text-gray-900 bg-white"
               placeholder="您的名字"
               required
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">邮箱地址</label>
-            <input
+            <Input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--theme-primary)] text-gray-900 bg-white"
               placeholder="name@example.com"
               required
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
-            <input
+            <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--theme-primary)] text-gray-900 bg-white"
               placeholder="至少6位字符"
               minLength={6}
               required
             />
           </div>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full py-2 bg-[var(--theme-primary)] text-white rounded-md hover:bg-blue-600 transition-colors font-medium"
-          >
+          <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? '注册中...' : '注册'}
-          </button>
+          </Button>
         </form>
         <div className="mt-6 text-center text-sm text-gray-500">
           已有账户？{' '}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, Mail, User } from 'lucide-react';
+import { Button, Input } from '@baicie/orbit-ui';
 
 export const Register = () => {
   const [name, setName] = useState('');
@@ -43,7 +44,7 @@ export const Register = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
             <div className="relative">
-              <input
+              <Input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -58,7 +59,7 @@ export const Register = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">邮箱地址</label>
             <div className="relative">
-              <input
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -73,7 +74,7 @@ export const Register = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
             <div className="relative">
-              <input
+              <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -86,11 +87,7 @@ export const Register = () => {
             </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-[var(--theme-primary)] text-white py-2 rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
-          >
+          <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? (
               <>
                 <Loader2 className="animate-spin" size={20} />
@@ -99,7 +96,7 @@ export const Register = () => {
             ) : (
               '注册'
             )}
-          </button>
+          </Button>
         </form>
 
         <div className="mt-6 text-center text-sm text-gray-500">

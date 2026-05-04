@@ -11,6 +11,7 @@ import {
   getMyShares,
   updateShare,
 } from '../lib/share';
+import { Button } from '@baicie/orbit-ui';
 
 interface ShareDialogProps {
   isOpen: boolean;
@@ -128,12 +129,14 @@ export function ShareDialog({ isOpen, onClose, listId, listTitle }: ShareDialogP
                     <p className="text-xs text-gray-500 truncate max-w-[200px]">{listTitle}</p>
                   </div>
                 </div>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={onClose}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600"
                 >
                   <X size={18} />
-                </button>
+                </Button>
               </div>
 
               {/* Body */}
@@ -150,14 +153,14 @@ export function ShareDialog({ isOpen, onClose, listId, listTitle }: ShareDialogP
                       <option value="view">{PERMISSION_LABELS.view}</option>
                       <option value="edit">{PERMISSION_LABELS.edit}</option>
                     </select>
-                    <button
+                    <Button
                       onClick={() => void handleCreateShare()}
                       disabled={isCreating}
-                      className="px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+                      className="gap-2"
                     >
                       <Globe size={14} />
                       {isCreating ? '创建中...' : '分享'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
@@ -187,9 +190,11 @@ export function ShareDialog({ isOpen, onClose, listId, listTitle }: ShareDialogP
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
-                            <button
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => void handleCopyLink(share.shareCode)}
-                              className="p-1.5 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-blue-600"
+                              className="text-gray-500 hover:text-blue-600"
                               title="复制链接"
                             >
                               {copiedCode === share.shareCode ? (
@@ -197,21 +202,25 @@ export function ShareDialog({ isOpen, onClose, listId, listTitle }: ShareDialogP
                               ) : (
                                 <Copy size={14} />
                               )}
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => void handleTogglePermission(share)}
-                              className="p-1.5 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-amber-600"
+                              className="text-gray-500 hover:text-amber-600"
                               title={`切换为${share.permission === 'view' ? '可编辑' : '仅查看'}`}
                             >
                               <Globe size={14} />
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => void handleDelete(share.id)}
-                              className="p-1.5 hover:bg-red-50 rounded transition-colors text-gray-400 hover:text-red-500"
+                              className="text-gray-400 hover:text-red-500"
                               title="删除分享"
                             >
                               <Trash2 size={14} />
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       ))}

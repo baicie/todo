@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { Button } from '@baicie/orbit-ui';
 
 interface Props {
   children: ReactNode;
@@ -41,13 +42,14 @@ export class ErrorBoundary extends Component<Props, State> {
             <p className="text-gray-500 mb-6 text-sm">
               {this.state.error?.message || '应用遇到了一些问题，请尝试重新加载。'}
             </p>
-            <button
+            <Button
+              variant="secondary"
               onClick={this.handleReload}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors font-medium"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white hover:bg-blue-600 font-medium"
             >
               <RefreshCw size={16} />
               重新加载
-            </button>
+            </Button>
           </div>
         </div>
       );
