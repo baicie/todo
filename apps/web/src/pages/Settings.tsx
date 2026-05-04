@@ -103,7 +103,7 @@ export function Settings() {
   });
   const [currentLang, setCurrentLang] = useState(() => localStorage.getItem('i18nextLng') || 'zh');
   const [apiUrl, setApiUrl] = useState(
-    () => localStorage.getItem('orbit_api_url') || 'http://localhost:3002/api',
+    () => localStorage.getItem('orbit_api_url') || 'http://localhost:3001/api',
   );
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(user?.name || '');
@@ -544,7 +544,7 @@ export function Settings() {
                             type="text"
                             value={apiUrl}
                             onChange={(e) => setApiUrl(e.target.value)}
-                            placeholder="http://localhost:3002/api"
+                            placeholder="http://localhost:3001/api"
                             className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                           />
                           <button

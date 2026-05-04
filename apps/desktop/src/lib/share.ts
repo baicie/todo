@@ -29,7 +29,7 @@ export interface UpdateShareInput {
 }
 
 function getApiBaseUrl(): string {
-  return localStorage.getItem('orbit_api_url') || 'http://localhost:3002/api';
+  return localStorage.getItem('orbit_api_url') || 'http://localhost:3001/api';
 }
 
 function getToken(): string | null {
@@ -54,20 +54,20 @@ function createShareApi(): AxiosInstance {
 
 export async function createShare(input: CreateShareInput): Promise<Share> {
   const api = createShareApi();
-  const { data } = await api.post<Share>('/shares', input);
-  return data;
+  const { data } = await api.post<{ success: boolean; data: Share }>('/shares', input);
+  return data.data;
 }
 
 export async function getMyShares(): Promise<Share[]> {
   const api = createShareApi();
-  const { data } = await api.get<Share[]>('/shares');
-  return data;
+  const { data } = await api.get<{ success: boolean; data: Share[] }>('/shares');
+  return data.data;
 }
 
 export async function updateShare(id: string, input: UpdateShareInput): Promise<Share> {
   const api = createShareApi();
-  const { data } = await api.patch<Share>(`/shares/${id}`, input);
-  return data;
+  const { data } = await api.patch<{ success: boolean; data: Share }>(`/shares/${id}`, input);
+  return data.data;
 }
 
 export async function deleteShare(id: string): Promise<void> {

@@ -68,6 +68,7 @@ docker build -t orbit-web .
 docker run -p 8080:80 orbit-web
 
 # 或使用 docker-compose
+cd scripts/deploy
 docker-compose up -d --build
 ```
 

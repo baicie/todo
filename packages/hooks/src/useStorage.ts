@@ -26,7 +26,7 @@ export function createStorage(config: StorageConfig): IStorage {
   }
   const mergedConfig: StorageConfig = {
     ...config,
-    apiBaseUrl: config.apiBaseUrl ?? 'http://localhost:3002/api',
+    apiBaseUrl: config.apiBaseUrl ?? 'http://localhost:3001/api',
   };
   return new RemoteStorage(mergedConfig);
 }
@@ -42,7 +42,7 @@ export function getStorage(): IStorage {
 export function switchStorageMode(mode: StorageMode, apiBaseUrl?: string): void {
   const config: StorageConfig = {
     mode,
-    apiBaseUrl: apiBaseUrl ?? (mode === 'remote' ? 'http://localhost:3002/api' : undefined),
+    apiBaseUrl: apiBaseUrl ?? 'http://localhost:3001/api',
     syncOnReconnect: true,
     conflictStrategy: 'local-wins',
   };
@@ -82,13 +82,14 @@ export function useAuth() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const user = storage.auth.getStoredUser();
-      const token = storage.auth.getStoredToken();
+      const currentStorage = getStorage();
+      const user = currentStorage.auth.getStoredUser();
+      const token = currentStorage.auth.getStoredToken();
 
       if (token && user) {
-        if (storage.config.mode === 'remote') {
+        if (currentStorage.config.mode === 'remote') {
           try {
-            const profile = await storage.auth.getProfile();
+            const profile = await currentStorage.auth.getProfile();
             setState((s) => ({
               ...s,
               user: profile,
@@ -96,7 +97,7 @@ export function useAuth() {
               isAuthenticated: true,
             }));
           } catch {
-            storage.auth.clearAuth();
+            currentStorage.auth.clearAuth();
             setState((s) => ({
               ...s,
               user: null,
@@ -114,33 +115,27 @@ export function useAuth() {
     };
 
     checkAuth();
-  }, [storage]);
+  }, []);
 
-  const login = useCallback(
-    async (email: string, password: string) => {
-      const result = await storage.auth.login(email, password);
-      setState({
-        user: result.user,
-        token: result.accessToken,
-        isLoading: false,
-        isAuthenticated: true,
-        storageMode: storage.config.mode,
-      });
-      return result;
-    },
-    [storage],
-  );
+  const login = useCallback(async (email: string, password: string) => {
+    const result = await getStorage().auth.login(email, password);
+    setState({
+      user: result.user,
+      token: result.accessToken,
+      isLoading: false,
+      isAuthenticated: true,
+      storageMode: getStorage().config.mode,
+    });
+    return result;
+  }, []);
 
-  const register = useCallback(
-    async (name: string, email: string, password: string) => {
-      const result = await storage.auth.register(name, email, password);
-      return result;
-    },
-    [storage],
-  );
+  const register = useCallback(async (name: string, email: string, password: string) => {
+    const result = await getStorage().auth.register(name, email, password);
+    return result;
+  }, []);
 
   const logout = useCallback(() => {
-    storage.auth.clearAuth();
+    getStorage().auth.clearAuth();
     setState((s) => ({
       ...s,
       user: null,
@@ -148,7 +143,7 @@ export function useAuth() {
       isLoading: false,
       isAuthenticated: false,
     }));
-  }, [storage]);
+  }, []);
 
   const switchMode = useCallback((mode: StorageMode, apiBaseUrl?: string) => {
     switchStorageMode(mode, apiBaseUrl);

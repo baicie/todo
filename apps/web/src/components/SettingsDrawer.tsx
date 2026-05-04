@@ -80,7 +80,7 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
     setIsSwitchingMode(true);
     try {
       if (storageMode === 'local') {
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3002/api';
+        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
         switchStorageMode('remote', apiUrl);
       } else {
         switchStorageMode('local');

@@ -47,6 +47,7 @@ To deploy the Web App and Backend using Docker:
 Or manually:
 
 ```bash
+cd scripts/deploy
 docker-compose up -d --build
 ```
 

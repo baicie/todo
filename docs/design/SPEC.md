@@ -435,7 +435,7 @@ apps/web/src/
 后端通过 Docker 和 `docker-compose` 一键部署：
 
 ```yaml
-# docker-compose.yml
+# scripts/deploy/docker-compose.yml
 services:
   postgres:
     image: postgres:16-alpine

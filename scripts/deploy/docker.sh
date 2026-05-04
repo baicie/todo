@@ -37,8 +37,8 @@ case "${1:-}" in
   up)
     check_docker
     echo "启动所有服务..."
-    cd "$ROOT_DIR"
-    docker-compose up -d --build
+    cd "$ROOT_DIR/.."
+    docker-compose -f scripts/deploy/docker-compose.yml up -d --build
     echo ""
     echo "✓ 部署完成!"
     echo "  Web 应用: http://localhost:8080"
@@ -47,39 +47,39 @@ case "${1:-}" in
   web)
     check_docker
     echo "启动 Web 应用..."
-    cd "$ROOT_DIR"
-    docker-compose up -d --build web
+    cd "$ROOT_DIR/.."
+    docker-compose -f scripts/deploy/docker-compose.yml up -d --build web
     echo "✓ Web 应用已启动: http://localhost:8080"
     ;;
   backend)
     check_docker
     echo "启动后端服务..."
-    cd "$ROOT_DIR"
-    docker-compose up -d --build backend
+    cd "$ROOT_DIR/.."
+    docker-compose -f scripts/deploy/docker-compose.yml up -d --build backend
     echo "✓ 后端服务已启动: http://localhost:3001"
     ;;
   down)
     check_docker
     echo "停止所有服务..."
-    cd "$ROOT_DIR"
-    docker-compose down
+    cd "$ROOT_DIR/.."
+    docker-compose -f scripts/deploy/docker-compose.yml down
     echo "✓ 所有服务已停止"
     ;;
   logs)
     check_docker
-    cd "$ROOT_DIR"
+    cd "$ROOT_DIR/.."
     if [[ -n "${2:-}" ]]; then
-      docker-compose logs -f "$2"
+      docker-compose -f scripts/deploy/docker-compose.yml logs -f "$2"
     else
-      docker-compose logs -f
+      docker-compose -f scripts/deploy/docker-compose.yml logs -f
     fi
     ;;
   rebuild)
     check_docker
     echo "重新构建所有服务..."
-    cd "$ROOT_DIR"
-    docker-compose down
-    docker-compose up -d --build
+    cd "$ROOT_DIR/.."
+    docker-compose -f scripts/deploy/docker-compose.yml down
+    docker-compose -f scripts/deploy/docker-compose.yml up -d --build
     echo "✓ 重新构建完成!"
     ;;
   --help|-h)

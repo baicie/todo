@@ -723,44 +723,52 @@ class RemoteAuthStorageImpl implements IAuthStorage {
     this.api = axios.create({ baseURL: baseUrl, headers: { 'Content-Type': 'application/json' } });
     this.api.interceptors.request.use((config) => {
       const token = localStorage.getItem('unitodo_token');
+      console.debug(
+        '[orbit] request interceptor: token from localStorage:',
+        token ? `${token.slice(0, 20)}...` : null,
+      );
+      console.debug('[orbit] request interceptor: full url:', config.baseURL, config.url);
       if (token) config.headers.Authorization = `Bearer ${token}`;
       return config;
     });
     this.api.interceptors.response.use(
       (r) => r,
-      (error) => {
-        if (error.response?.status === 401) {
-          localStorage.removeItem('unitodo_token');
-          localStorage.removeItem('unitodo_user');
-        }
-        return Promise.reject(error);
-      },
+      (error) => Promise.reject(error),
     );
   }
 
   async login(email: string, password: string): Promise<AuthResult> {
-    const { data } = await this.api.post<{ access_token: string; user: User }>('/auth/login', {
+    console.debug('[orbit] login called with email:', email);
+    const { data } = await this.api.post<{
+      success: boolean;
+      data: { access_token: string; user: User };
+    }>('/auth/login', {
       email,
       password,
     });
+    console.debug('[orbit] login response:', data);
     const result: AuthResult = {
-      accessToken: data.access_token,
-      user: this.mapBackendUser(data.user),
+      accessToken: data.data.access_token,
+      user: this.mapBackendUser(data.data.user),
     };
+    console.debug('[orbit] setAuth called with token:', result.accessToken.slice(0, 20) + '...');
     this.setAuth(result);
     return result;
   }
 
   async register(name: string, email: string, password: string): Promise<AuthResult> {
-    const { data } = await this.api.post<{ access_token: string; user: User }>('/auth/register', {
+    const { data } = await this.api.post<{
+      success: boolean;
+      data: { access_token: string; user: User };
+    }>('/auth/register', {
       name,
       email,
       password,
       age: 18,
     });
     const result: AuthResult = {
-      accessToken: data.access_token,
-      user: this.mapBackendUser(data.user),
+      accessToken: data.data.access_token,
+      user: this.mapBackendUser(data.data.user),
     };
     this.setAuth(result);
     return result;
@@ -779,8 +787,10 @@ class RemoteAuthStorageImpl implements IAuthStorage {
   }
 
   async getProfile(): Promise<User> {
-    const { data } = await this.api.get<{ data: User }>('/auth/profile');
-    return data.data;
+    const { data } = await this.api.get<{ success: boolean; data: { user: User } }>(
+      '/auth/profile',
+    );
+    return this.mapBackendUser(data.data.user);
   }
 
   getStoredUser(): User | null {
@@ -870,7 +880,7 @@ export class RemoteStorage implements IStorage {
   readonly tags: ITagStorage;
 
   constructor(config: StorageConfig) {
-    const baseUrl = config.apiBaseUrl ?? 'http://localhost:3002/api';
+    const baseUrl = config.apiBaseUrl ?? 'http://localhost:3001/api';
     this.config = config;
     this.tasks = new RemoteTaskStorageImpl(
       axios.create({

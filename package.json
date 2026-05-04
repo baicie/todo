@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm --filter orbit-backend dev",
     "build": "pnpm -r build",
     "build:web": "pnpm --filter orbit-web build",
     "build:desktop": "pnpm --filter orbit-desktop build",

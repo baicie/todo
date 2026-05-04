@@ -5,7 +5,7 @@ export const configValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
 
   // Server
-  PORT: Joi.number().port().default(3000),
+  PORT: Joi.number().port().default(3001),
 
   // Database
   DB_TYPE: Joi.string().valid('sqljs', 'sqlite', 'mysql', 'postgres').default('sqljs'),

@@ -45,7 +45,7 @@ export interface ShareViewData {
 }
 
 function getApiBaseUrl(): string {
-  return localStorage.getItem('orbit_api_url') || 'http://localhost:3002/api';
+  return localStorage.getItem('orbit_api_url') || 'http://localhost:3001/api';
 }
 
 function getToken(): string | null {

@@ -7,3 +7,8 @@ logs
 target
 tsconfig.tsbuildinfo
 .swc
+dev-dist
+
+# Backend
+apps/backend/database.sqljs
+apps/backend/uploads
