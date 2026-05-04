@@ -85,5 +85,13 @@
     "installDesc": "安装后可获得更快的访问速度和离线支持。",
     "install": "安装",
     "dismiss": "稍后"
+  },
+  "batch": {
+    "selected": "已选择",
+    "clearSelection": "清除选择",
+    "complete": "完成",
+    "important": "重要",
+    "myDay": "我的一天",
+    "delete": "删除"
   }
 }

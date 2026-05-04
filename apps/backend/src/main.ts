@@ -134,13 +134,17 @@ async function bootstrap() {
     .setVersion(configService.get<string>('app.version'))
     .addBearerAuth() // 添加Bearer认证
     .addApiKey({ type: 'apiKey', name: 'X-Lang', in: 'header' }, 'lang')
-    .addTag('用户管理')
-    .addTag('商品管理')
-    .addTag('订单管理')
     .addTag('用户认证')
+    .addTag('用户管理')
+    .addTag('清单管理')
+    .addTag('任务管理')
+    .addTag('标签管理')
+    .addTag('协作分享')
     .addTag('文件上传')
     .addTag('语言管理')
     .addTag('健康检查')
+    .addTag('数据库管理')
+    .addTag('审计日志')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);

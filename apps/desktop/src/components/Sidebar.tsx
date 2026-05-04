@@ -1,9 +1,9 @@
-import { Calendar, Home, List as ListIcon, Plus, Star, Sun } from 'lucide-react';
+import { Calendar, ChevronRight, Home, List as ListIcon, Plus, Star, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { useCreateList, useList } from '@baicie/orbit-hooks';
+import { useCreateList, useCreateTag, useList, useTag } from '@baicie/orbit-hooks';
 
 interface SidebarProps {
   onItemClick?: () => void;
@@ -16,9 +16,14 @@ export function Sidebar({ onItemClick }: SidebarProps) {
   const activeListId = listId || 'my-day';
   const [isCreating, setIsCreating] = useState(false);
   const [newListTitle, setNewListTitle] = useState('');
+  const [isCreatingTag, setIsCreatingTag] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [isTagsExpanded, setIsTagsExpanded] = useState(true);
 
   const { data: lists } = useList();
+  const { data: allTags = [] } = useTag();
   const createList = useCreateList();
+  const createTag = useCreateTag();
 
   const smartLists = [
     { id: 'my-day', icon: Sun, label: t('sidebar.myDay') },
@@ -37,6 +42,20 @@ export function Sidebar({ onItemClick }: SidebarProps) {
           setIsCreating(false);
           setNewListTitle('');
           navigate(`/tasks/${data.id}`);
+        },
+      },
+    );
+  };
+
+  const handleCreateTag = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTagName.trim()) return;
+    createTag.mutate(
+      { name: newTagName.trim(), color: '#6366f1' },
+      {
+        onSuccess: () => {
+          setIsCreatingTag(false);
+          setNewTagName('');
         },
       },
     );
@@ -99,6 +118,80 @@ export function Sidebar({ onItemClick }: SidebarProps) {
               <span className="flex-1 text-sm">{list.title}</span>
             </div>
           ))}
+        </div>
+
+        {/* Tags Section */}
+        {allTags.length > 0 && (
+          <>
+            <div className="my-3 border-t border-gray-200 mx-4" />
+            <button
+              onClick={() => setIsTagsExpanded(!isTagsExpanded)}
+              className="w-full px-4 py-1.5 flex items-center justify-between text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700"
+            >
+              <span>标签</span>
+              <span className={`transition-transform ${isTagsExpanded ? 'rotate-90' : ''}`}>
+                <ChevronRight size={14} />
+              </span>
+            </button>
+            {isTagsExpanded && (
+              <div className="space-y-0.5">
+                {allTags.map((tag) => (
+                  <div
+                    key={tag.id}
+                    onClick={() => {
+                      navigate(`/tasks/tag:${tag.id}`);
+                      onItemClick?.();
+                    }}
+                    className={`px-4 py-2 flex items-center gap-3 cursor-pointer transition-colors relative ${
+                      activeListId === `tag:${tag.id}`
+                        ? 'bg-blue-50 text-[var(--theme-primary)]'
+                        : 'text-gray-700 hover:bg-[var(--sidebar-hover)]'
+                    }`}
+                  >
+                    {activeListId === `tag:${tag.id}` && (
+                      <motion.div
+                        layoutId="activeTagIndicator"
+                        className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--theme-primary)]"
+                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                      />
+                    )}
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: tag.color }}
+                    />
+                    <span className="flex-1 text-sm truncate">{tag.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* New Tag Button */}
+        <div className="px-4 py-1.5">
+          {isCreatingTag ? (
+            <form onSubmit={handleCreateTag} className="w-full flex items-center gap-2">
+              <input
+                type="text"
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                placeholder="标签名称"
+                autoFocus
+                className="flex-1 px-2 py-1 text-sm border border-[var(--theme-primary)] rounded focus:outline-none bg-white text-gray-900"
+                onBlur={() => {
+                  if (!newTagName.trim()) setIsCreatingTag(false);
+                }}
+              />
+            </form>
+          ) : (
+            <button
+              onClick={() => setIsCreatingTag(true)}
+              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-[var(--sidebar-hover)] px-2 py-1 rounded transition-colors"
+            >
+              <Plus size={14} />
+              <span>添加标签</span>
+            </button>
+          )}
         </div>
       </div>
 

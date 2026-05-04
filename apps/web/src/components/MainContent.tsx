@@ -20,9 +20,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Sidebar } from './Sidebar';
+import { SortableTaskList } from './SortableTaskList';
+import { BatchActionsBar } from './BatchActionsBar';
 import {
+  useBatchOperations,
   useCreateTask,
   useDeleteTask,
+  useReorderTasks,
+  useReorderTasksOptimistic,
+  useTag,
   useTask,
   useTaskListShortcuts,
   useToggleComplete,
@@ -32,6 +38,8 @@ import {
 } from '@baicie/orbit-hooks';
 import type { Task, TaskFilter } from '@baicie/orbit';
 import { CommandPalette } from './CommandPalette';
+import { ShortcutsHelp } from './ShortcutsHelp';
+import { DatePicker } from './DatePicker';
 import { useAppEvent } from '../hooks/useAppEvents';
 
 export const MainContent = () => {
@@ -47,9 +55,18 @@ export const MainContent = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<
+    'createdAt' | 'updatedAt' | 'dueDate' | 'title' | 'importance'
+  >('createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [activeDatePickerTaskId, setActiveDatePickerTaskId] = useState<string | null>(null);
 
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
+  const { data: allTags = [] } = useTag();
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -57,6 +74,9 @@ export const MainContent = () => {
   const toggleComplete = useToggleComplete();
   const toggleImportant = useToggleImportant();
   const toggleMyDay = useToggleMyDay();
+  const reorderTasks = useReorderTasks();
+  const reorderTasksOptimistic = useReorderTasksOptimistic();
+  const batchOps = useBatchOperations();
   const navigate = useNavigate();
   const taskInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,15 +89,18 @@ export const MainContent = () => {
     onToggleMyDay: toggleMyDay,
     onDeleteTask: (id) => deleteTask.mutate(id),
     onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
-    onOpenSettings: () => {
-      const headerSettingsBtn = document.querySelector<HTMLElement>('header button[title]');
-      headerSettingsBtn?.click();
-    },
+    onOpenSettings: () => navigate('/settings'),
     onOpenSearch: () => {
       const headerSearch = document.querySelector<HTMLInputElement>('header input[type="text"]');
       headerSearch?.focus();
     },
+    onOpenShortcutsHelp: () => setIsShortcutsHelpOpen(true),
     onAddTask: () => taskInputRef.current?.focus(),
+    onOpenTaskDetail: (id) => setSelectedTaskId(id),
+    onDuplicateTask: (task) => {
+      createTask.mutate({ title: task.title, listId: task.listId ?? undefined });
+    },
+    onToggleSidebar: () => setIsSidebarOpen((v) => !v),
     onNavigate: navigate,
   });
 
@@ -116,16 +139,40 @@ export const MainContent = () => {
   };
 
   const getTitle = () => {
-    if (activeListId === 'my-day') return t('sidebar.myDay');
-    if (activeListId === 'important') return t('sidebar.important');
-    if (activeListId === 'planned') return t('sidebar.planned');
-    if (activeListId === 'tasks') return t('sidebar.tasks');
-    return t('app.title');
+    return getListTitle(activeListId, allTags, (k) => t(k));
   };
 
   const activeTasks = tasks.filter((task) => !task.isCompleted);
   const completedTasks = tasks.filter((task) => task.isCompleted);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
+
+  const sortedActiveTasks = [...activeTasks].sort((a, b) => {
+    let cmp = 0;
+    switch (sortBy) {
+      case 'title':
+        cmp = a.title.localeCompare(b.title);
+        break;
+      case 'dueDate':
+        if (!a.dueDate && !b.dueDate) cmp = 0;
+        else if (!a.dueDate) cmp = 1;
+        else if (!b.dueDate) cmp = -1;
+        else cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+        break;
+      case 'importance':
+        if (a.isImportant === b.isImportant) cmp = 0;
+        else cmp = a.isImportant ? -1 : 1;
+        break;
+      case 'createdAt':
+        cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        break;
+      case 'updatedAt':
+        cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+        break;
+      default:
+        cmp = 0;
+    }
+    return sortOrder === 'asc' ? cmp : -cmp;
+  });
 
   const handleContextMenu = (e: React.MouseEvent, task: Task) => {
     e.preventDefault();
@@ -219,9 +266,48 @@ export const MainContent = () => {
             </div>
 
             <div className="flex items-center gap-1">
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <button
+                onClick={() => setIsSortMenuOpen((v) => !v)}
+                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors relative"
+              >
                 <ArrowUpDown size={16} />
                 <span>排序</span>
+                {isSortMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
+                    {(
+                      [
+                        { key: 'createdAt', label: '创建时间' },
+                        { key: 'updatedAt', label: '更新时间' },
+                        { key: 'dueDate', label: '截止日期' },
+                        { key: 'title', label: '标题' },
+                        { key: 'importance', label: '重要性' },
+                      ] as const
+                    ).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setSortBy(key)}
+                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors ${
+                          sortBy === key
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span>{label}</span>
+                        {sortBy === key && (
+                          <span className="text-xs">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                        )}
+                      </button>
+                    ))}
+                    <div className="border-t border-gray-100 my-1" />
+                    <button
+                      onClick={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    >
+                      <span>方向</span>
+                      <span>{sortOrder === 'asc' ? '升序 ↑' : '降序 ↓'}</span>
+                    </button>
+                  </div>
+                )}
               </button>
               <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
                 <Grid2X2 size={16} />
@@ -266,24 +352,42 @@ export const MainContent = () => {
             </form>
             {isInputFocused && (
               <div className="flex items-center justify-between px-3 pb-2 bg-gray-50/50 rounded-b-md border-t border-gray-100 pt-2">
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 relative">
                   <button
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500 relative"
                     title={t('main.options.addDueDate')}
+                    onClick={() => setIsDatePickerOpen((v) => !v)}
                   >
                     <Calendar
                       size={18}
                       className={newTaskDueDate ? 'text-[var(--theme-primary)]' : ''}
                     />
-                    <input
-                      type="date"
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                      onChange={(e) => {
-                        const date = e.target.value ? new Date(e.target.value).toISOString() : null;
-                        setNewTaskDueDate(date);
-                      }}
-                    />
                   </button>
+                  <AnimatePresence>
+                    {isDatePickerOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.1 }}
+                        className="absolute top-full left-0 mt-1 z-50"
+                      >
+                        <DatePicker
+                          value={newTaskDueDate ? newTaskDueDate.split('T')[0] : null}
+                          onChange={(date) => {
+                            setNewTaskDueDate(
+                              date ? new Date(date + 'T00:00:00').toISOString() : null,
+                            );
+                            setIsDatePickerOpen(false);
+                          }}
+                          onClear={() => {
+                            setNewTaskDueDate(null);
+                            setIsDatePickerOpen(false);
+                          }}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                   <button
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500"
                     title={t('main.options.remindMe')}
@@ -312,111 +416,27 @@ export const MainContent = () => {
                 <div className="col-span-3">重要性</div>
               </div>
             )}
-            <AnimatePresence initial={false} mode="popLayout">
-              {activeTasks.map((task) => (
-                <motion.div
-                  key={task.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                  onClick={() => setSelectedTaskId(task.id)}
-                  onContextMenu={(e) => handleContextMenu(e, task)}
-                  className={`group bg-white rounded-md shadow-sm border p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
-                    selectedTask?.id === task.id ? 'bg-blue-50 border-blue-200' : 'border-gray-100'
-                  } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''} ${
-                    focusedIndex >= 0 && activeTasks[focusedIndex]?.id === task.id
-                      ? 'ring-2 ring-[var(--theme-primary)] ring-offset-1'
-                      : ''
-                  }`}
-                >
-                  <div
-                    className={`flex items-center gap-3 w-full ${viewMode === 'table' ? 'col-span-6' : ''}`}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleComplete(task);
-                      }}
-                      className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
-                    ></button>
-                    <span className="flex-1 text-sm text-gray-900 break-words line-clamp-2">
-                      <div className="flex flex-col">
-                        <span>{task.title}</span>
-                        {task.steps && task.steps.length > 0 && (
-                          <span className="text-xs text-gray-500">
-                            {t('main.stepProgress', {
-                              completed: task.steps.filter((s) => s.isCompleted).length,
-                              total: task.steps.length,
-                            })}
-                          </span>
-                        )}
-                      </div>
-                    </span>
-                  </div>
-
-                  {viewMode === 'table' ? (
-                    <>
-                      <div className="col-span-3 text-sm relative group/date">
-                        {(() => {
-                          const { text, isOverdue } = getDueDateText(task.dueDate);
-                          return (
-                            <div
-                              className={`flex items-center gap-2 cursor-pointer ${isOverdue ? 'text-red-500' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                              {task.dueDate && <Calendar size={14} />}
-                              <span>{text}</span>
-                              <input
-                                type="date"
-                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                                value={
-                                  task.dueDate
-                                    ? new Date(task.dueDate).toISOString().split('T')[0]
-                                    : ''
-                                }
-                                onChange={(e) => {
-                                  const date = e.target.value
-                                    ? new Date(e.target.value).toISOString()
-                                    : null;
-                                  handleDateChange(task, date);
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      <div className="col-span-3 flex items-center justify-between">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleImportant(task);
-                          }}
-                          className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
-                            task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
-                          }`}
-                        >
-                          <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleImportant(task);
-                      }}
-                      className={`p-1.5 rounded hover:bg-gray-100 transition-colors flex-shrink-0 ${
-                        task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'
-                      }`}
-                    >
-                      <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                    </button>
-                  )}
-                </motion.div>
-              ))}
-            </AnimatePresence>
+            <SortableTaskList
+              tasks={sortedActiveTasks}
+              activeTaskId={selectedTask?.id ?? null}
+              isChecked={batchOps.isSelected}
+              onSelectTask={setSelectedTaskId}
+              onToggleCheck={batchOps.toggleSelection}
+              onContextMenu={handleContextMenu}
+              onToggleComplete={toggleComplete}
+              onToggleImportant={toggleImportant}
+              onDateChange={handleDateChange}
+              onReorder={(activeId, overId) => {
+                const activeTask = tasks.find((t) => t.id === activeId);
+                const overTask = tasks.find((t) => t.id === overId);
+                if (activeTask && overTask) {
+                  reorderTasksOptimistic(activeTask, overTask);
+                  void reorderTasks(activeId, overTask.sortOrder ?? 0);
+                }
+              }}
+              viewMode={viewMode}
+              focusedIndex={focusedIndex}
+            />
           </motion.div>
 
           {completedTasks.length > 0 && (
@@ -492,32 +512,46 @@ export const MainContent = () => {
 
                         {viewMode === 'table' ? (
                           <>
-                            <div className="col-span-3 text-sm relative group/date">
+                            <div className="col-span-3 text-sm relative">
                               {(() => {
                                 const { text, isOverdue } = getDueDateText(task.dueDate);
                                 return (
                                   <div
-                                    className={`flex items-center gap-2 cursor-pointer ${isOverdue ? 'text-red-500' : 'text-gray-500 hover:text-gray-700'}`}
-                                    onClick={(e) => e.stopPropagation()}
+                                    className={`flex items-center gap-2 ${isOverdue ? 'text-red-500' : 'text-gray-500 hover:text-gray-700'}`}
                                   >
                                     {task.dueDate && <Calendar size={14} />}
-                                    <span>{text}</span>
-                                    <input
-                                      type="date"
-                                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                                      value={
-                                        task.dueDate
-                                          ? new Date(task.dueDate).toISOString().split('T')[0]
-                                          : ''
-                                      }
-                                      onChange={(e) => {
-                                        const date = e.target.value
-                                          ? new Date(e.target.value).toISOString()
-                                          : null;
-                                        handleDateChange(task, date);
+                                    <button
+                                      className="text-left flex-1 cursor-pointer"
+                                      onClick={() => {
+                                        if (activeDatePickerTaskId === task.id) {
+                                          setActiveDatePickerTaskId(null);
+                                        } else {
+                                          setActiveDatePickerTaskId(task.id);
+                                        }
                                       }}
-                                      onClick={(e) => e.stopPropagation()}
-                                    />
+                                    >
+                                      {text}
+                                    </button>
+                                    {activeDatePickerTaskId === task.id && (
+                                      <div className="absolute top-full left-0 mt-1 z-50">
+                                        <DatePicker
+                                          value={task.dueDate ? task.dueDate.split('T')[0] : null}
+                                          onChange={(date) => {
+                                            handleDateChange(
+                                              task,
+                                              date
+                                                ? new Date(date + 'T00:00:00').toISOString()
+                                                : null,
+                                            );
+                                            setActiveDatePickerTaskId(null);
+                                          }}
+                                          onClear={() => {
+                                            handleDateChange(task, null);
+                                            setActiveDatePickerTaskId(null);
+                                          }}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })()}
@@ -601,6 +635,17 @@ export const MainContent = () => {
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
       />
+
+      <ShortcutsHelp isOpen={isShortcutsHelpOpen} onClose={() => setIsShortcutsHelpOpen(false)} />
+
+      <BatchActionsBar
+        selectedCount={batchOps.selectedCount}
+        onClear={batchOps.clearSelection}
+        onMarkComplete={() => batchOps.batchMarkComplete()}
+        onMarkImportant={() => batchOps.batchMarkImportant()}
+        onAddToMyDay={() => batchOps.batchAddToMyDay()}
+        onDelete={batchOps.batchDelete}
+      />
     </div>
   );
 };
@@ -613,5 +658,26 @@ function buildFilter(listId: string): TaskFilter | undefined {
     if (listId === 'planned') return { hasDueDate: true };
     return {};
   }
+  if (listId.startsWith('tag:')) {
+    const tagId = listId.slice(4);
+    return { tagIds: [tagId] };
+  }
   return { listId };
+}
+
+function getListTitle(
+  listId: string,
+  allTags?: Array<{ id: string; name: string }>,
+  tFn?: (key: string) => string,
+): string {
+  if (listId === 'my-day') return tFn ? tFn('sidebar.myDay') : '我的一天';
+  if (listId === 'important') return tFn ? tFn('sidebar.important') : '重要';
+  if (listId === 'planned') return tFn ? tFn('sidebar.planned') : '计划内';
+  if (listId === 'tasks') return tFn ? tFn('sidebar.tasks') : '所有任务';
+  if (listId.startsWith('tag:')) {
+    const tagId = listId.slice(4);
+    const tag = allTags?.find((t) => t.id === tagId);
+    return tag ? `${tag.name}` : '标签';
+  }
+  return '任务';
 }

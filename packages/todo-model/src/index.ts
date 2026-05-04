@@ -67,6 +67,8 @@ export interface Task extends BaseEntity {
   listId: string | null;
   userId: number | null;
   steps: Step[];
+  sortOrder: number;
+  tagIds: string[];
 }
 
 export interface List extends BaseEntity {
@@ -79,6 +81,13 @@ export interface List extends BaseEntity {
   tasks?: Task[];
 }
 
+export interface Tag extends BaseEntity {
+  id: string;
+  name: string;
+  color: string;
+  userId: number | null;
+}
+
 export interface TaskFilter {
   listId?: string | null;
   isImportant?: boolean;
@@ -86,6 +95,7 @@ export interface TaskFilter {
   hasDueDate?: boolean;
   isCompleted?: boolean;
   category?: TaskCategory | null;
+  tagIds?: string[];
 }
 
 export interface CreateTaskInput {
@@ -99,6 +109,8 @@ export interface CreateTaskInput {
   repeatPattern?: RepeatPattern;
   category?: TaskCategory | null;
   listId?: string | null;
+  sortOrder?: number;
+  tagIds?: string[];
 }
 
 export interface UpdateTaskInput {
@@ -113,6 +125,8 @@ export interface UpdateTaskInput {
   category?: TaskCategory | null;
   listId?: string | null;
   files?: TaskFile[];
+  sortOrder?: number;
+  tagIds?: string[];
 }
 
 export interface CreateListInput {
@@ -138,7 +152,7 @@ export interface UpdateStepInput {
 }
 
 export type SyncOperationType = 'create' | 'update' | 'delete';
-export type SyncEntityType = 'task' | 'list' | 'step';
+export type SyncEntityType = 'task' | 'list' | 'step' | 'tag';
 export type SyncStatus = 'pending' | 'syncing' | 'failed';
 
 export interface SyncOperation {
@@ -201,6 +215,7 @@ export interface IStorage {
   readonly tasks: ITaskStorage;
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
+  readonly tags: ITagStorage;
   initialize(): Promise<void>;
   destroy(): Promise<void>;
 }
@@ -213,6 +228,7 @@ export class TodoDatabase extends Dexie {
   tasks!: Table<Task, string>;
   lists!: Table<List, string>;
   steps!: Table<Step, string>;
+  tags!: Table<Tag, string>;
   syncQueue!: Table<SyncOperation, number>;
 
   constructor() {
@@ -220,9 +236,18 @@ export class TodoDatabase extends Dexie {
 
     this.version(1).stores({
       tasks:
-        'id, listId, userId, isCompleted, isImportant, addToMyDay, dueDate, reminderDate, category, createdAt, updatedAt',
+        'id, listId, userId, isCompleted, isImportant, addToMyDay, dueDate, reminderDate, category, createdAt, updatedAt, sortOrder',
       lists: 'id, userId, isSmart, createdAt, updatedAt',
       steps: 'id, taskId, isCompleted, createdAt, updatedAt',
+      syncQueue: '++id, entityType, entityId, operation, status, createdAt',
+    });
+
+    this.version(2).stores({
+      tasks:
+        'id, listId, userId, isCompleted, isImportant, addToMyDay, dueDate, reminderDate, category, createdAt, updatedAt, sortOrder, *tagIds',
+      lists: 'id, userId, isSmart, createdAt, updatedAt',
+      steps: 'id, taskId, isCompleted, createdAt, updatedAt',
+      tags: 'id, userId, createdAt, updatedAt',
       syncQueue: '++id, entityType, entityId, operation, status, createdAt',
     });
   }
@@ -273,6 +298,28 @@ export interface IAuthStorage {
 }
 
 // ============================================================================
+// ITagStorage — Tag management interface
+// ============================================================================
+
+export interface ITagStorage {
+  getTags(): Promise<Tag[]>;
+  getTag(id: string): Promise<Tag | null>;
+  createTag(input: CreateTagInput): Promise<Tag>;
+  updateTag(id: string, input: UpdateTagInput): Promise<Tag>;
+  deleteTag(id: string): Promise<void>;
+}
+
+export interface CreateTagInput {
+  name: string;
+  color: string;
+}
+
+export interface UpdateTagInput {
+  name?: string;
+  color?: string;
+}
+
+// ============================================================================
 // IStorage — Unified storage facade
 // ============================================================================
 
@@ -281,6 +328,7 @@ export interface IStorage {
   readonly tasks: ITaskStorage;
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
+  readonly tags: ITagStorage;
   initialize(): Promise<void>;
   destroy(): Promise<void>;
 }
@@ -299,7 +347,11 @@ function now(): string {
 
 class LocalTaskStorageImpl implements ITaskStorage {
   async getTasks(filter?: TaskFilter): Promise<Task[]> {
-    const allTasks = await db.tasks.toArray();
+    let allTasks = await db.tasks.toArray();
+
+    // Sort by sortOrder by default
+    allTasks = allTasks.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+
     return allTasks.filter((task) => {
       if (!filter) return true;
       if (filter.listId != null && task.listId !== filter.listId) return false;
@@ -308,6 +360,10 @@ class LocalTaskStorageImpl implements ITaskStorage {
       if (filter.hasDueDate && !task.dueDate) return false;
       if (filter.isCompleted !== undefined && task.isCompleted !== filter.isCompleted) return false;
       if (filter.category != null && task.category !== filter.category) return false;
+      if (filter.tagIds && filter.tagIds.length > 0) {
+        const hasTag = filter.tagIds.some((tid) => task.tagIds.includes(tid));
+        if (!hasTag) return false;
+      }
       return true;
     });
   }
@@ -317,6 +373,10 @@ class LocalTaskStorageImpl implements ITaskStorage {
   }
 
   async createTask(input: CreateTaskInput): Promise<Task> {
+    const existingTasks = await db.tasks.toArray();
+    const maxSortOrder =
+      existingTasks.length > 0 ? Math.max(...existingTasks.map((t) => t.sortOrder ?? 0)) : 0;
+
     const task: Task = {
       id: uuidv4(),
       title: input.title,
@@ -332,6 +392,8 @@ class LocalTaskStorageImpl implements ITaskStorage {
       listId: input.listId ?? null,
       userId: null,
       steps: [],
+      sortOrder: input.sortOrder ?? maxSortOrder + 1,
+      tagIds: input.tagIds ?? [],
       createdAt: now(),
       updatedAt: now(),
     };
@@ -511,25 +573,78 @@ class LocalAuthStorageImpl implements IAuthStorage {
 }
 
 // ============================================================================
+// LocalTagStorage — IndexedDB implementation
+// ============================================================================
+
+class LocalTagStorageImpl implements ITagStorage {
+  async getTags(): Promise<Tag[]> {
+    return db.tags.toArray();
+  }
+
+  async getTag(id: string): Promise<Tag | null> {
+    return (await db.tags.get(id)) ?? null;
+  }
+
+  async createTag(input: CreateTagInput): Promise<Tag> {
+    const tag: Tag = {
+      id: uuidv4(),
+      name: input.name,
+      color: input.color,
+      userId: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    await db.tags.add(tag);
+    return tag;
+  }
+
+  async updateTag(id: string, input: UpdateTagInput): Promise<Tag> {
+    const existing = await db.tags.get(id);
+    if (!existing) throw new Error(`Tag ${id} not found`);
+    const updated: Tag = { ...existing, ...input, updatedAt: now() };
+    await db.tags.put(updated);
+    return updated;
+  }
+
+  async deleteTag(id: string): Promise<void> {
+    await db.transaction('rw', db.tags, db.tasks, async () => {
+      const allTasks = await db.tasks.toArray();
+      for (const task of allTasks) {
+        if (task.tagIds.includes(id)) {
+          await db.tasks.update(task.id, {
+            tagIds: task.tagIds.filter((tid: string) => tid !== id),
+            updatedAt: now(),
+          });
+        }
+      }
+      await db.tags.delete(id);
+    });
+  }
+}
+
+// ============================================================================
 // Remote implementations
 // ============================================================================
 
 class RemoteTaskStorageImpl implements ITaskStorage {
   constructor(private readonly api: AxiosInstance) {}
 
-  private buildParams(filter?: TaskFilter): Record<string, string | boolean | undefined> {
+  private buildParams(
+    filter?: TaskFilter,
+  ): Record<string, string | boolean | string[] | undefined> {
     if (!filter) return {};
     return {
       listId: filter.listId ?? undefined,
       isImportant: filter.isImportant,
       addToMyDay: filter.addToMyDay,
       hasDueDate: filter.hasDueDate,
+      tagIds: filter.tagIds && filter.tagIds.length > 0 ? filter.tagIds : undefined,
     };
   }
 
   async getTasks(filter?: TaskFilter): Promise<Task[]> {
     const { data } = await this.api.get<Task[]>('/tasks', { params: this.buildParams(filter) });
-    return data;
+    return data.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   }
 
   async getTask(id: string): Promise<Task | null> {
@@ -692,6 +807,38 @@ class RemoteAuthStorageImpl implements IAuthStorage {
   }
 }
 
+class RemoteTagStorageImpl implements ITagStorage {
+  constructor(private readonly api: AxiosInstance) {}
+
+  async getTags(): Promise<Tag[]> {
+    const { data } = await this.api.get<Tag[]>('/tags');
+    return data;
+  }
+
+  async getTag(id: string): Promise<Tag | null> {
+    try {
+      const { data } = await this.api.get<Tag>(`/tags/${id}`);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async createTag(input: CreateTagInput): Promise<Tag> {
+    const { data } = await this.api.post<Tag>('/tags', input);
+    return data;
+  }
+
+  async updateTag(id: string, input: UpdateTagInput): Promise<Tag> {
+    const { data } = await this.api.patch<Tag>(`/tags/${id}`, input);
+    return data;
+  }
+
+  async deleteTag(id: string): Promise<void> {
+    await this.api.delete(`/tags/${id}`);
+  }
+}
+
 // ============================================================================
 // Unified Storage Classes
 // ============================================================================
@@ -701,12 +848,14 @@ export class LocalStorage implements IStorage {
   readonly tasks: ITaskStorage;
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
+  readonly tags: ITagStorage;
 
   constructor(config: StorageConfig) {
     this.config = config;
     this.tasks = new LocalTaskStorageImpl();
     this.lists = new LocalListStorageImpl();
     this.auth = new LocalAuthStorageImpl();
+    this.tags = new LocalTagStorageImpl();
   }
 
   async initialize(): Promise<void> {}
@@ -718,6 +867,7 @@ export class RemoteStorage implements IStorage {
   readonly tasks: ITaskStorage;
   readonly lists: IListStorage;
   readonly auth: IAuthStorage;
+  readonly tags: ITagStorage;
 
   constructor(config: StorageConfig) {
     const baseUrl = config.apiBaseUrl ?? 'http://localhost:3002/api';
@@ -737,6 +887,13 @@ export class RemoteStorage implements IStorage {
       }),
     );
     this.auth = new RemoteAuthStorageImpl(baseUrl);
+    this.tags = new RemoteTagStorageImpl(
+      axios.create({
+        baseURL: baseUrl,
+        headers: { 'Content-Type': 'application/json' },
+        withCredentials: false,
+      }),
+    );
   }
 
   async initialize(): Promise<void> {}

@@ -1,0 +1,24 @@
+{
+  "name": "@baicie/orbit-plugin-system",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@baicie/orbit-utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@baicie/orbit-tsconfig": "workspace:*",
+    "@types/react": "^19.2.0"
+  },
+  "peerDependencies": {
+    "react": "^19"
+  }
+}

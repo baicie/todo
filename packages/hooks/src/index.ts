@@ -12,6 +12,8 @@ export {
   useToggleMyDay,
   taskKeys,
 } from './useTask';
+export { useReorderTasks, useReorderTasksOptimistic } from './useReorderTasks';
+export { useBatchOperations } from './useBatchOperations';
 export { useList, useCreateList, useUpdateList, useDeleteList, listKeys } from './useList';
 export { useAddStep, useUpdateStep, useDeleteStep } from './useSteps';
 export {
@@ -22,6 +24,13 @@ export {
   type SortOption,
   type SmartFilterType,
 } from './useSearch';
+export {
+  getSearchHistory,
+  addSearchHistory,
+  removeSearchHistory,
+  clearSearchHistory,
+  useSearchHistory,
+} from './useSearchHistory';
 export { useSync, type SyncState, type SyncActions } from './useSync';
 export {
   useKeyboardShortcuts,
@@ -33,4 +42,12 @@ export {
   type TaskListShortcutsParams,
   type TaskListShortcutsReturn,
 } from './useTaskListShortcuts';
-export { notificationService, type NotificationSettings } from './useNotifications';
+export {
+  notificationService,
+  notificationStore,
+  useNotifications,
+  type NotificationSettings,
+  type AppNotification,
+  type NotificationType,
+} from './useNotifications';
+export { useTag, useCreateTag, useUpdateTag, useDeleteTag, tagKeys } from './useTags';

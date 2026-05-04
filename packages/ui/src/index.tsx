@@ -10,3 +10,4 @@ export * from './components/ui/avatar';
 export * from './components/ui/badge';
 export * from './components/ui/dropdown';
 export * from './components/ui/toast';
+export * from './components/ui/markdown-editor';

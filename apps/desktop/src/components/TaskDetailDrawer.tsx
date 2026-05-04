@@ -18,15 +18,18 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import {
   useAddStep,
+  useCreateTag,
   useDeleteStep,
   useDeleteTask,
+  useTag,
   useToggleComplete,
   useToggleImportant,
   useToggleMyDay,
   useUpdateStep,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import type { Task, TaskCategory } from '@baicie/orbit';
+import { MarkdownEditor } from '@baicie/orbit-ui';
+import type { Tag as TagType, Task, TaskCategory } from '@baicie/orbit';
 
 interface TaskDetailDrawerProps {
   task: Task | null;
@@ -50,6 +53,8 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const [isRemindMenuOpen, setIsRemindMenuOpen] = useState(false);
   const [isDueDateMenuOpen, setIsDueDateMenuOpen] = useState(false);
   const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
+  const [isTagMenuOpen, setIsTagMenuOpen] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
 
   const updateTask = useUpdateTask();
   const addStep = useAddStep();
@@ -59,6 +64,8 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
   const toggleComplete = useToggleComplete();
   const toggleImportant = useToggleImportant();
   const toggleMyDay = useToggleMyDay();
+  const { data: allTags = [] } = useTag();
+  const createTag = useCreateTag();
 
   const handleTitleBlur = () => {
     if (title !== task.title) {
@@ -633,6 +640,105 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                 )}
               </AnimatePresence>
             </div>
+
+            <div className="relative">
+              <button
+                onClick={() => setIsTagMenuOpen(!isTagMenuOpen)}
+                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+              >
+                <Tag size={18} />
+                <span>
+                  {task.tagIds && task.tagIds.length > 0
+                    ? `${task.tagIds.length} 个标签`
+                    : '添加标签'}
+                </span>
+                {task.tagIds && task.tagIds.length > 0 && (
+                  <div
+                    className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-200 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateField({ tagIds: [] });
+                    }}
+                  >
+                    <X size={16} />
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isTagMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setIsTagMenuOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-4 right-4 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1 max-h-64 overflow-y-auto"
+                    >
+                      {allTags.map((tag: TagType) => {
+                        const isSelected = task.tagIds.includes(tag.id);
+                        return (
+                          <button
+                            key={tag.id}
+                            onClick={() => {
+                              const newTagIds = isSelected
+                                ? task.tagIds.filter((id: string) => id !== tag.id)
+                                : [...task.tagIds, tag.id];
+                              updateField({ tagIds: newTagIds });
+                            }}
+                            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between ${
+                              isSelected
+                                ? 'text-[var(--theme-primary)] bg-blue-50'
+                                : 'text-gray-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: tag.color }}
+                              />
+                              <span>{tag.name}</span>
+                            </div>
+                            {isSelected && <Check size={16} />}
+                          </button>
+                        );
+                      })}
+                      <div className="border-t border-gray-100 my-1" />
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          if (!newTagName.trim()) return;
+                          createTag.mutate(
+                            { name: newTagName.trim(), color: '#3b82f6' },
+                            {
+                              onSuccess: (newTag) => {
+                                updateField({ tagIds: [...task.tagIds, newTag.id] });
+                                setNewTagName('');
+                              },
+                            },
+                          );
+                        }}
+                        className="flex items-center gap-2 px-4 py-2"
+                      >
+                        <input
+                          type="text"
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          placeholder="新建标签..."
+                          className="flex-1 bg-transparent border-none outline-none text-sm text-gray-900 placeholder:text-gray-400"
+                        />
+                        <button
+                          type="submit"
+                          className="text-[var(--theme-primary)] hover:text-blue-700 text-sm font-medium"
+                        >
+                          添加
+                        </button>
+                      </form>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors relative">
               <Paperclip size={18} />
               <span>{t('drawer.addFile')}</span>
@@ -666,12 +772,12 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
           </div>
 
           <div className="bg-white rounded-md shadow-sm p-4">
-            <textarea
+            <MarkdownEditor
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               onBlur={handleDescriptionBlur}
               placeholder={t('drawer.addNote')}
-              className="w-full min-h-[100px] text-sm text-gray-700 placeholder:text-gray-400 border-none outline-none resize-none bg-transparent"
+              minHeight={100}
             />
           </div>
         </div>

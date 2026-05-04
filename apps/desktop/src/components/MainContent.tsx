@@ -16,22 +16,31 @@ import {
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
+  useBatchOperations,
   useCreateTask,
   useDeleteTask,
+  useReorderTasks,
+  useReorderTasksOptimistic,
+  useTag,
   useTask,
+  useTaskListShortcuts,
   useToggleComplete,
   useToggleImportant,
   useToggleMyDay,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
+import { ShortcutsHelp } from './ShortcutsHelp';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { Sidebar } from './Sidebar';
+import { SortableTaskList } from './SortableTaskList';
 import type { Task, TaskFilter } from '@baicie/orbit';
+import { BatchActionsBar } from './BatchActionsBar';
 
 export function MainContent() {
   const { listId } = useParams();
+  const navigate = useNavigate();
   const activeListId = listId || 'my-day';
   const { t } = useTranslation();
   const [newTask, setNewTask] = useState('');
@@ -40,9 +49,16 @@ export function MainContent() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
+  const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<
+    'createdAt' | 'updatedAt' | 'dueDate' | 'title' | 'importance'
+  >('createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
+  const { data: allTags = [] } = useTag();
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -50,6 +66,33 @@ export function MainContent() {
   const toggleComplete = useToggleComplete();
   const toggleImportant = useToggleImportant();
   const toggleMyDay = useToggleMyDay();
+  const reorderTasks = useReorderTasks();
+  const reorderTasksOptimistic = useReorderTasksOptimistic();
+  const batchOps = useBatchOperations();
+
+  useTaskListShortcuts({
+    tasks,
+    selectedTaskId,
+    onSelectTask: setSelectedTaskId,
+    onToggleComplete: toggleComplete,
+    onToggleImportant: toggleImportant,
+    onToggleMyDay: toggleMyDay,
+    onDeleteTask: (id) => deleteTask.mutate(id),
+    onOpenCommandPalette: () => {},
+    onOpenSettings: () => navigate('/settings'),
+    onOpenSearch: () => {},
+    onOpenShortcutsHelp: () => setIsShortcutsHelpOpen(true),
+    onAddTask: () => {
+      const input = document.querySelector<HTMLInputElement>('input[placeholder*="添加任务"]');
+      input?.focus();
+    },
+    onOpenTaskDetail: (id) => setSelectedTaskId(id),
+    onDuplicateTask: (task) => {
+      createTask.mutate({ title: task.title, listId: task.listId ?? undefined });
+    },
+    onToggleSidebar: () => setIsSidebarOpen((v) => !v),
+    onNavigate: navigate,
+  });
 
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,12 +112,45 @@ export function MainContent() {
     if (activeListId === 'important') return t('sidebar.important');
     if (activeListId === 'planned') return t('sidebar.planned');
     if (activeListId === 'tasks') return t('sidebar.tasks');
+    if (activeListId.startsWith('tag:')) {
+      const tagId = activeListId.slice(4);
+      const tag = allTags.find((tg) => tg.id === tagId);
+      return tag ? tag.name : '标签';
+    }
     return t('app.title');
   };
 
   const activeTasks = tasks.filter((task) => !task.isCompleted);
   const completedTasks = tasks.filter((task) => task.isCompleted);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
+
+  const sortedActiveTasks = [...activeTasks].sort((a, b) => {
+    let cmp = 0;
+    switch (sortBy) {
+      case 'title':
+        cmp = a.title.localeCompare(b.title);
+        break;
+      case 'dueDate':
+        if (!a.dueDate && !b.dueDate) cmp = 0;
+        else if (!a.dueDate) cmp = 1;
+        else if (!b.dueDate) cmp = -1;
+        else cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+        break;
+      case 'importance':
+        if (a.isImportant === b.isImportant) cmp = 0;
+        else cmp = a.isImportant ? -1 : 1;
+        break;
+      case 'createdAt':
+        cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        break;
+      case 'updatedAt':
+        cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+        break;
+      default:
+        cmp = 0;
+    }
+    return sortOrder === 'asc' ? cmp : -cmp;
+  });
 
   const getDueDateText = (dateStr?: string | null) => {
     if (!dateStr) return { text: '-', isOverdue: false };
@@ -144,9 +220,48 @@ export function MainContent() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
+              <button
+                onClick={() => setIsSortMenuOpen((v) => !v)}
+                className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors relative"
+              >
                 <ArrowUpDown size={16} />
                 <span>排序</span>
+                {isSortMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
+                    {(
+                      [
+                        { key: 'createdAt', label: '创建时间' },
+                        { key: 'updatedAt', label: '更新时间' },
+                        { key: 'dueDate', label: '截止日期' },
+                        { key: 'title', label: '标题' },
+                        { key: 'importance', label: '重要性' },
+                      ] as const
+                    ).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setSortBy(key)}
+                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors ${
+                          sortBy === key
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span>{label}</span>
+                        {sortBy === key && (
+                          <span className="text-xs">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                        )}
+                      </button>
+                    ))}
+                    <div className="border-t border-gray-100 my-1" />
+                    <button
+                      onClick={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    >
+                      <span>方向</span>
+                      <span>{sortOrder === 'asc' ? '升序 ↑' : '降序 ↓'}</span>
+                    </button>
+                  </div>
+                )}
               </button>
               <button className="flex items-center gap-1 px-2 py-1 text-sm text-[var(--theme-primary)] hover:bg-white/50 rounded transition-colors">
                 <Grid2X2 size={16} />
@@ -196,65 +311,24 @@ export function MainContent() {
             layout
             className={viewMode === 'table' ? 'flex flex-col gap-0.5' : 'space-y-1'}
           >
-            <AnimatePresence initial={false} mode="popLayout">
-              {activeTasks.map((task) => (
-                <motion.div
-                  key={task.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                  onClick={() => setSelectedTaskId(task.id)}
-                  className={`group bg-white rounded-md shadow-sm border border-gray-100 p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer ${
-                    selectedTask?.id === task.id ? 'bg-blue-50 border-blue-200' : ''
-                  } ${viewMode === 'table' ? 'grid grid-cols-12 gap-4 !items-center' : ''}`}
-                >
-                  <div
-                    className={`flex items-center gap-3 ${viewMode === 'table' ? 'col-span-6' : ''}`}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleComplete(task);
-                      }}
-                      className="w-5 h-5 rounded-full border-2 border-gray-400 hover:border-[var(--theme-primary)] flex items-center justify-center transition-colors flex-shrink-0"
-                    />
-                    <span className="flex-1 text-sm text-gray-900 break-words line-clamp-2">
-                      {task.title}
-                    </span>
-                  </div>
-                  {viewMode === 'table' ? (
-                    <>
-                      <div className="col-span-3 text-sm text-gray-500">
-                        {getDueDateText(task.dueDate).text}
-                      </div>
-                      <div className="col-span-3">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleImportant(task);
-                          }}
-                          className={`p-1.5 rounded hover:bg-gray-100 ${task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'}`}
-                        >
-                          <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleImportant(task);
-                      }}
-                      className={`p-1.5 rounded hover:bg-gray-100 flex-shrink-0 ${task.isImportant ? 'text-[var(--theme-primary)]' : 'text-gray-400'}`}
-                    >
-                      <Star size={18} fill={task.isImportant ? 'currentColor' : 'none'} />
-                    </button>
-                  )}
-                </motion.div>
-              ))}
-            </AnimatePresence>
+            <SortableTaskList
+              tasks={sortedActiveTasks}
+              activeTaskId={selectedTask?.id ?? null}
+              isChecked={batchOps.isSelected}
+              onSelectTask={setSelectedTaskId}
+              onToggleCheck={batchOps.toggleSelection}
+              onToggleComplete={toggleComplete}
+              onToggleImportant={toggleImportant}
+              onReorder={(activeId, overId) => {
+                const activeTask = tasks.find((t) => t.id === activeId);
+                const overTask = tasks.find((t) => t.id === overId);
+                if (activeTask && overTask) {
+                  reorderTasksOptimistic(activeTask, overTask);
+                  void reorderTasks(activeId, overTask.sortOrder ?? 0);
+                }
+              }}
+              viewMode={viewMode}
+            />
           </motion.div>
 
           {/* Completed Tasks */}
@@ -344,6 +418,17 @@ export function MainContent() {
           </>
         )}
       </AnimatePresence>
+
+      <BatchActionsBar
+        selectedCount={batchOps.selectedCount}
+        onClear={batchOps.clearSelection}
+        onMarkComplete={() => batchOps.batchMarkComplete()}
+        onMarkImportant={() => batchOps.batchMarkImportant()}
+        onAddToMyDay={() => batchOps.batchAddToMyDay()}
+        onDelete={batchOps.batchDelete}
+      />
+
+      <ShortcutsHelp isOpen={isShortcutsHelpOpen} onClose={() => setIsShortcutsHelpOpen(false)} />
     </div>
   );
 }
@@ -355,6 +440,10 @@ function buildFilter(listId: string): TaskFilter | undefined {
     if (listId === 'important') return { isImportant: true };
     if (listId === 'planned') return { hasDueDate: true };
     return {};
+  }
+  if (listId.startsWith('tag:')) {
+    const tagId = listId.slice(4);
+    return { tagIds: [tagId] };
   }
   return { listId };
 }

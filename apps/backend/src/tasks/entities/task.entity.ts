@@ -35,6 +35,12 @@ export class Task extends BaseEntity {
   @Column({ type: 'varchar', nullable: true, comment: '分类' })
   category: string;
 
+  @Column({ type: 'simple-json', nullable: true, comment: '标签ID列表' })
+  tagIds: string[];
+
+  @Column({ type: 'int', default: 0, comment: '排序' })
+  sortOrder: number;
+
   @Column({ type: 'json', nullable: true, comment: '附件文件' })
   files: unknown[];
 

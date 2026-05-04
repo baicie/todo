@@ -10,10 +10,13 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@baicie/orbit-hooks": "workspace:*",
     "@baicie/orbit": "workspace:*",
+    "@baicie/orbit-hooks": "workspace:*",
     "@baicie/orbit-ui": "workspace:*",
     "@baicie/orbit-utils": "workspace:*",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@tanstack/react-query": "^5.100.9",
     "framer-motion": "^12.38.0",
     "i18next": "^26.0.8",
@@ -26,9 +29,9 @@
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
+    "@tailwindcss/vite": "^4.2.4",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/cli": "^2.11.0",
-    "@tailwindcss/vite": "^4.2.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",

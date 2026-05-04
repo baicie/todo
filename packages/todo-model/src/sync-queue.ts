@@ -208,6 +208,10 @@ export class SyncQueueManager {
         if (op.operation === 'update') return `/tasks/steps/${op.entityId}`;
         if (op.operation === 'delete') return `/tasks/steps/${op.entityId}`;
         return `/tasks/${op.payload.taskId as string}/steps`;
+      case 'tag':
+        if (op.operation === 'delete') return `/tags/${op.entityId}`;
+        if (op.operation === 'create') return '/tags';
+        return `/tags/${op.entityId}`;
       default:
         return `/tasks/${op.entityId}`;
     }

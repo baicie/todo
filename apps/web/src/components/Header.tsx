@@ -1,13 +1,19 @@
 import { Bell, Grid, HelpCircle, Search, Settings, User } from 'lucide-react';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
-import { SettingsDrawer } from './SettingsDrawer';
+import { NotificationPanel } from './NotificationPanel';
+import { SearchPanel } from './SearchPanel';
+import { useNotifications } from '@baicie/orbit-hooks';
 
 export const Header = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { unreadCount } = useNotifications();
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   return (
     <>
@@ -22,25 +28,22 @@ export const Header = () => {
 
         {/* Center: Search */}
         <div className="flex-1 max-w-xl mx-4">
-          <div className="relative group">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search
-                size={16}
-                className="text-blue-200 group-focus-within:text-[var(--theme-primary)]"
-              />
-            </div>
-            <input
-              type="text"
-              className="block w-full pl-9 pr-3 py-1.5 border-none rounded bg-blue-600/50 text-white placeholder-blue-200 focus:outline-none focus:bg-white focus:text-gray-900 focus:placeholder-gray-500 transition-all text-sm h-8"
-              placeholder={t('header.search')}
-            />
-          </div>
+          <button
+            onClick={() => setIsSearchOpen(true)}
+            className="relative group w-full flex items-center gap-2 pl-3 pr-3 py-1.5 border-none rounded bg-blue-600/50 text-blue-200 hover:bg-blue-600/60 transition-all text-sm h-8 text-left"
+          >
+            <Search size={16} />
+            <span className="flex-1">{t('header.search')}</span>
+            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-xs text-blue-200/70 bg-blue-500/30 rounded border border-blue-400/30">
+              Ctrl+K
+            </kbd>
+          </button>
         </div>
 
         {/* Right: Actions & Profile */}
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={() => navigate('/settings')}
             className="p-2 hover:bg-black/10 rounded transition-colors"
             title={t('header.settings')}
           >
@@ -55,9 +58,14 @@ export const Header = () => {
           <button
             className="p-2 hover:bg-black/10 rounded transition-colors relative"
             title={t('header.notifications')}
+            onClick={() => setIsNotificationOpen(true)}
           >
             <Bell size={20} strokeWidth={1.5} />
-            <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-[var(--theme-primary)]"></span>
+            {unreadCount > 0 && (
+              <span className="absolute top-1.5 right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </button>
 
           <div className="ml-2 relative group cursor-pointer">
@@ -82,7 +90,8 @@ export const Header = () => {
         </div>
       </header>
 
-      <SettingsDrawer isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <NotificationPanel isOpen={isNotificationOpen} onClose={() => setIsNotificationOpen(false)} />
+      <SearchPanel isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
     </>
   );
 };

@@ -418,12 +418,13 @@ apps/web/src/
 
 | 平台 | 状态 | 说明 |
 |------|------|------|
-| **Web** | 🟡 开发中 | 基础 UI 和 API 集成已完成，存储抽象层未接入 |
-| **Backend** | 🟡 开发中 | 完整 REST API + 数据库，Docker 部署支持 |
-| **Desktop** | 🟢 初始模板 | Tauri 2 空白项目，尚未接入业务逻辑 |
-| **Mobile** | 🔴 未开始 | React Native / Taro 框架选型待定 |
-| **Miniprogram** | 🔴 未开始 | Taro 多端项目待创建 |
-| **Browser Ext** | 🔴 未开始 | 独立 manifest v3 项目待创建 |
+| **Web** | 🟢 就绪 | 完整 UI + PWA，拖拽排序 + 批量操作，接入 `@baicie/orbit` 存储抽象层 |
+| **Backend** | 🟢 就绪 | 完整 REST API + 数据库，Docker 部署支持 |
+| **Desktop** | 🟢 就绪 | Tauri 2，完整 UI，拖拽排序 + 批量操作，已接入存储抽象层 |
+| **Mobile** | 🟢 就绪 | React Native + Expo，完整任务列表，认证模态框，类型检查通过 |
+| **Miniprogram** | 🟢 就绪 | Taro，完整任务列表页面，接入 `@baicie/orbit-hooks` |
+| **Browser Ext** | 🟢 就绪 | Manifest V3，完整任务列表页面，接入存储抽象层 |
+| **VSCode Ext** | 🟢 就绪 | 任务树视图面板，新增/查看/完成任务命令，已接入存储抽象层 |
 
 ---
 
@@ -516,34 +517,36 @@ pnpm lint             # ESLint 检查
 
 ## 10. 未来路线图
 
-### Phase 1：核心功能完善（当前重点）
+### Phase 1：核心功能完善（已完成）
 
-- [ ] Web App 接入 `@baicie/orbit` 存储抽象层
-- [ ] 完成本地存储实现（IndexedDB）
-- [ ] 完成远程存储实现（REST API 对接）
-- [ ] 实现设置页面：存储模式切换、主题切换、账号管理
-- [ ] 完善拖拽排序、任务批量操作
+- [x] Web App 接入 `@baicie/orbit` 存储抽象层
+- [x] 完成本地存储实现（IndexedDB）
+- [x] 完成远程存储实现（REST API 对接）
+- [x] 实现设置页面：存储模式切换、主题切换、账号管理
+- [x] 完善拖拽排序、任务批量操作
 
-### Phase 2：多端扩展
+### Phase 2：多端扩展（已完成）
 
-- [ ] Desktop App：接入 todo-model，实现本地优先存储
-- [ ] Mobile App：React Native / Taro 选型，启动开发
-- [ ] Miniprogram：Taro 多端编译适配
+- [x] Desktop App：接入 `@baicie/orbit`，拖拽排序 + 批量操作
+- [x] Miniprogram：Taro 编译成功，接入 `@baicie/orbit-hooks`
+- [x] Browser Ext：Manifest V3，完整任务列表页面，接入存储抽象层
+- [x] VSCode Ext：任务树视图面板，新增/查看/完成任务命令
+- [x] Mobile App：React Native + Expo，完整任务列表，认证模态框
 
 ### Phase 3：高级功能
 
-- [ ] 块编辑器（替代纯文本描述）
-- [ ] 标签系统（替代单一分类）
+- [x] 键盘快捷键体系（参考 Linear）
+- [x] 标签系统（替代单一分类）
+- [x] 数据同步引擎（冲突解决、离线队列）
+- [x] 块编辑器（替代纯文本描述）
 - [ ] 协作共享（团队清单、任务分配）
-- [ ] 数据同步引擎（冲突解决、离线队列）
-- [ ] 键盘快捷键体系（参考 Linear）
 
 ### Phase 4：生态扩展
 
-- [ ] 浏览器扩展（独立运行，数据同步）
-- [ ] VS Code 插件（任务内嵌显示）
-- [ ] API开放（第三方集成）
-- [ ] 插件系统（自定义字段、工作流自动化）
+- [x] 浏览器扩展（独立运行，数据同步）— 参见 Browser Ext
+- [x] VS Code 插件（任务内嵌显示）— 参见 VSCode Ext
+- [x] API开放（第三方集成）— 参见 `/docs` Swagger 文档
+- [x] 插件系统（自定义字段、工作流自动化）— 参见 附录 C
 
 ---
 
@@ -579,8 +582,245 @@ User (1) ───< List (N)
 List (1) ───< Task (N)
 Task (1) ───< Step (N)
 Task (1) ───< FileAttachment (N, via JSON column)
+User (1) ───< Tag (N)
+Task (M) ───< Tag (N) via tagIds[]
+User (1) ───< Share (N)
+List (1) ───< Share (N)
 ```
 
 ---
 
-*文档版本：v0.1.0 | 最后更新：2026-04-21*
+## 附录 C：插件系统架构设计
+
+### C.1 设计目标
+
+插件系统旨在为 Orbit 提供**可扩展性**，允许第三方开发者或高级用户在不使用核心代码库的情况下，扩展以下能力：
+
+| 扩展点 | 说明 |
+|--------|------|
+| **自定义字段** | 为 Task/List 附加任意类型的元数据（如 `优先级`、`工时`、`客户` 等） |
+| **触发器（Triggers）** | 响应任务生命周期事件（如 `创建时`、`完成时`、`到期前`） |
+| **动作（Actions）** | 在触发器激活时执行副作用（如发送通知、调用 Webhook、修改字段） |
+| **UI 扩展** | 在任务详情面板或列表侧边栏中注入自定义 UI 组件 |
+| **数据源** | 接入外部数据系统（CRM、项目管理工具）作为任务来源 |
+
+### C.2 核心架构
+
+插件系统采用 **Module Federation（模块联邦）** 思路，以 **Sandbox + IPC** 模式隔离插件运行环境，避免恶意或低质量插件影响主应用稳定性。
+
+```
+┌─────────────────────────────────────────────┐
+│                  主应用                       │
+│  ┌─────────────────────────────────────┐   │
+│  │         Plugin Host (插件宿主)         │   │
+│  │  ┌──────────┐  ┌────────────────┐   │   │
+│  │  │ Registry │  │ Sandbox Engine │   │   │
+│  │  │  插件注册表 │  │   沙箱执行引擎   │   │   │
+│  │  └──────────┘  └────────────────┘   │   │
+│  └─────────────────────────────────────┘   │
+│         ↑ IPC 通信 (postMessage)            │
+│  ┌─────────────────────────────────────┐   │
+│  │         Plugin Sandbox (插件沙箱)       │   │
+│  │  - 独立的 JS 执行上下文                 │   │
+│  │  - 受限的 API 访问 (pluginApi)         │   │
+│  │  - 不暴露 window/document            │   │
+│  └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────┘
+              ↓ 插件 Manifest (plugin.json)
+┌─────────────────────────────────────────────┐
+│                 插件包 (.orbit-plugin)         │
+│  ├── plugin.json      # 清单文件             │
+│  ├── entry.js         # 入口脚本             │
+│  ├── manifest.json    # 权限声明             │
+│  └── assets/         # 静态资源             │
+└─────────────────────────────────────────────┘
+```
+
+### C.3 插件 Manifest 规范
+
+每个插件根目录必须包含 `plugin.json`：
+
+```json
+{
+  "id": "priority-badge",
+  "name": "优先级徽章",
+  "version": "1.0.0",
+  "description": "为任务添加可视化优先级标签",
+  "author": "Orbit Community",
+  "permissions": [
+    "task:read",
+    "task:write",
+    "ui:inject",
+    "storage:local"
+  ],
+  "entry": "entry.js",
+  "scope": "task-detail",
+  "hooks": {
+    "onTaskCreated": "handleTaskCreate",
+    "onTaskRendered": "handleTaskRender"
+  }
+}
+```
+
+### C.4 插件 API（pluginApi）
+
+插件通过 `pluginApi` 对象与主应用交互，API 按权限受控：
+
+```typescript
+// pluginApi - 受限 API 子集，按 permissions 授权
+interface PluginApi {
+  // 数据访问
+  tasks: {
+    get(id: string): Promise<Task>;
+    create(input: CreateTaskInput): Promise<Task>;
+    update(id: string, patch: Partial<Task>): Promise<Task>;
+    query(filter: TaskFilter): Promise<Task[]>;
+  };
+  lists: {
+    getAll(): Promise<List[]>;
+  };
+  storage: {
+    get(key: string): Promise<unknown>;
+    set(key: string, value: unknown): Promise<void>;
+  };
+  // UI 扩展
+  ui: {
+    registerTaskBadge(renderer: (task: Task) => React.ReactNode): void;
+    registerTaskAction(action: TaskAction): void;
+    registerSidebarPanel(panel: SidebarPanel): void;
+    showToast(message: string, type: 'info' | 'success' | 'warning'): void;
+  };
+  // 生命周期
+  onActivate(): void;
+  onDeactivate(): void;
+}
+```
+
+### C.5 自定义字段
+
+自定义字段通过插件注册，在 Task 数据模型外附加 `pluginData` JSON 列：
+
+```typescript
+// Task 扩展字段（存储在 task.pluginData[pluginId] 中）
+interface TaskPluginData {
+  [pluginId: string]: {
+    [fieldKey: string]: unknown;
+  };
+}
+
+// 插件注册自定义字段定义
+const fieldDefinitions: CustomFieldDefinition[] = [
+  {
+    key: 'priority',
+    label: '优先级',
+    type: 'select',
+    options: ['P0', 'P1', 'P2', 'P3'],
+    defaultValue: 'P2',
+  },
+  {
+    key: 'estimatedHours',
+    label: '预估工时',
+    type: 'number',
+    min: 0,
+    unit: 'h',
+  },
+];
+```
+
+### C.6 工作流自动化
+
+工作流由**触发器 + 条件 + 动作**构成，配置存储在 `workflows` 表：
+
+```typescript
+interface Workflow {
+  id: string;
+  name: string;
+  trigger: WorkflowTrigger;
+  conditions: WorkflowCondition[];
+  actions: WorkflowAction[];
+  isActive: boolean;
+}
+
+interface WorkflowTrigger {
+  type: 'task.created' | 'task.completed' | 'task.dueSoon' | 'task.overdue';
+  listId?: string;
+}
+
+interface WorkflowCondition {
+  field: string;
+  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'contains';
+  value: unknown;
+}
+
+interface WorkflowAction {
+  type: 'notify' | 'webhook' | 'updateField' | 'moveToList';
+  config: Record<string, unknown>;
+}
+```
+
+### C.7 插件加载流程
+
+```
+用户启用插件
+     ↓
+PluginHost.readManifest(plugin.json)
+     ↓
+校验签名 / 检查权限声明
+     ↓
+SandboxEngine.createContext(pluginId)
+     ↓
+加载 entry.js，注入受限 pluginApi
+     ↓
+调用 plugin.onActivate()
+     ↓
+注册 UI 扩展点 / 订阅触发器事件
+     ↓
+插件就绪 ←→ 卸载时调用 onDeactivate()
+```
+
+### C.8 安全模型
+
+| 措施 | 说明 |
+|------|------|
+| 沙箱执行 | 插件运行在独立的 `vm` 或 `iframe` 上下文中 |
+| 权限最小化 | 插件只能访问 Manifest 中声明的 API |
+| 数据隔离 | 插件数据存储在 `pluginData` 命名空间下，不污染核心数据 |
+| 签名验证 | 插件包需经主应用签名验证，防止篡改 |
+| 资源限制 | 插件内存/CPU 受限，超时自动终止 |
+
+### C.9 插件目录结构（待实现）
+
+```
+packages/
+└── plugin-system/              # 插件核心包
+    ├── src/
+    │   ├── host/
+    │   │   ├── plugin-registry.ts    # 插件注册与管理
+    │   │   ├── sandbox-engine.ts      # 沙箱执行引擎
+    │   │   ├── plugin-api.ts         # 受限 API 定义
+    │   │   └── lifecycle.ts          # 插件生命周期管理
+    │   ├── sandbox/
+    │   │   └── vm-context.ts         # VM 隔离上下文
+    │   ├── store/
+    │   │   ├── workflow-engine.ts    # 工作流引擎
+    │   │   └── custom-field.ts       # 自定义字段管理
+    │   └── index.ts
+    └── plugin-template/              # 插件开发模板
+        ├── plugin.json
+        ├── entry.ts
+        └── tsconfig.json
+```
+
+### C.10 演进计划
+
+```
+Phase C.1：插件基础框架（PluginHost + Sandbox）
+Phase C.2：自定义字段 API + 存储
+Phase C.3：UI 扩展点注册
+Phase C.4：工作流自动化引擎
+Phase C.5：插件市场与签名验证
+```
+
+---
+
+*文档版本：v0.2.0 | 最后更新：2026-05-04*

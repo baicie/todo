@@ -25,10 +25,13 @@
     "lucide-react": "^1.14.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
+    "@baicie/orbit-utils": "workspace:*",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "rolldown": "1.0.0-rc.18",

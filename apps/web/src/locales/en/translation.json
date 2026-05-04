@@ -85,5 +85,13 @@
     "installDesc": "Install for faster access and offline support.",
     "install": "Install",
     "dismiss": "Later"
+  },
+  "batch": {
+    "selected": "selected",
+    "clearSelection": "Clear selection",
+    "complete": "Complete",
+    "important": "Important",
+    "myDay": "My Day",
+    "delete": "Delete"
   }
 }

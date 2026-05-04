@@ -71,6 +71,8 @@ export function useCreateTask() {
         listId: input.listId ?? null,
         userId: null,
         steps: [],
+        sortOrder: input.sortOrder ?? Date.now(),
+        tagIds: input.tagIds ?? [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

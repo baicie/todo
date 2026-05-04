@@ -3,6 +3,7 @@ import { Layout } from './components/Layout';
 import { MainContent } from './components/MainContent';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { Settings } from './pages/Settings';
 import { useAuth } from './contexts/AuthContext';
 import type { JSX } from 'react';
 
@@ -39,6 +40,7 @@ function App() {
       >
         <Route index element={<Navigate to="/tasks/my-day" replace />} />
         <Route path="tasks/:listId" element={<MainContent />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
   );

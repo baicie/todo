@@ -12,7 +12,11 @@ export interface TaskListShortcutsParams {
   onOpenCommandPalette: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
+  onOpenShortcutsHelp: () => void;
   onAddTask: () => void;
+  onOpenTaskDetail: (id: string) => void;
+  onDuplicateTask: (task: Task) => void;
+  onToggleSidebar: () => void;
   onNavigate: (path: string) => void;
 }
 
@@ -69,7 +73,11 @@ export function useTaskListShortcuts(params: TaskListShortcutsParams): TaskListS
         onOpenCommandPalette,
         onOpenSettings,
         onOpenSearch,
+        onOpenShortcutsHelp,
         onAddTask,
+        onOpenTaskDetail,
+        onDuplicateTask,
+        onToggleSidebar,
         onNavigate,
       } = paramsRef.current;
       void _onSelectTask;
@@ -95,6 +103,33 @@ export function useTaskListShortcuts(params: TaskListShortcutsParams): TaskListS
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         onOpenSettings();
+        return;
+      }
+      // ? — Shortcuts help
+      if (e.key === '?' && !inInput) {
+        e.preventDefault();
+        onOpenShortcutsHelp();
+        return;
+      }
+      // L — Toggle sidebar
+      if (e.key === 'l' && !e.metaKey && !e.ctrlKey && !e.altKey && !inInput) {
+        e.preventDefault();
+        onToggleSidebar();
+        return;
+      }
+      // Ctrl+D — Duplicate task
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'd') {
+        if (!selectedTaskId) return;
+        const selectedTask = tasks.find((t) => t.id === selectedTaskId);
+        if (!selectedTask) return;
+        e.preventDefault();
+        onDuplicateTask(selectedTask);
+        return;
+      }
+      // Ctrl+Shift+N — Quick new task
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        onAddTask();
         return;
       }
 
@@ -194,13 +229,14 @@ export function useTaskListShortcuts(params: TaskListShortcutsParams): TaskListS
         onToggleImportant(selectedTask);
         return;
       }
+      if (e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        if (selectedTaskId) onOpenTaskDetail(selectedTaskId);
+        return;
+      }
       if (e.key.toLowerCase() === 'm') {
         e.preventDefault();
         onToggleMyDay(selectedTask);
-        return;
-      }
-      if (e.key.toLowerCase() === 'e') {
-        e.preventDefault();
         return;
       }
       if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -210,6 +246,7 @@ export function useTaskListShortcuts(params: TaskListShortcutsParams): TaskListS
       }
       if (e.key === 'Enter') {
         e.preventDefault();
+        if (selectedTaskId) onOpenTaskDetail(selectedTaskId);
         return;
       }
     }

@@ -27,6 +27,8 @@ import configuration from './common/config/configuration';
 import { configValidationSchema } from './common/config/config.schema';
 import { AuditModule } from './audit/audit.module';
 import { DatabaseModule } from './database/database.module';
+import { TagsModule } from './tags/tags.module';
+import { SharesModule } from './shares/shares.module';
 
 @Module({
   imports: [
@@ -131,6 +133,8 @@ import { DatabaseModule } from './database/database.module';
     UploadsModule,
     ListsModule,
     TasksModule,
+    TagsModule,
+    SharesModule,
     // 系统模块
     HealthModule,
     LanguageModule,

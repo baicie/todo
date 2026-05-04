@@ -12,10 +12,33 @@
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "orbitTasks",
+          "name": "Orbit Tasks",
+          "icon": "$(checklist)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "orbitTasks",
+        "contents": "No tasks yet. Run 'Orbit: Add Task' to create one."
+      }
+    ],
     "commands": [
       {
         "command": "orbit-vscode-ext.helloWorld",
-        "title": "Hello World"
+        "title": "Orbit: Overview"
+      },
+      {
+        "command": "orbit-vscode-ext.addTask",
+        "title": "Orbit: Add Task"
+      },
+      {
+        "command": "orbit-vscode-ext.refreshTasks",
+        "title": "Orbit: Refresh"
       }
     ]
   },
@@ -33,6 +56,8 @@
     "@baicie/orbit-tsconfig": "workspace:*"
   },
   "dependencies": {
+    "@baicie/orbit": "workspace:*",
+    "@baicie/orbit-hooks": "workspace:*",
     "@baicie/orbit-utils": "workspace:*"
   }
 }
