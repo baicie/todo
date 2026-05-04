@@ -17,13 +17,13 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "axios": "^1.15.1",
+    "axios": "^1.16.0",
     "dexie": "^4.4.2",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
-    "rolldown": "1.0.0-rc.16",
+    "rolldown": "1.0.0-rc.18",
     "typescript": "^6.0.3"
   }
 }

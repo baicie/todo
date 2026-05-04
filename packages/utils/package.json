@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
-    "rolldown": "1.0.0-rc.16",
+    "rolldown": "1.0.0-rc.18",
     "typescript": "^6.0.3"
   }
 }

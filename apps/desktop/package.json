@@ -14,26 +14,26 @@
     "@baicie/orbit": "workspace:*",
     "@baicie/orbit-ui": "workspace:*",
     "@baicie/orbit-utils": "workspace:*",
-    "@tanstack/react-query": "^5.99.2",
+    "@tanstack/react-query": "^5.100.9",
     "framer-motion": "^12.38.0",
-    "i18next": "^26.0.6",
+    "i18next": "^26.0.8",
     "i18next-browser-languagedetector": "^8.2.1",
-    "lucide-react": "^1.8.0",
+    "lucide-react": "^1.14.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-i18next": "^17.0.4",
-    "react-router-dom": "^7.14.1"
+    "react-i18next": "^17.0.6",
+    "react-router-dom": "^7.14.2"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/cli": "^2.10.1",
-    "@tailwindcss/vite": "^4.2.3",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/cli": "^2.11.0",
+    "@tailwindcss/vite": "^4.2.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "tailwindcss": "^4.2.3",
+    "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",
-    "vite": "^8.0.9"
+    "vite": "^8.0.10"
   }
 }

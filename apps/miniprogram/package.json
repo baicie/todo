@@ -52,8 +52,8 @@
     "@tarojs/shared": "4.2.0",
     "@tarojs/taro": "4.2.0",
     "@tarojs/taro-loader": "4.2.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",
@@ -64,11 +64,11 @@
     "@types/react": "^19.2.14",
     "@types/webpack-env": "^1.18.8",
     "babel-preset-taro": "4.2.0",
-    "eslint": "^10.2.1",
+    "eslint": "^10.3.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "react-refresh": "^0.18.0",
-    "stylelint": "^17.8.0",
+    "stylelint": "^17.10.0",
     "typescript": "^6.0.3"
   }
 }

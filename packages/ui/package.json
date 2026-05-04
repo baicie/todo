@@ -22,7 +22,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
-    "lucide-react": "^1.8.0",
+    "lucide-react": "^1.14.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "tailwind-merge": "^3.5.0"
@@ -31,7 +31,7 @@
     "@baicie/orbit-tsconfig": "workspace:*",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "rolldown": "1.0.0-rc.16",
+    "rolldown": "1.0.0-rc.18",
     "typescript": "^6.0.3"
   }
 }

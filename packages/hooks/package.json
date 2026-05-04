@@ -19,7 +19,7 @@
   "dependencies": {
     "@baicie/orbit": "workspace:*",
     "@baicie/orbit-utils": "workspace:*",
-    "@tanstack/react-query": "^5.99.2"
+    "@tanstack/react-query": "^5.100.9"
   },
   "peerDependencies": {
     "react": "^19.0.0"
@@ -27,7 +27,7 @@
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
     "@types/react": "^19.2.14",
-    "rolldown": "1.0.0-rc.16",
+    "rolldown": "1.0.0-rc.18",
     "typescript": "^6.0.3"
   }
 }
