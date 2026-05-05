@@ -208,7 +208,7 @@ export function Sidebar({ onItemClick }: SidebarProps) {
               onChange={(e) => setNewListTitle(e.target.value)}
               placeholder={t('sidebar.newList')}
               autoFocus
-              className="w-full px-3 py-2 border border-[var(--theme-primary)] rounded focus:outline-none text-sm bg-white text-gray-900"
+              className="w-full px-3 py-2 border-none shadow-none bg-transparent focus-visible:outline-none rounded text-sm bg-white text-gray-900"
               onBlur={() => {
                 if (!newListTitle.trim()) setIsCreating(false);
               }}

@@ -23,7 +23,18 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { notificationService, useList, useSync, useTask } from '@baicie/orbit-hooks';
 import { useEffect, useRef, useState } from 'react';
-import { Button, Input } from '@baicie/orbit-ui';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  Button,
+  Input,
+} from '@baicie/orbit-ui';
 
 type ThemeMode = 'system' | 'light' | 'dark';
 type TabId = 'profile' | 'appearance' | 'data' | 'security';
@@ -98,6 +109,7 @@ export function Settings() {
 
   const { data: tasks = [] } = useTask();
   const { data: lists = [] } = useList();
+  const [clearDataConfirmOpen, setClearDataConfirmOpen] = useState(false);
 
   const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
     { id: 'profile', label: '个人资料', icon: <User size={16} /> },
@@ -562,13 +574,7 @@ export function Settings() {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => {
-                            if (confirm('确定要清除所有本地数据吗？此操作不可撤销！')) {
-                              indexedDB.deleteDatabase('OrbitDB');
-                              localStorage.clear();
-                              window.location.href = '/';
-                            }
-                          }}
+                          onClick={() => setClearDataConfirmOpen(true)}
                         >
                           <Trash2 size={12} />
                           清除数据
@@ -582,6 +588,31 @@ export function Settings() {
           </div>
         </div>
       </div>
+
+      {/* Clear Data Confirmation Dialog */}
+      <AlertDialog open={clearDataConfirmOpen} onOpenChange={setClearDataConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>清除所有数据</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要清除所有本地数据吗？此操作不可撤销！
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                indexedDB.deleteDatabase('OrbitDB');
+                localStorage.clear();
+                window.location.href = '/';
+              }}
+              className="bg-red-500 hover:bg-red-600 text-white"
+            >
+              确认清除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

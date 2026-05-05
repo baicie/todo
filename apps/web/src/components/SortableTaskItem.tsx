@@ -43,7 +43,7 @@ export function SortableTaskItem({
   };
 
   const getDueDateText = (dateStr?: string | null) => {
-    if (!dateStr) return { text: '-', isOverdue: false };
+    if (!dateStr) return { text: '', isOverdue: false };
     const date = new Date(dateStr);
     const today = new Date();
     const yesterday = new Date(today);

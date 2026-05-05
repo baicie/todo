@@ -16,9 +16,9 @@ import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Sidebar } from './Sidebar';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { ContextMenu } from './ContextMenu';
-import { Sidebar } from './Sidebar';
 import { SortableTaskList } from './SortableTaskList';
 import { BatchActionsBar } from './BatchActionsBar';
 import {
@@ -45,6 +45,7 @@ import { ShortcutsHelp } from './ShortcutsHelp';
 import { DatePicker } from './DatePicker';
 import { ShareDialog } from './ShareDialog';
 import { useAppEvent } from '../hooks/useAppEvents';
+import { useSidebar } from '../contexts/SidebarContext';
 
 export const MainContent = () => {
   const { listId } = useParams();
@@ -56,7 +57,6 @@ export const MainContent = () => {
   const [isCompletedCollapsed, setIsCompletedCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: Task } | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
@@ -69,6 +69,7 @@ export const MainContent = () => {
   const [hasReordered, setHasReordered] = useState(false);
   const [activeDatePickerTaskId, setActiveDatePickerTaskId] = useState<string | null>(null);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const { isMobileOpen, openMobile, closeMobile, toggleMobile } = useSidebar();
 
   const filter = buildFilter(activeListId);
   const { data: tasks = [] } = useTask(filter);
@@ -107,7 +108,7 @@ export const MainContent = () => {
     onDuplicateTask: (task) => {
       createTask.mutate({ title: task.title, listId: task.listId ?? undefined });
     },
-    onToggleSidebar: () => setIsSidebarOpen((v) => !v),
+    onToggleSidebar: () => toggleMobile(),
     onNavigate: navigate,
   });
 
@@ -203,7 +204,7 @@ export const MainContent = () => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden text-gray-600 hover:bg-gray-100"
-                onClick={() => setIsSidebarOpen(true)}
+                onClick={openMobile}
               >
                 <Menu size={24} />
               </Button>
@@ -321,7 +322,11 @@ export const MainContent = () => {
                 value={newTask}
                 onChange={(e) => setNewTask(e.target.value)}
                 onFocus={() => setIsInputFocused(true)}
-                onBlur={() => !newTask && setIsInputFocused(false)}
+                onBlur={(e) => {
+                  if (!newTask && !e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setIsInputFocused(false);
+                  }
+                }}
                 placeholder={t('main.addTask')}
                 className="flex-1 shadow-none bg-transparent border-none outline-none focus-visible:ring-0 px-0"
               />
@@ -581,14 +586,15 @@ export const MainContent = () => {
 
       <TaskDetailDrawer taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
 
+      {/* Mobile sidebar overlay */}
       <AnimatePresence>
-        {isSidebarOpen && (
+        {isMobileOpen && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsSidebarOpen(false)}
+              onClick={closeMobile}
               className="fixed inset-0 bg-black/20 z-40 md:hidden"
             />
             <motion.div
@@ -598,7 +604,7 @@ export const MainContent = () => {
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
               className="fixed inset-y-0 left-0 z-50 md:hidden"
             >
-              <Sidebar onItemClick={() => setIsSidebarOpen(false)} />
+              <Sidebar onItemClick={closeMobile} />
             </motion.div>
           </>
         )}

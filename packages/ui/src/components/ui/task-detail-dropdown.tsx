@@ -65,34 +65,58 @@ interface TaskDetailDropdownMenuContentProps extends React.HTMLAttributes<HTMLDi
 const TaskDetailDropdownMenuContent = React.forwardRef<
   HTMLDivElement,
   TaskDetailDropdownMenuContentProps
->(({ className, align = 'left', children, ...props }, ref) => {
-  const { open, setOpen } = useDropdownContext();
+>(
+  (
+    {
+      className,
+      align = 'left',
+      children,
+      // 排除与 framer-motion 冲突的 HTML 属性
+      onAnimationStart,
+      onAnimationEnd,
+      onAnimationIteration,
+      onDrag,
+      onDragStart,
+      onDragEnd,
+      onDragOver,
+      onDragEnter,
+      onDragLeave,
+      onDragExit,
+      onDrop,
+      onTransitionEnd,
+      onTransitionStart,
+      ...props
+    },
+    ref,
+  ) => {
+    const { open, setOpen } = useDropdownContext();
 
-  return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden="true" />
-          <motion.div
-            ref={ref}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            transition={{ duration: 0.15 }}
-            className={cn(
-              'absolute left-0 right-0 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1',
-              align === 'right' ? 'left-auto right-0' : 'left-0 right-auto',
-              className,
-            )}
-            {...props}
-          >
-            {children}
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
-  );
-});
+    return (
+      <AnimatePresence>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden="true" />
+            <motion.div
+              ref={ref}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              transition={{ duration: 0.15 }}
+              className={cn(
+                'absolute left-0 right-0 top-full z-30 bg-white rounded-md shadow-lg border border-gray-100 py-1',
+                align === 'right' ? 'left-auto right-0' : 'left-0 right-auto',
+                className,
+              )}
+              {...props}
+            >
+              {children}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    );
+  },
+);
 TaskDetailDropdownMenuContent.displayName = 'TaskDetailDropdownMenuContent';
 
 interface TaskDetailDropdownMenuItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {

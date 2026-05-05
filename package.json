@@ -17,7 +17,7 @@
     "fix": "eslint --fix",
     "format": "prettier --write --cache .",
     "format:check": "prettier --check --cache .",
-    "check": "echo \"Check passed\"",
+    "check": "pnpm -C packages/todo-model exec tsc --noEmit",
     "test-unit": "echo \"No unit tests configured\"",
     "test-e2e": "echo \"No e2e tests configured\"",
     "postinstall": "simple-git-hooks"

@@ -386,33 +386,33 @@ refactor(parser): simplify AST node creation
 
 **`@baicie/orbit-ui` 已有组件：**
 
-| 组件 | 说明 |
-|------|------|
-| `Button` | 按钮（支持 variant/size） |
-| `Input` | 文本输入框 |
-| `Checkbox` | 复选框 |
-| `Select` | 下拉选择 |
-| `Textarea` | 多行文本 |
-| `Switch` | 开关控件 |
-| `Drawer` | 侧边抽屉 |
-| `Modal` | 模态框 |
-| `DatePicker` | 日期选择器 |
-| `Avatar` | 用户头像 |
-| `Badge` | 徽章 |
-| `DropdownMenu` | 下拉菜单 |
-| `ScrollArea` | 滚动区域 |
-| `Separator` | 分割线 |
-| `TaskDetailDropdownMenu` | 任务详情复合下拉菜单 |
-| `TaskCheckbox` | 任务完成复选框 |
-| `ViewModeToggle` | 视图模式切换 |
-| `Toast` | 轻提示 |
-| `MarkdownEditor` | Markdown 编辑器 |
+| 组件                     | 说明                      |
+| ------------------------ | ------------------------- |
+| `Button`                 | 按钮（支持 variant/size） |
+| `Input`                  | 文本输入框                |
+| `Checkbox`               | 复选框                    |
+| `Select`                 | 下拉选择                  |
+| `Textarea`               | 多行文本                  |
+| `Switch`                 | 开关控件                  |
+| `Drawer`                 | 侧边抽屉                  |
+| `Modal`                  | 模态框                    |
+| `DatePicker`             | 日期选择器                |
+| `Avatar`                 | 用户头像                  |
+| `Badge`                  | 徽章                      |
+| `DropdownMenu`           | 下拉菜单                  |
+| `ScrollArea`             | 滚动区域                  |
+| `Separator`              | 分割线                    |
+| `TaskDetailDropdownMenu` | 任务详情复合下拉菜单      |
+| `TaskCheckbox`           | 任务完成复选框            |
+| `ViewModeToggle`         | 视图模式切换              |
+| `Toast`                  | 轻提示                    |
+| `MarkdownEditor`         | Markdown 编辑器           |
 
 **需要补充到 `@baicie/orbit-ui` 的组件：**
 
-| 组件 | 优先级 |
-|------|-------|
-| `Label` | 低 |
+| 组件    | 优先级 |
+| ------- | ------ |
+| `Label` | 低     |
 
 ### 图标复用规范
 
@@ -435,18 +435,18 @@ web / desktop / browser-ext 统一使用 `lucide-react` 作为图标库。图标
 
 ##### 待完成（按优先级）
 
-| 任务 | 优先级 |
-|-----|-------|
-| 拆分 web/TaskDetailDrawer.tsx（~990行） | 高 |
-| 拆分 desktop/TaskDetailDrawer.tsx（~924行） | 高 |
-| 拆分 web/Settings.tsx（~620行） | 高 |
-| 拆分 desktop/Settings.tsx（~544行） | 高 |
-| 拆分 web/Sidebar.tsx（~410行） | 高 |
-| 将 TaskDetailDrawer 下拉菜单替换为 TaskDetailDropdownMenu | 中 |
-| 抽取 useMainContentState 自定义 hook（17个 useState） | 中 |
-| 拆分 desktop/MainContent.tsx（~548行） | 中 |
-| 拆分 desktop/Sidebar.tsx（~226行） | 中 |
-| 添加 `Label` 组件 | 低 |
+| 任务                                                      | 优先级 |
+| --------------------------------------------------------- | ------ |
+| 拆分 web/TaskDetailDrawer.tsx（~990行）                   | 高     |
+| 拆分 desktop/TaskDetailDrawer.tsx（~924行）               | 高     |
+| 拆分 web/Settings.tsx（~620行）                           | 高     |
+| 拆分 desktop/Settings.tsx（~544行）                       | 高     |
+| 拆分 web/Sidebar.tsx（~410行）                            | 高     |
+| 将 TaskDetailDrawer 下拉菜单替换为 TaskDetailDropdownMenu | 中     |
+| 抽取 useMainContentState 自定义 hook（17个 useState）     | 中     |
+| 拆分 desktop/MainContent.tsx（~548行）                    | 中     |
+| 拆分 desktop/Sidebar.tsx（~226行）                        | 中     |
+| 添加 `Label` 组件                                         | 低     |
 
 ## 特别说明
 

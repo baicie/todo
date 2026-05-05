@@ -18,32 +18,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # TypeScript type check (fastest, no caching needed)
-  # ---------------------------------------------------------------------------
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: TypeScript check
-        run: pnpm check
-
-  # ---------------------------------------------------------------------------
-  # Lint + Format check
+  # Lint + Format check (no dependency, fastest)
   # ---------------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
@@ -71,7 +46,7 @@ jobs:
         run: pnpm format:check
 
   # ---------------------------------------------------------------------------
-  # Build all packages in parallel
+  # Build all packages (required for type-checking apps)
   # ---------------------------------------------------------------------------
   build-packages:
     runs-on: ubuntu-latest
@@ -93,7 +68,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Build todo-model
-        run: pnpm --filter "@baicie/orbit" build
+        run: pnpm --filter "orbit" build
 
       - name: Build utils
         run: pnpm --filter "@baicie/orbit-utils" build
@@ -108,9 +83,54 @@ jobs:
         run: pnpm --filter "@baicie/orbit-plugin-system" build
 
   # ---------------------------------------------------------------------------
-  # Build all apps in parallel
+  # TypeScript type check for apps (after packages are built)
+  # ---------------------------------------------------------------------------
+  typecheck-apps:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: TypeScript check Web
+        run: pnpm --filter "orbit-web" exec tsc --noEmit
+
+      - name: TypeScript check Desktop
+        run: pnpm --filter "orbit-desktop" exec tsc --noEmit
+
+      - name: TypeScript check Browser Extension
+        run: pnpm --filter "orbit-browser-ext" exec tsc --noEmit
+
+      - name: TypeScript check Backend
+        run: pnpm --filter "orbit-backend" exec tsc --noEmit
+
+      - name: TypeScript check VSCode Extension
+        run: pnpm --filter "orbit-vscode-ext" exec tsc --noEmit
+
+      - name: TypeScript check Miniprogram
+        run: pnpm --filter "orbit-miniprogram" exec tsc --noEmit
+
+      - name: TypeScript check Mobile
+        run: pnpm --filter "orbit-mobile" typecheck
+
+  # ---------------------------------------------------------------------------
+  # Build all apps (after packages are built)
   # ---------------------------------------------------------------------------
   build-apps:
+    needs: build-packages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -130,22 +150,19 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Build Web
-        run: pnpm build:web
+        run: pnpm --filter "orbit-web" build
 
       - name: Build Desktop
-        run: pnpm build:desktop
+        run: pnpm --filter "orbit-desktop" build
 
       - name: Build Browser Extension
-        run: pnpm build:browser-ext
+        run: pnpm --filter "orbit-browser-ext" build
 
       - name: Build Backend
-        run: pnpm build:backend
+        run: pnpm --filter "orbit-backend" build
 
       - name: Build Miniprogram
-        run: pnpm build:miniprogram
-
-      - name: Typecheck Mobile
-        run: pnpm build:mobile
+        run: pnpm --filter "orbit-miniprogram" build
 
       - name: Compile VSCode Extension
-        run: pnpm build:vscode-ext
+        run: pnpm --filter "orbit-vscode-ext" compile

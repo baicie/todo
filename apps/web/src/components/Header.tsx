@@ -1,4 +1,4 @@
-import { Bell, Grid, HelpCircle, LogOut, Search, Settings } from 'lucide-react';
+import { Bell, Grid, HelpCircle, LogOut, Menu, Search, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -7,20 +7,31 @@ import { useAuth } from '../contexts/AuthContext';
 import { NotificationPanel } from './NotificationPanel';
 import { SearchPanel } from './SearchPanel';
 import { useNotifications } from '@baicie/orbit-hooks';
+import { useSidebar } from '../contexts/SidebarContext';
 
 export const Header = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { unreadCount } = useNotifications();
+  const { toggleCollapse } = useSidebar();
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   return (
     <>
       <header className="h-12 bg-[var(--theme-primary)] text-white flex items-center justify-between px-3 z-50 relative shadow-sm">
-        {/* Left: Logo */}
-        <div className="flex items-center gap-4">
+        {/* Left: Logo & Sidebar Toggle */}
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleCollapse}
+            className="p-1.5 text-white/80 hover:text-white hover:bg-white/10"
+            title="切换侧边栏"
+          >
+            <Menu size={20} />
+          </Button>
           <div className="flex items-center gap-2 font-semibold text-lg cursor-pointer">
             <Grid size={20} />
             <span>{t('app.title')}</span>

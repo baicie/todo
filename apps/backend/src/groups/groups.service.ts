@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Group } from './entities/group.entity';
+import { List } from '../lists/entities/list.entity';
 import { CreateGroupDto, UpdateGroupDto } from './dto/create-group.dto';
 import { User } from '../users/entities/user.entity';
 
@@ -57,7 +58,30 @@ export class GroupsService {
 
   async remove(id: string, user: User) {
     const group = await this.findOne(id, user);
-    return this.groupsRepository.remove(group);
+
+    await this.groupsRepository.manager.transaction(async (manager) => {
+      const groupLists = await manager.find(List, {
+        where: { groupId: id },
+      });
+
+      const ungroupedLists = await manager
+        .createQueryBuilder(List, 'list')
+        .where('list.groupId IS NULL')
+        .andWhere('list.userId = :userId', { userId: user.id })
+        .getMany();
+
+      const maxSortOrder = ungroupedLists.reduce((max, l) => Math.max(max, l.sortOrder), -1);
+
+      for (let i = 0; i < groupLists.length; i++) {
+        await manager.update(
+          List,
+          { id: groupLists[i].id },
+          { groupId: null, sortOrder: maxSortOrder + 1 + i },
+        );
+      }
+
+      await manager.remove(group);
+    });
   }
 
   async updateSortOrders(updates: { id: string; sortOrder: number }[], user: User) {

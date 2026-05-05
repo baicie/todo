@@ -25,7 +25,18 @@ import {
 import { useState } from 'react';
 import type { Group, List } from '@baicie/orbit';
 import { useTagsEnabled } from '../hooks/useTagsEnabled';
-import { Button, Input } from '@baicie/orbit-ui';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  Button,
+  Input,
+} from '@baicie/orbit-ui';
 
 export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
   const { t } = useTranslation();
@@ -40,6 +51,7 @@ export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [deleteConfirmGroupId, setDeleteConfirmGroupId] = useState<string | null>(null);
   const tagsEnabled = useTagsEnabled();
 
   const { data: lists = [] } = useList();
@@ -224,16 +236,12 @@ export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
                       tabIndex={0}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`删除分组「${group.name}」？清单不会被删除。`)) {
-                          deleteGroupMutation.mutate(group.id);
-                        }
+                        setDeleteConfirmGroupId(group.id);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.stopPropagation();
-                          if (confirm(`删除分组「${group.name}」？清单不会被删除。`)) {
-                            deleteGroupMutation.mutate(group.id);
-                          }
+                          setDeleteConfirmGroupId(group.id);
                         }
                       }}
                       className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-opacity cursor-pointer"
@@ -385,7 +393,7 @@ export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
               onChange={(e) => setNewListTitle(e.target.value)}
               placeholder={t('sidebar.newList')}
               autoFocus
-              className="w-full"
+              className="w-full border-none shadow-none bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 px-0"
               onBlur={() => {
                 if (!newListTitle.trim()) setIsCreating(false);
               }}
@@ -402,6 +410,38 @@ export const Sidebar = ({ onItemClick }: { onItemClick?: () => void }) => {
           </Button>
         )}
       </div>
+
+      {/* Delete Group Confirmation Dialog */}
+      <AlertDialog
+        open={deleteConfirmGroupId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmGroupId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除分组</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除分组「{allGroups.find((g) => g.id === deleteConfirmGroupId)?.name}
+              」吗？清单不会被删除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteConfirmGroupId) {
+                  deleteGroupMutation.mutate(deleteConfirmGroupId);
+                  setDeleteConfirmGroupId(null);
+                }
+              }}
+              className="bg-red-500 hover:bg-red-600 text-white"
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

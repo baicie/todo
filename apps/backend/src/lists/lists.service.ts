@@ -13,9 +13,24 @@ export class ListsService {
   ) {}
 
   async create(createListDto: CreateListDto, user: User) {
+    const { groupId } = createListDto;
+
+    const queryBuilder = this.listsRepository
+      .createQueryBuilder('list')
+      .where('list.userId = :userId', { userId: user.id });
+
+    if (groupId) {
+      queryBuilder.andWhere('list.groupId = :groupId', { groupId });
+    } else {
+      queryBuilder.andWhere('list.groupId IS NULL');
+    }
+
+    const maxOrder = await queryBuilder.select('MAX(list.sortOrder)', 'max').getRawOne();
+
     const list = this.listsRepository.create({
       ...createListDto,
       user,
+      sortOrder: (maxOrder?.max ?? -1) + 1,
     });
     return this.listsRepository.save(list);
   }

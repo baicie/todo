@@ -520,6 +520,10 @@ class LocalListStorageImpl implements IListStorage {
   }
 
   async createList(input: CreateListInput): Promise<List> {
+    const allLists = await db.lists.toArray();
+    const sameGroupLists = allLists.filter((l) => l.groupId === (input.groupId ?? null));
+    const maxSortOrder = sameGroupLists.reduce((max, l) => Math.max(max, l.sortOrder), -1);
+
     const list: List = {
       id: uuidv4(),
       title: input.title,
@@ -528,7 +532,7 @@ class LocalListStorageImpl implements IListStorage {
       isSmart: false,
       userId: null,
       groupId: input.groupId ?? null,
-      sortOrder: 0,
+      sortOrder: maxSortOrder + 1,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -682,12 +686,15 @@ class LocalGroupStorageImpl implements IGroupStorage {
   }
 
   async createGroup(input: CreateGroupInput): Promise<Group> {
+    const allGroups = await db.groups.toArray();
+    const maxSortOrder = allGroups.reduce((max, g) => Math.max(max, g.sortOrder), -1);
+
     const group: Group = {
       id: uuidv4(),
       name: input.name,
       icon: input.icon ?? null,
       color: input.color ?? '#6366f1',
-      sortOrder: 0,
+      sortOrder: maxSortOrder + 1,
       userId: null,
       lists: [],
       createdAt: now(),
@@ -706,7 +713,21 @@ class LocalGroupStorageImpl implements IGroupStorage {
   }
 
   async deleteGroup(id: string): Promise<void> {
-    await db.groups.delete(id);
+    await db.transaction('rw', db.groups, db.lists, async () => {
+      const groupLists = await db.lists.where('groupId').equals(id).toArray();
+      const ungroupedLists = await db.lists.filter((l) => !l.groupId).toArray();
+      const maxSortOrder = ungroupedLists.reduce((max, l) => Math.max(max, l.sortOrder), -1);
+
+      for (let i = 0; i < groupLists.length; i++) {
+        await db.lists.update(groupLists[i].id, {
+          groupId: null,
+          sortOrder: maxSortOrder + 1 + i,
+          updatedAt: now(),
+        });
+      }
+
+      await db.groups.delete(id);
+    });
   }
 }
 

@@ -249,6 +249,7 @@ export default tseslint.config(
       'packages/utils/src/**/*.ts',
       'packages/hooks/src/**/*.ts',
       'packages/ui/src/**/*.ts',
+      'packages/plugin-system/src/**/*.ts',
     ],
     extends: [tseslint.configs.base, eslintConfigPrettier],
     plugins: {

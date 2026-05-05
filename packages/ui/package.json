@@ -15,7 +15,8 @@
   "scripts": {
     "build": "rolldown -c && tsc --emitDeclarationOnly -p tsconfig.json",
     "dev": "rolldown -w -c",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",

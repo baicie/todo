@@ -5,8 +5,13 @@
  */
 
 import type { ReactNode } from 'react';
-import type { PluginManifest, PluginScope, PluginPermission } from '../types';
-import type { TaskAction, SidebarPanel } from '../types';
+import type {
+  PluginManifest,
+  PluginPermission,
+  PluginScope,
+  SidebarPanel,
+  TaskAction,
+} from '../types';
 
 export type PluginStatus = 'pending' | 'loading' | 'active' | 'error' | 'disabled';
 

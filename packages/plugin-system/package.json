@@ -9,7 +9,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@baicie/orbit-utils": "workspace:*"

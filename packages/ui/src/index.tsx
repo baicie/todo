@@ -19,3 +19,4 @@ export * from './components/ui/switch';
 export * from './components/ui/task-detail-dropdown';
 export * from './components/ui/task-checkbox';
 export * from './components/ui/view-mode-toggle';
+export * from './components/ui/alert-dialog';
