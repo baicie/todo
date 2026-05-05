@@ -202,7 +202,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
   return (
     <>
       <div className="px-4 pt-4 z-10 bg-[#faf9f8]">
-        <div className="bg-white rounded-md shadow-sm p-4">
+        <div className="bg-white rounded-md p-4">
           <div
             className="flex items-start gap-3 cursor-grab active:cursor-grabbing select-none"
             draggable
@@ -247,7 +247,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
 
       <div className="flex-1 overflow-y-auto px-4 pb-4 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent">
         <div className="space-y-4">
-          <div className="bg-white rounded-md shadow-sm p-4">
+          <div className="bg-white rounded-md p-4">
             <div>
               {task.steps
                 ?.sort(
@@ -334,19 +334,27 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               }`}
             >
               <Sun size={18} />
-              <span>{task.addToMyDay ? t('drawer.addedToMyDay') : t('drawer.addToMyDay')}</span>
+              <span className="flex-1 text-left">
+                {task.addToMyDay ? t('drawer.addedToMyDay') : t('drawer.addToMyDay')}
+              </span>
               {task.addToMyDay && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="ml-auto text-gray-400 hover:text-gray-600"
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="inline-flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 cursor-pointer p-1 hover:bg-gray-100 transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     updateField({ addToMyDay: false });
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation();
+                      updateField({ addToMyDay: false });
+                    }
+                  }}
                 >
                   <X size={16} />
-                </Button>
+                </span>
               )}
             </Button>
           </div>

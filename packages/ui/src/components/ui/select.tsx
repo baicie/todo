@@ -38,7 +38,7 @@ const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             disabled={disabled}
             className={cn(
               'flex h-9 w-full appearance-none rounded-md border border-input bg-transparent px-3 pr-8 py-1 text-sm shadow-sm',
-              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              'focus-visible:outline-none',
               'disabled:cursor-not-allowed disabled:opacity-50',
               !value && 'text-muted-foreground',
             )}
