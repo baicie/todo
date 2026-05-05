@@ -2,7 +2,6 @@ import {
   Bell,
   Calendar,
   Check,
-  Circle,
   File as FileIcon,
   Paperclip,
   Plus,
@@ -29,7 +28,7 @@ import {
   useUpdateStep,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import { Button, Input } from '@baicie/orbit-ui';
+import { Button, Input, TaskCheckbox } from '@baicie/orbit-ui';
 import type { Tag as TagType, TaskCategory } from '@baicie/orbit';
 import { useTagsEnabled } from '../hooks/useTagsEnabled';
 import { useAppDnD } from '../contexts/AppDnDContext';
@@ -215,20 +214,12 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               endTaskDrag();
             }}
           >
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => toggleComplete(task)}
-              className="mt-1 text-gray-400 hover:text-[var(--theme-primary)] transition-colors"
-            >
-              {task.isCompleted ? (
-                <div className="w-6 h-6 rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
-                  <Check size={16} className="text-white" strokeWidth={3} />
-                </div>
-              ) : (
-                <Circle size={24} />
-              )}
-            </Button>
+            <TaskCheckbox
+              checked={task.isCompleted}
+              onChange={() => toggleComplete(task)}
+              size="md"
+              className="mt-1"
+            />
             <div className="flex-1">
               <Input
                 type="text"
@@ -270,26 +261,17 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
                       editingStepId === step.id ? 'bg-gray-100' : ''
                     }`}
                   >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={(e) => {
-                        e.stopPropagation();
+                    <TaskCheckbox
+                      checked={step.isCompleted}
+                      onChange={() => {
                         updateStep.mutate({
                           stepId: step.id,
                           input: { isCompleted: !step.isCompleted },
                         });
                       }}
-                      className="text-gray-400 hover:text-[var(--theme-primary)] transition-colors p-1"
-                    >
-                      {step.isCompleted ? (
-                        <div className="w-[18px] h-[18px] rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
-                          <Check size={12} className="text-white" strokeWidth={3} />
-                        </div>
-                      ) : (
-                        <Circle size={18} />
-                      )}
-                    </Button>
+                      size="sm"
+                      className="text-gray-400"
+                    />
 
                     {editingStepId === step.id ? (
                       <Input
@@ -374,7 +356,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               <Button
                 variant="ghost"
                 onClick={() => setIsRemindMenuOpen(!isRemindMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center justify-start gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
                 <Bell size={18} />
                 <span>
@@ -494,7 +476,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               <Button
                 variant="ghost"
                 onClick={() => setIsDueDateMenuOpen(!isDueDateMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center justify-start gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
                 <Calendar size={18} />
                 {(() => {
@@ -606,7 +588,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               <Button
                 variant="ghost"
                 onClick={() => setIsRepeatMenuOpen(!isRepeatMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                className="flex items-center justify-start gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 <Repeat size={18} />
                 <span>{getRepeatText(task.repeatPattern)}</span>
@@ -667,7 +649,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
               <Button
                 variant="ghost"
                 onClick={() => setIsCategoryMenuOpen(!isCategoryMenuOpen)}
-                className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                className="flex items-center justify-start gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
                 <Tag size={18} />
                 <span>{getCategoryText(task.category)}</span>
@@ -730,7 +712,7 @@ const TaskDetailContent = ({ taskId, onClose }: TaskDetailContentProps) => {
                 <Button
                   variant="ghost"
                   onClick={() => setIsTagMenuOpen(!isTagMenuOpen)}
-                  className="flex items-center gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
+                  className="flex items-center justify-start gap-3 w-full p-4 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-b border-gray-100"
                 >
                   <Tag size={18} />
                   <span>

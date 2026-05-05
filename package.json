@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter orbit-backend dev",
+    "dev": "pnpm --parallel --filter orbit-backend --filter orbit-web dev",
+    "dev:web": "pnpm --filter orbit-web dev",
     "build": "pnpm -r build",
     "build:web": "pnpm --filter orbit-web build",
     "build:desktop": "pnpm --filter orbit-desktop build",
@@ -50,10 +51,10 @@
     "rolldown-plugin-dts": "^0.24.1",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.1"
+    "typescript-eslint": "^8.59.2"
   },
   "dependencies": {
     "vite-plugin-pwa": "^1.2.0",
-    "workbox-window": "^7.4.0"
+    "workbox-window": "^7.4.1"
   }
 }

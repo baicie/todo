@@ -2,7 +2,6 @@ import {
   Bell,
   Calendar,
   Check,
-  Circle,
   File as FileIcon,
   Paperclip,
   Plus,
@@ -28,7 +27,7 @@ import {
   useUpdateStep,
   useUpdateTask,
 } from '@baicie/orbit-hooks';
-import { Button, Input, MarkdownEditor } from '@baicie/orbit-ui';
+import { Button, Input, MarkdownEditor, TaskCheckbox } from '@baicie/orbit-ui';
 import type { Tag as TagType, Task, TaskCategory } from '@baicie/orbit';
 
 interface TaskDetailDrawerProps {
@@ -190,20 +189,12 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
       <div className="px-4 pt-4 z-10 bg-[#faf9f8]">
         <div className="bg-white rounded-md shadow-sm p-4">
           <div className="flex items-start gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => toggleComplete(task)}
-              className="mt-1 text-gray-400 hover:text-[var(--theme-primary)]"
-            >
-              {task.isCompleted ? (
-                <div className="w-6 h-6 rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
-                  <Check size={16} className="text-white" strokeWidth={3} />
-                </div>
-              ) : (
-                <Circle size={24} />
-              )}
-            </Button>
+            <TaskCheckbox
+              checked={task.isCompleted}
+              onChange={() => toggleComplete(task)}
+              size="md"
+              className="mt-1"
+            />
             <div className="flex-1">
               <Input
                 type="text"
@@ -245,26 +236,17 @@ const TaskDetailContent = ({ task, onClose }: TaskDetailContentProps) => {
                       editingStepId === step.id ? 'bg-gray-100' : ''
                     }`}
                   >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={(e) => {
-                        e.stopPropagation();
+                    <TaskCheckbox
+                      checked={step.isCompleted}
+                      onChange={() => {
                         updateStep.mutate({
                           stepId: step.id,
                           input: { isCompleted: !step.isCompleted },
                         });
                       }}
-                      className="text-gray-400 hover:text-[var(--theme-primary)] p-1"
-                    >
-                      {step.isCompleted ? (
-                        <div className="w-[18px] h-[18px] rounded-full bg-[var(--theme-primary)] flex items-center justify-center">
-                          <Check size={12} className="text-white" strokeWidth={3} />
-                        </div>
-                      ) : (
-                        <Circle size={18} />
-                      )}
-                    </Button>
+                      size="sm"
+                      className="text-gray-400"
+                    />
 
                     {editingStepId === step.id ? (
                       <Input

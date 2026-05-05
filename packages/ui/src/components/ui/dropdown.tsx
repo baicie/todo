@@ -6,11 +6,45 @@ export interface DropdownProps {
   children: React.ReactNode;
   align?: 'left' | 'right';
   className?: string;
+  triggerMode?: 'click' | 'hover';
+  openDelay?: number;
+  closeDelay?: number;
 }
 
-export function Dropdown({ trigger, children, align = 'right', className }: DropdownProps) {
+export function Dropdown({
+  trigger,
+  children,
+  align = 'right',
+  className,
+  triggerMode = 'click',
+  openDelay = 0,
+  closeDelay = 150,
+}: DropdownProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const openTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimeouts = () => {
+    if (openTimeoutRef.current) {
+      clearTimeout(openTimeoutRef.current);
+      openTimeoutRef.current = null;
+    }
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+  };
+
+  const openMenu = React.useCallback(() => {
+    clearTimeouts();
+    openTimeoutRef.current = setTimeout(() => setIsOpen(true), openDelay);
+  }, [openDelay]);
+
+  const closeMenu = React.useCallback(() => {
+    clearTimeouts();
+    closeTimeoutRef.current = setTimeout(() => setIsOpen(false), closeDelay);
+  }, [closeDelay]);
 
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -27,9 +61,19 @@ export function Dropdown({ trigger, children, align = 'right', className }: Drop
     };
   }, [isOpen]);
 
+  React.useEffect(() => {
+    return () => clearTimeouts();
+  }, []);
+
   return (
     <div ref={containerRef} className={cn('relative inline-block', className)}>
-      <div onClick={() => setIsOpen(!isOpen)}>{trigger}</div>
+      <div
+        onClick={triggerMode === 'click' ? () => setIsOpen((prev) => !prev) : undefined}
+        onMouseEnter={triggerMode === 'hover' ? openMenu : undefined}
+        onMouseLeave={triggerMode === 'hover' ? closeMenu : undefined}
+      >
+        {trigger}
+      </div>
       {isOpen && (
         <div
           className={cn(
@@ -38,6 +82,8 @@ export function Dropdown({ trigger, children, align = 'right', className }: Drop
             align === 'right' ? 'right-0' : 'left-0',
           )}
           onClick={() => setIsOpen(false)}
+          onMouseEnter={triggerMode === 'hover' ? openMenu : undefined}
+          onMouseLeave={triggerMode === 'hover' ? closeMenu : undefined}
         >
           <div className="py-1">{children}</div>
         </div>

@@ -28,7 +28,7 @@
     "react-i18next": "^17.0.6",
     "react-router-dom": "^7.14.2",
     "vite-plugin-pwa": "^1.2.0",
-    "workbox-window": "^7.4.0"
+    "workbox-window": "^7.4.1"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",

@@ -1,8 +1,8 @@
-import { Bell, Grid, HelpCircle, Search, Settings, User } from 'lucide-react';
+import { Bell, Grid, HelpCircle, LogOut, Search, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@baicie/orbit-ui';
+import { Avatar, Button, Dropdown, DropdownItem } from '@baicie/orbit-ui';
 import { useAuth } from '../contexts/AuthContext';
 import { NotificationPanel } from './NotificationPanel';
 import { SearchPanel } from './SearchPanel';
@@ -69,26 +69,25 @@ export const Header = () => {
             )}
           </Button>
 
-          <div className="ml-2 relative group cursor-pointer">
-            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-sm font-medium hover:bg-white/30 transition-colors border border-white/30">
-              {user?.name?.[0]?.toUpperCase() || <User size={16} />}
+          <Dropdown
+            trigger={
+              <Avatar
+                name={user?.name}
+                size="sm"
+                className="cursor-pointer ring-2 ring-white/30 hover:ring-white/50 transition-all"
+              />
+            }
+            triggerMode="hover"
+            closeDelay={200}
+          >
+            <div className="px-3 py-2 border-b border-gray-100">
+              <p className="text-sm font-medium text-gray-900">{user?.name}</p>
+              <p className="text-xs text-gray-500 truncate">{user?.email}</p>
             </div>
-
-            {/* Dropdown Menu */}
-            <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-md shadow-lg py-1 hidden group-hover:block border border-gray-200">
-              <div className="px-4 py-2 border-b border-gray-100">
-                <p className="text-sm font-medium text-gray-900">{user?.name}</p>
-                <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-              </div>
-              <Button
-                onClick={logout}
-                variant="ghost"
-                className="w-full justify-start text-red-600 hover:bg-gray-50"
-              >
-                {t('header.logout')}
-              </Button>
-            </div>
-          </div>
+            <DropdownItem icon={<LogOut size={14} />} danger onClick={logout}>
+              {t('header.logout')}
+            </DropdownItem>
+          </Dropdown>
         </div>
       </header>
 
