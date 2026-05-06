@@ -24,7 +24,8 @@
     "dev:h5": "npm run build:h5 -- --watch",
     "dev:rn": "npm run build:rn -- --watch",
     "dev:qq": "npm run build:qq -- --watch",
-    "dev:quickapp": "npm run build:quickapp -- --watch"
+    "dev:quickapp": "npm run build:quickapp -- --watch",
+    "check": "tsc --noEmit"
   },
   "browserslist": [
     "last 3 versions",
@@ -68,7 +69,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "react-refresh": "^0.18.0",
-    "stylelint": "^17.10.0",
+    "stylelint": "^17.11.0",
     "typescript": "^6.0.3"
   }
 }

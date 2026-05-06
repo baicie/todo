@@ -10,7 +10,9 @@ export class OptionalAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
+  override canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
     const authEnabled = this.configService.get<boolean>('auth.enabled');
 
     if (!authEnabled) {

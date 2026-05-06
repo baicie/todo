@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cn } from '../../lib/utils';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle, XCircle, AlertCircle, Info, X } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, X, XCircle } from 'lucide-react';
 
 export interface ToastProps {
   id: string;
@@ -45,6 +45,7 @@ function Toast({ id, title, description, variant = 'default', duration = 4000 }:
       }, duration);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [id, duration]);
 
   return (

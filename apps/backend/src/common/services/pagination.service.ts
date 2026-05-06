@@ -6,11 +6,11 @@ import { PaginatedResponseDto, PaginationDto } from '../dto/pagination.dto';
 
 @Injectable()
 export class PaginationService {
-  async paginate<T>(
+  async paginate<T extends object>(
     repository: Repository<T>,
     paginationDto: PaginationDto,
     options: FindManyOptions<T> = {},
-    searchFields: (keyof T)[] = [],
+    searchFields: Array<keyof T> = [],
   ): Promise<PaginatedResponseDto<T>> {
     const { page = 1, limit = 10, sortBy, sortOrder = 'DESC', search } = paginationDto;
 
@@ -33,7 +33,7 @@ export class PaginationService {
         findOptions.where = searchConditions.map((condition) => ({
           ...options.where,
           ...condition,
-        })) as any;
+        }));
       } else {
         findOptions.where = searchConditions as any;
       }

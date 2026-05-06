@@ -150,7 +150,7 @@ export class NotificationService {
     if (Notification.permission !== 'granted') return;
 
     const title = task.title;
-    const body = task.description || '任务已到期';
+    const body = task.description ?? '任务已到期';
 
     try {
       const notification = new Notification(title, {

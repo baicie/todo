@@ -31,7 +31,7 @@ export class AuthService {
   }
 
   async validateUserById(userId: number): Promise<User | null> {
-    return await this.usersRepository.findOne({ where: { id: userId } });
+    return this.usersRepository.findOne({ where: { id: userId } });
   }
 
   async login(loginDto: LoginDto) {
@@ -79,7 +79,7 @@ export class AuthService {
       email: registerDto.email,
       age: registerDto.age ?? 18,
       password: hashedPassword,
-      role: registerDto.role || UserRole.USER,
+      role: registerDto.role ?? UserRole.USER,
     });
 
     const savedUser = await this.usersRepository.save(user);

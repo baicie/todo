@@ -20,7 +20,7 @@ export class SqljsPersistenceSubscriber implements OnModuleInit, OnModuleDestroy
   }
 
   onModuleInit() {
-    this.location = this.configService.get<string>('database.location') || 'orbit-db';
+    this.location = this.configService.get<string>('database.location') ?? 'orbit-db';
     if (this.dataSource.options.type === 'sqljs') {
       this.dataSource.subscribers.push(this);
     }
@@ -32,15 +32,15 @@ export class SqljsPersistenceSubscriber implements OnModuleInit, OnModuleDestroy
     }
   }
 
-  afterInsert(event: any) {
+  afterInsert(_event: unknown) {
     this.scheduleSave();
   }
 
-  afterUpdate(event: any) {
+  afterUpdate(_event: unknown) {
     this.scheduleSave();
   }
 
-  afterRemove(event: any) {
+  afterRemove(_event: unknown) {
     this.scheduleSave();
   }
 
@@ -61,6 +61,7 @@ export class SqljsPersistenceSubscriber implements OnModuleInit, OnModuleDestroy
     if (this.dataSource.options.type !== 'sqljs') return;
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sqljsDriver = this.dataSource.driver as any;
       if (sqljsDriver?.database) {
         const data = sqljsDriver.database.export();

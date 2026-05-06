@@ -1,7 +1,7 @@
 import { extname, join } from 'node:path';
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { MulterModule } from '@nestjs/platform-express';
 import { WinstonModule } from 'nest-winston';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -75,8 +75,8 @@ import { SqljsPersistenceSubscriber } from './common/subscribers/sqljs-persisten
         },
         {
           name: 'medium',
-          ttl: configService.get<number>('security.throttle.ttl'),
-          limit: configService.get<number>('security.throttle.limit'),
+          ttl: configService.get<number>('security.throttle.ttl') ?? 60000,
+          limit: configService.get<number>('security.throttle.limit') ?? 100,
         },
         {
           name: 'long',
@@ -88,37 +88,37 @@ import { SqljsPersistenceSubscriber } from './common/subscribers/sqljs-persisten
     // TypeORM 配置
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const dbType = (configService.get<string>('database.type') || 'sqljs') as
+      useFactory: (configService: ConfigService): TypeOrmModuleOptions => {
+        const dbType = (configService.get<string>('database.type') ?? 'sqljs') as
           | 'postgres'
           | 'sqljs'
           | 'mysql'
           | 'sqlite';
-        const dbConfig: Record<string, unknown> = {
+        const dbConfig: TypeOrmModuleOptions = {
           type: dbType,
           autoLoadEntities: true,
-          synchronize: configService.get<boolean>('database.synchronize'),
-          logging: configService.get<boolean>('database.logging'),
+          synchronize: configService.get<boolean>('database.synchronize') ?? true,
+          logging: configService.get<boolean>('database.logging') ?? true,
         };
         if (dbType === 'sqljs') {
           Object.assign(dbConfig, {
-            location: configService.get<string>('database.location') || 'orbit-db',
+            location: configService.get<string>('database.location') ?? 'orbit-db',
             autoSave: true,
           });
         } else if (dbType === 'sqlite') {
           Object.assign(dbConfig, {
-            database: configService.get<string>('database.database'),
+            database: configService.get<string>('database.database') ?? 'orbit-db.sqlite',
           });
         } else {
           Object.assign(dbConfig, {
-            host: configService.get<string>('database.host'),
-            port: configService.get<number>('database.port'),
-            username: configService.get<string>('database.username'),
-            password: configService.get<string>('database.password'),
-            database: configService.get<string>('database.database'),
+            host: configService.get<string>('database.host') ?? 'localhost',
+            port: configService.get<number>('database.port') ?? 5432,
+            username: configService.get<string>('database.username') ?? 'user',
+            password: configService.get<string>('database.password') ?? 'password',
+            database: configService.get<string>('database.database') ?? 'db',
           });
         }
-        return dbConfig as Parameters<typeof TypeOrmModule.forRoot>[0];
+        return dbConfig;
       },
     }),
     // Multer文件上传配置

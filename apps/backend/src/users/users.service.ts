@@ -24,14 +24,14 @@ export class UsersService {
     const user = this.usersRepository.create({
       ...createUserDto,
       password: hashedPassword,
-      role: createUserDto.role || UserRole.USER,
+      role: createUserDto.role ?? UserRole.USER,
     });
 
-    return await this.usersRepository.save(user);
+    return this.usersRepository.save(user);
   }
 
   async findAll(paginationDto: PaginationDto): Promise<PaginatedResponseDto<User>> {
-    return await this.paginationService.paginate(
+    return this.paginationService.paginate(
       this.usersRepository,
       paginationDto,
       {
@@ -62,7 +62,7 @@ export class UsersService {
     const user = await this.findOne(id);
 
     Object.assign(user, updateUserDto);
-    return await this.usersRepository.save(user);
+    return this.usersRepository.save(user);
   }
 
   async remove(id: number): Promise<void> {
@@ -99,15 +99,15 @@ export class UsersService {
       queryBuilder.andWhere('user.role = :role', { role });
     }
 
-    return await this.paginationService.paginateQueryBuilder(
+    return this.paginationService.paginateQueryBuilder(
       queryBuilder,
-      paginationDto || new PaginationDto(),
+      paginationDto ?? new PaginationDto(),
     );
   }
 
   async getStatistics(): Promise<{
     totalUsers: number;
-    usersByRole: { role: string; count: number }[];
+    usersByRole: Array<{ role: string; count: number }>;
     recentUsers: number;
   }> {
     const totalUsers = await this.usersRepository.count();

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
 import { X } from 'lucide-react';
@@ -72,7 +72,7 @@ const Modal = ({
             )}
             style={{ maxHeight: '90vh' }}
           >
-            {(title || showClose) && (
+            {(title ?? showClose) && (
               <div className="flex items-start justify-between p-5 pb-0">
                 <div>
                   {title && <h2 className="text-lg font-semibold text-gray-900">{title}</h2>}

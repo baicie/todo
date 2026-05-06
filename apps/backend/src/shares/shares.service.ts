@@ -112,16 +112,15 @@ export class SharesService {
     const isOwner = userId !== undefined && share.ownerId === userId;
     const permission = isOwner ? 'admin' : share.permission;
 
-    const tasks =
-      share.list.tasks?.map((task) => ({
-        id: task.id,
-        title: task.title,
-        isCompleted: task.isCompleted,
-        isImportant: task.isImportant,
-        dueDate: task.dueDate,
-        myDay: task.addToMyDay,
-        createdAt: task.createdAt,
-      })) ?? [];
+    const tasks = share.list.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      isCompleted: task.isCompleted,
+      isImportant: task.isImportant,
+      dueDate: task.dueDate,
+      myDay: task.addToMyDay,
+      createdAt: task.createdAt,
+    }));
 
     return {
       list: {

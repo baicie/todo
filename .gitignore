@@ -6,6 +6,8 @@ coverage
 logs
 target
 tsconfig.tsbuildinfo
+**/.tsbuildinfo
+**/tsconfig*.tsbuildinfo
 .swc
 dev-dist
 

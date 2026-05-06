@@ -1,10 +1,12 @@
 {
   "extends": "@baicie/orbit-tsconfig/base.json",
   "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
     "outDir": "./dist/types",
     "rootDir": "./src",
-    "moduleResolution": "bundler",
-    "ignoreDeprecations": "6.0"
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

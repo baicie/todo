@@ -36,7 +36,7 @@ export function useSearch(initialFilter?: TaskFilter) {
       results = results.filter(
         (task) =>
           fuzzyMatch(task.title, query) ||
-          (task.description && fuzzyMatch(task.description, query)) ||
+          fuzzyMatch(task.description ?? '', query) ||
           task.steps.some((step) => fuzzyMatch(step.title, query)),
       );
     }
@@ -92,7 +92,7 @@ export function useSearch(initialFilter?: TaskFilter) {
       if (!query.trim()) return true;
       return (
         fuzzyMatch(task.title, query) ||
-        (task.description && fuzzyMatch(task.description, query)) ||
+        fuzzyMatch(task.description ?? '', query) ||
         task.steps.some((step) => fuzzyMatch(step.title, query))
       );
     },

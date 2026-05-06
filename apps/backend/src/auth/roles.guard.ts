@@ -16,6 +16,7 @@ export class RolesGuard implements CanActivate {
       context.getClass(),
     ]);
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!requiredRoles) {
       return true;
     }

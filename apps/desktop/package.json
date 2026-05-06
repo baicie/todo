@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@baicie/orbit": "workspace:*",
@@ -27,7 +28,7 @@
     "react-dom": "^19.2.5",
     "react-hot-toast": "^2.6.0",
     "react-i18next": "^17.0.6",
-    "react-router-dom": "^7.14.2"
+    "react-router-dom": "^7.15.0"
   },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",

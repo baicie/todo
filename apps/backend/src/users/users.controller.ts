@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/await-thenable */
 import {
   Body,
   Controller,
@@ -67,7 +68,7 @@ export class UsersController {
     @Query() paginationDto: PaginationDto,
     @I18nLang() _lang: string,
   ): Promise<PaginatedResponseDto<User>> {
-    return await this.usersService.findAll(paginationDto);
+    return this.usersService.findAll(paginationDto);
   }
 
   @Get('search')
@@ -84,7 +85,7 @@ export class UsersController {
     @Query() paginationDto?: PaginationDto,
     @I18nLang() _lang?: string,
   ) {
-    return await this.usersService.advancedSearch(query, role, paginationDto);
+    return this.usersService.advancedSearch(query, role, paginationDto);
   }
 
   @Get(':id')

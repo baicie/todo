@@ -25,8 +25,8 @@ export interface PluginInstance {
 const pluginRegistry = new Map<string, PluginInstance>();
 
 let taskBadgeRenderers: Array<(task: unknown) => ReactNode> = [];
-let taskActions: Array<TaskAction> = [];
-let sidebarPanels: Array<SidebarPanel> = [];
+let taskActions: TaskAction[] = [];
+let sidebarPanels: SidebarPanel[] = [];
 
 export function registerPlugin(manifest: PluginManifest): void {
   if (pluginRegistry.has(manifest.id)) {
@@ -152,11 +152,11 @@ export function getTaskBadgeRenderers(): Array<(task: unknown) => ReactNode> {
   return taskBadgeRenderers;
 }
 
-export function getTaskActions(): Array<TaskAction> {
+export function getTaskActions(): TaskAction[] {
   return taskActions;
 }
 
-export function getSidebarPanels(): Array<SidebarPanel> {
+export function getSidebarPanels(): SidebarPanel[] {
   return sidebarPanels;
 }
 

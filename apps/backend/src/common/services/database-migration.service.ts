@@ -42,13 +42,13 @@ export class DatabaseMigrationService {
       const executedMap = new Map(executedMigrations.map((m) => [m.name, m]));
 
       return migrations.map((migration) => ({
-        name: (migration as { name?: string }).name || migration.constructor.name,
-        timestamp: (migration as { timestamp?: number }).timestamp || Date.now(),
+        name: (migration as { name?: string }).name ?? migration.constructor.name,
+        timestamp: (migration as { timestamp?: number }).timestamp ?? Date.now(),
         executed: executedMap.has(
-          (migration as { name?: string }).name || migration.constructor.name,
+          (migration as { name?: string }).name ?? migration.constructor.name,
         ),
         executedAt: executedMap.get(
-          (migration as { name?: string }).name || migration.constructor.name,
+          (migration as { name?: string }).name ?? migration.constructor.name,
         )?.executedAt,
       }));
     } catch (error) {
@@ -90,12 +90,12 @@ export class DatabaseMigrationService {
       }
 
       this.logger.error('回滚迁移失败:', error);
-      return { error: err.message || '回滚失败' };
+      return { error: err.message ?? '回滚失败' };
     }
   }
 
   async createBackup(backupName?: string): Promise<BackupInfo | null> {
-    const name = backupName || `backup_${Date.now()}`;
+    const name = backupName ?? `backup_${Date.now()}`;
 
     try {
       if (this.dataSource.options.type === 'sqljs') {
@@ -120,7 +120,7 @@ export class DatabaseMigrationService {
     }
 
     const backupPath = path.join(backupDir, `${name}.db`);
-    const currentDbPath = this.dataSource.options.database || 'database.sqljs';
+    const currentDbPath = this.dataSource.options.database ?? 'database.sqljs';
 
     if (typeof currentDbPath === 'string' && fs.existsSync(currentDbPath)) {
       fs.copyFileSync(currentDbPath, backupPath);
@@ -211,8 +211,8 @@ export class DatabaseMigrationService {
       }
 
       const result = await this.dataSource.query('PRAGMA page_count; PRAGMA page_size;');
-      const pageCount = result[0]?.page_count || 0;
-      const pageSize = result[1]?.page_size || 0;
+      const pageCount = result[0]?.page_count ?? 0;
+      const pageSize = result[1]?.page_size ?? 0;
       const sizeInBytes = pageCount * pageSize;
 
       return {

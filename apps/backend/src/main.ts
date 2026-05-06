@@ -84,7 +84,8 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // 确保上传目录存在
-  ensureUploadDirectory(configService.get<string>('upload.dest'));
+  const uploadDest = configService.get<string>('upload.dest') ?? './uploads';
+  ensureUploadDirectory(uploadDest);
 
   // 使用Winston作为默认logger
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
@@ -97,8 +98,8 @@ async function bootstrap() {
   app.use(compression());
 
   // 全局异常过滤器（注入i18n服务和logger）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app.useGlobalFilters(new GlobalExceptionFilter(i18nService as any, logger as any));
+
+  app.useGlobalFilters(new GlobalExceptionFilter(i18nService, logger));
 
   // 全局响应拦截器
   app.useGlobalInterceptors(new ResponseInterceptor());
@@ -129,9 +130,9 @@ async function bootstrap() {
 
   // 设置API文档
   const config = new DocumentBuilder()
-    .setTitle(configService.get<string>('app.name'))
-    .setDescription(configService.get<string>('app.description'))
-    .setVersion(configService.get<string>('app.version'))
+    .setTitle(configService.get<string>('app.name') ?? 'Orbit API')
+    .setDescription(configService.get<string>('app.description') ?? 'API Documentation')
+    .setVersion(configService.get<string>('app.version') ?? '1.0.0')
     .addBearerAuth() // 添加Bearer认证
     .addApiKey({ type: 'apiKey', name: 'X-Lang', in: 'header' }, 'lang')
     .addTag('用户认证')
@@ -157,7 +158,7 @@ async function bootstrap() {
     console.info('种子数据初始化跳过:', err.message);
   }
 
-  const port = configService.get<number>('port');
+  const port = configService.get<number>('port') ?? 3001;
   await app.listen(port);
 
   const authEnabled = configService.get<boolean>('auth.enabled');

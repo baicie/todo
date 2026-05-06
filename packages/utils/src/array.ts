@@ -10,9 +10,7 @@ export function groupBy<T, K extends string | number>(
   const result: any = {};
   for (const item of array) {
     const key = keyFn(item);
-    if (!result[key]) {
-      result[key] = [];
-    }
+    result[key] ??= [];
     result[key].push(item);
   }
   return result as Record<K, T[]>;
@@ -57,7 +55,7 @@ export function chunk<T>(array: T[], size: number): T[][] {
   return result;
 }
 
-export function flatten<T>(array: (T | T[])[]): T[] {
+export function flatten<T>(array: Array<T | T[]>): T[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return array.reduce<T[]>((acc, val) => acc.concat(Array.isArray(val) ? val : (val as any)), []);
 }
@@ -76,11 +74,11 @@ export function union<T>(arr1: T[], arr2: T[]): T[] {
   return uniq([...arr1, ...arr2]);
 }
 
-export function pluck<T, K extends keyof T>(array: T[], key: K): T[K][] {
+export function pluck<T, K extends keyof T>(array: T[], key: K): Array<T[K]> {
   return array.map((item) => item[key]);
 }
 
-export function compact<T>(array: (T | null | undefined)[]): T[] {
+export function compact<T>(array: Array<T | null | undefined>): T[] {
   return array.filter((item): item is T => item != null);
 }
 

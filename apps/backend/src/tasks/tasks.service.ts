@@ -89,7 +89,7 @@ export class TasksService {
   async update(id: string, updateTaskDto: UpdateTaskDto, user: User) {
     const task = await this.findOne(id, user);
 
-    if (updateTaskDto.listId && updateTaskDto.listId !== task.list?.id) {
+    if (updateTaskDto.listId && updateTaskDto.listId !== task.list.id) {
       const list = await this.listsRepository.findOne({
         where: { id: updateTaskDto.listId, user: { id: user.id } },
       });

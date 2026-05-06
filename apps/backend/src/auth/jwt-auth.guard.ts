@@ -8,7 +8,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  override canActivate(context: ExecutionContext) {
     // 检查是否启用了认证
     const authEnabled = this.configService.get<boolean>('auth.enabled');
 

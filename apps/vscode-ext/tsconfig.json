@@ -11,5 +11,10 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/todo-model" },
+    { "path": "../../packages/utils" },
+    { "path": "../../packages/hooks" }
+  ]
 }

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/await-thenable */
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { I18nLang, I18nService } from 'nestjs-i18n';
@@ -22,7 +23,7 @@ export class LanguageController {
         {
           zh: '中文',
           en: 'English',
-        }[lang] || 'Unknown',
+        }[lang] ?? 'Unknown',
     };
   }
 

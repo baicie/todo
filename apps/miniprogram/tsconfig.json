@@ -8,7 +8,6 @@
     "moduleResolution": "node10",
     "ignoreDeprecations": "6.0",
     "experimentalDecorators": true,
-    "noImplicitAny": false,
     "allowSyntheticDefaultImports": true,
     "outDir": "dist",
     "noUnusedLocals": true,
@@ -23,5 +22,10 @@
     "typeRoots": ["node_modules/@types", "global.d.ts"]
   },
   "compileOnSave": false,
-  "include": ["src", "types", "config", "global.d.ts"]
+  "include": ["src", "types", "config", "global.d.ts"],
+  "references": [
+    { "path": "../../packages/todo-model" },
+    { "path": "../../packages/utils" },
+    { "path": "../../packages/hooks" }
+  ]
 }

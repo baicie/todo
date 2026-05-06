@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/await-thenable */
 import {
   ArgumentsHost,
   Catch,
@@ -48,7 +49,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         try {
           message = await this.i18n.translate(businessException.translationKey, {
             lang,
-            args: businessException.translationArgs || {},
+            args: businessException.translationArgs ?? {},
           });
         } catch {
           message = businessException.message;
@@ -68,7 +69,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
         details = exceptionResponse as any;
       } else {
-        message = String(exceptionResponse) || exception.message;
+        message = String(exceptionResponse);
       }
 
       code = this.mapHttpStatusToErrorCode(status);
@@ -116,7 +117,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       message,
       ip: request.ip,
       userAgent: request.headers['user-agent'],
-      details: details || (exception instanceof Error ? exception.message : String(exception)),
+      details: details ?? (exception instanceof Error ? exception.message : String(exception)),
       stack: exception instanceof Error ? exception.stack : undefined,
     };
 

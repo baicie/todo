@@ -15,5 +15,10 @@
     "noEmit": true
   },
   "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "references": [
+    { "path": "../../packages/todo-model" },
+    { "path": "../../packages/utils" },
+    { "path": "../../packages/hooks" },
+    { "path": "../../packages/ui" }
+  ]
 }

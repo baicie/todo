@@ -7,6 +7,10 @@ import eslintConfigPrettier from 'eslint-config-prettier';
 import { builtinModules } from 'node:module';
 import { fixupPluginRules } from '@eslint/compat';
 import { omit } from 'lodash-es';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DOMGlobals = ['window', 'document'];
 const NodeGlobals = ['module', 'require'];
@@ -47,6 +51,58 @@ const reactRules = {
   'react/react-in-jsx-scope': 'off',
 };
 
+// 严格 TypeScript 规则（用于 shared packages 和 backend）
+const strictRules = {
+  '@typescript-eslint/array-type': ['error', { default: 'array-simple' }],
+  '@typescript-eslint/consistent-indexed-object-style': ['error', 'record'],
+  '@typescript-eslint/no-empty-interface': 'error',
+  '@typescript-eslint/no-non-null-assertion': 'warn',
+  '@typescript-eslint/prefer-optional-chain': 'error',
+  '@typescript-eslint/prefer-nullish-coalescing': 'error',
+  '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
+  '@typescript-eslint/await-thenable': 'error',
+  '@typescript-eslint/return-await': 'error',
+  '@typescript-eslint/no-for-in-array': 'error',
+  '@typescript-eslint/no-misused-promises': [
+    'error',
+    { checksVoidReturn: { arguments: false, attributes: false } },
+  ],
+  '@typescript-eslint/no-unnecessary-condition': 'warn',
+  '@typescript-eslint/no-invalid-void-type': 'error',
+};
+
+// 前端宽松 TypeScript 规则（不需要类型信息）
+const frontendRelaxedRules = {
+  '@typescript-eslint/array-type': ['error', { default: 'array-simple' }],
+  '@typescript-eslint/consistent-indexed-object-style': ['error', 'record'],
+  '@typescript-eslint/no-empty-interface': 'error',
+  '@typescript-eslint/no-non-null-assertion': 'off',
+  '@typescript-eslint/await-thenable': 'error',
+  '@typescript-eslint/return-await': 'error',
+  '@typescript-eslint/no-for-in-array': 'error',
+  '@typescript-eslint/no-misused-promises': [
+    'error',
+    { checksVoidReturn: { arguments: false, attributes: false } },
+  ],
+  '@typescript-eslint/no-unnecessary-condition': 'warn',
+  '@typescript-eslint/no-invalid-void-type': 'error',
+};
+
+// 前端类型感知规则（需要 parserOptions.project，无项目级配置时应关闭）
+const frontendTypeAwareRules = {
+  '@typescript-eslint/prefer-optional-chain': 'error',
+  '@typescript-eslint/prefer-nullish-coalescing': 'error',
+  '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
+};
+
+// 后端/包 类型感知规则（与 frontendTypeAwareRules 相同，额外包含 no-non-null-assertion）
+const typeAwareRules = {
+  '@typescript-eslint/prefer-optional-chain': 'error',
+  '@typescript-eslint/prefer-nullish-coalescing': 'error',
+  '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
+  '@typescript-eslint/no-non-null-assertion': 'warn',
+};
+
 // Patch plugins for ESLint 9/10 compatibility
 const patchedReact = fixupPluginRules(react);
 const patchedReactHooks = fixupPluginRules(reactHooks);
@@ -77,10 +133,18 @@ export default tseslint.config(
       'import-x': patchedImportX,
       prettier: prettier,
     },
+    languageOptions: {
+      parserOptions: {
+        project: 'apps/backend/tsconfig.json',
+        tsconfigRootDir: __dirname,
+      },
+    },
     rules: {
       ...omit(baseRules, ['@typescript-eslint/consistent-type-imports']),
       '@typescript-eslint/consistent-type-imports': 'off',
       'no-restricted-globals': 'off',
+      ...strictRules,
+      ...typeAwareRules,
     },
   },
   // =====================================================
@@ -102,6 +166,8 @@ export default tseslint.config(
     },
     languageOptions: {
       parserOptions: {
+        project: 'apps/web/tsconfig.json',
+        tsconfigRootDir: __dirname,
         ecmaFeatures: {
           jsx: true,
         },
@@ -110,6 +176,8 @@ export default tseslint.config(
     rules: {
       ...baseRules,
       ...reactRules,
+      ...frontendRelaxedRules,
+      ...frontendTypeAwareRules,
       'no-restricted-globals': ['error', ...NodeGlobals],
     },
   },
@@ -132,6 +200,8 @@ export default tseslint.config(
     },
     languageOptions: {
       parserOptions: {
+        project: 'apps/desktop/tsconfig.json',
+        tsconfigRootDir: __dirname,
         ecmaFeatures: {
           jsx: true,
         },
@@ -140,6 +210,8 @@ export default tseslint.config(
     rules: {
       ...baseRules,
       ...reactRules,
+      ...frontendRelaxedRules,
+      ...frontendTypeAwareRules,
       'no-restricted-globals': ['error', ...NodeGlobals],
     },
   },
@@ -170,6 +242,8 @@ export default tseslint.config(
     },
     languageOptions: {
       parserOptions: {
+        project: 'apps/mobile/tsconfig.json',
+        tsconfigRootDir: __dirname,
         ecmaFeatures: {
           jsx: true,
         },
@@ -178,6 +252,8 @@ export default tseslint.config(
     rules: {
       ...baseRules,
       ...reactRules,
+      ...frontendRelaxedRules,
+      ...frontendTypeAwareRules,
     },
   },
   // =====================================================
@@ -185,6 +261,7 @@ export default tseslint.config(
   // =====================================================
   {
     files: ['apps/miniprogram/**/*.ts', 'apps/miniprogram/**/*.tsx'],
+    ignores: ['apps/miniprogram/config/**'],
     extends: [tseslint.configs.base, eslintConfigPrettier],
     plugins: {
       'import-x': patchedImportX,
@@ -199,6 +276,8 @@ export default tseslint.config(
     },
     languageOptions: {
       parserOptions: {
+        project: 'apps/miniprogram/tsconfig.json',
+        tsconfigRootDir: __dirname,
         ecmaFeatures: {
           jsx: true,
         },
@@ -207,6 +286,9 @@ export default tseslint.config(
     rules: {
       ...baseRules,
       ...reactRules,
+      ...frontendRelaxedRules,
+      ...frontendTypeAwareRules,
+      '@typescript-eslint/no-import-type-side-effects': 'off',
       'no-restricted-globals': ['error', ...NodeGlobals],
     },
   },
@@ -229,6 +311,8 @@ export default tseslint.config(
     },
     languageOptions: {
       parserOptions: {
+        project: 'apps/browser-ext/tsconfig.json',
+        tsconfigRootDir: __dirname,
         ecmaFeatures: {
           jsx: true,
         },
@@ -237,6 +321,8 @@ export default tseslint.config(
     rules: {
       ...baseRules,
       ...reactRules,
+      ...frontendRelaxedRules,
+      ...frontendTypeAwareRules,
       'no-restricted-globals': ['error', ...NodeGlobals],
     },
   },
@@ -249,6 +335,7 @@ export default tseslint.config(
       'packages/utils/src/**/*.ts',
       'packages/hooks/src/**/*.ts',
       'packages/ui/src/**/*.ts',
+      'packages/ui/src/**/*.tsx',
       'packages/plugin-system/src/**/*.ts',
     ],
     extends: [tseslint.configs.base, eslintConfigPrettier],
@@ -256,10 +343,24 @@ export default tseslint.config(
       'import-x': patchedImportX,
       prettier: prettier,
     },
+    languageOptions: {
+      parserOptions: {
+        project: [
+          'packages/todo-model/tsconfig.json',
+          'packages/utils/tsconfig.json',
+          'packages/hooks/tsconfig.json',
+          'packages/ui/tsconfig.json',
+          'packages/plugin-system/tsconfig.json',
+        ],
+        tsconfigRootDir: __dirname,
+      },
+    },
     rules: {
       ...omit(baseRules, ['@typescript-eslint/consistent-type-imports']),
       '@typescript-eslint/consistent-type-imports': 'off',
       'no-restricted-globals': 'off',
+      ...strictRules,
+      ...typeAwareRules,
     },
   },
   // =====================================================
@@ -272,7 +373,16 @@ export default tseslint.config(
       'import-x': patchedImportX,
       prettier: prettier,
     },
-    rules: baseRules,
+    languageOptions: {
+      parserOptions: {
+        project: 'apps/vscode-ext/tsconfig.json',
+        tsconfigRootDir: __dirname,
+      },
+    },
+    rules: {
+      ...baseRules,
+      ...strictRules,
+    },
   },
   // =====================================================
   // JavaScript 文件
@@ -298,12 +408,21 @@ export default tseslint.config(
       'packages/*/*.js',
       '**/vite.config.ts',
       '**/vite.config.js',
+      'apps/miniprogram/config/**',
     ],
     rules: {
       'no-restricted-globals': 'off',
       'no-restricted-syntax': ['error', banConstEnum],
       'no-console': 'off',
       'import-x/no-nodejs-modules': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/prefer-optional-chain': 'off',
+      '@typescript-eslint/prefer-nullish-coalescing': 'off',
+      '@typescript-eslint/await-thenable': 'off',
+      '@typescript-eslint/return-await': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
     },
   },
 );

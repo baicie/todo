@@ -13,7 +13,7 @@ function loadConfig(): StorageConfig {
   } catch {
     // ignore
   }
-  return { mode: 'local' as StorageMode };
+  return { mode: 'local' };
 }
 
 function saveConfig(config: StorageConfig) {

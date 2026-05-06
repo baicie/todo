@@ -1,11 +1,14 @@
 {
   "extends": "@baicie/orbit-tsconfig/base.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./dist/types",
     "rootDir": "./src",
-    "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM"]
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": [{ "path": "../utils" }]
 }

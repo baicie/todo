@@ -76,7 +76,7 @@ export class GroupsService {
         await manager.update(
           List,
           { id: groupLists[i].id },
-          { groupId: null, sortOrder: maxSortOrder + 1 + i },
+          { groupId: undefined, sortOrder: maxSortOrder + 1 + i },
         );
       }
 
@@ -84,7 +84,7 @@ export class GroupsService {
     });
   }
 
-  async updateSortOrders(updates: { id: string; sortOrder: number }[], user: User) {
+  async updateSortOrders(updates: Array<{ id: string; sortOrder: number }>, user: User) {
     await this.groupsRepository.manager.transaction(async (manager) => {
       for (const update of updates) {
         await manager.update(

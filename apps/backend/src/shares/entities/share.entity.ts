@@ -1,11 +1,4 @@
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  JoinColumn,
-  ManyToOne,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { List } from '../../lists/entities/list.entity';
 import { BaseEntity } from '../../common/entities/base-entity';
@@ -42,7 +35,4 @@ export class Share extends BaseEntity {
 
   @Column()
   listId: string;
-
-  @CreateDateColumn({ name: 'createdAt' })
-  createdAt: Date;
 }

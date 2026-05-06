@@ -19,6 +19,9 @@
     "lint": "eslint .",
     "check": "tsc --noEmit"
   },
+  "dependencies": {
+    "@baicie/orbit": "workspace:*"
+  },
   "devDependencies": {
     "@baicie/orbit-tsconfig": "workspace:*",
     "rolldown": "1.0.0-rc.18",

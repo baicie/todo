@@ -47,7 +47,7 @@ const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
             {indeterminate && <div className="w-2.5 h-0.5 bg-white rounded" />}
           </div>
         </div>
-        {(label || description) && (
+        {(label ?? description) && (
           <div className="flex flex-col">
             {label && (
               <span

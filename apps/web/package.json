@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@baicie/orbit": "workspace:*",
@@ -26,8 +27,8 @@
     "react-dom": "^19.2.5",
     "react-hot-toast": "^2.6.0",
     "react-i18next": "^17.0.6",
-    "react-router-dom": "^7.14.2",
-    "vite-plugin-pwa": "^1.2.0",
+    "react-router-dom": "^7.15.0",
+    "vite-plugin-pwa": "^1.3.0",
     "workbox-window": "^7.4.1"
   },
   "devDependencies": {

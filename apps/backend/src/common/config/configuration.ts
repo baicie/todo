@@ -1,61 +1,61 @@
 export default () => ({
   // Environment
-  nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT, 10) || 3001,
+  nodeEnv: process.env.NODE_ENV ?? 'development',
+  port: parseInt(process.env.PORT ?? '', 10) || 3001,
 
   // Database
   database: {
-    type: process.env.DB_TYPE || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT, 10) || 5432,
-    username: process.env.DB_USERNAME || 'todo_user',
-    password: process.env.DB_PASSWORD || 'todo_password',
-    database: process.env.DB_DATABASE || 'todo_db',
+    type: process.env.DB_TYPE ?? 'postgres',
+    host: process.env.DB_HOST ?? 'localhost',
+    port: parseInt(process.env.DB_PORT ?? '', 10) || 5432,
+    username: process.env.DB_USERNAME ?? 'todo_user',
+    password: process.env.DB_PASSWORD ?? 'todo_password',
+    database: process.env.DB_DATABASE ?? 'todo_db',
     synchronize: true,
     logging: true,
   },
 
   // JWT
   jwt: {
-    secret: process.env.JWT_SECRET || 'development-secret-key',
-    expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+    secret: process.env.JWT_SECRET ?? 'development-secret-key',
+    expiresIn: process.env.JWT_EXPIRES_IN ?? '24h',
   },
 
   // Authentication
   auth: {
-    enabled: process.env.AUTH_ENABLED === 'false' ? false : true, // 默认开启，只有显式设置为false才关闭
+    enabled: process.env.AUTH_ENABLED === 'false' ? false : true,
   },
 
   // Logging
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    level: process.env.LOG_LEVEL ?? 'info',
   },
 
   // Security
   security: {
-    corsOrigin: process.env.CORS_ORIGIN || '*',
+    corsOrigin: process.env.CORS_ORIGIN ?? '*',
     throttle: {
-      ttl: parseInt(process.env.THROTTLE_TTL, 10) || 60000,
-      limit: parseInt(process.env.THROTTLE_LIMIT, 10) || 100,
+      ttl: parseInt(process.env.THROTTLE_TTL ?? '', 10) || 60000,
+      limit: parseInt(process.env.THROTTLE_LIMIT ?? '', 10) || 100,
     },
   },
 
   // File Upload
   upload: {
-    dest: process.env.UPLOAD_DEST || './uploads',
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 5242880,
+    dest: process.env.UPLOAD_DEST ?? './uploads',
+    maxFileSize: parseInt(process.env.MAX_FILE_SIZE ?? '', 10) || 5242880,
   },
 
   // i18n
   i18n: {
-    defaultLanguage: process.env.DEFAULT_LANGUAGE || 'zh',
-    fallbackLanguage: process.env.FALLBACK_LANGUAGE || 'en',
+    defaultLanguage: process.env.DEFAULT_LANGUAGE ?? 'zh',
+    fallbackLanguage: process.env.FALLBACK_LANGUAGE ?? 'en',
   },
 
   // Application
   app: {
-    name: process.env.APP_NAME || 'Faker API',
-    description: process.env.APP_DESCRIPTION || '用于测试的API接口',
-    version: process.env.APP_VERSION || '1.0.0',
+    name: process.env.APP_NAME ?? 'Faker API',
+    description: process.env.APP_DESCRIPTION ?? '用于测试的API接口',
+    version: process.env.APP_VERSION ?? '1.0.0',
   },
 });

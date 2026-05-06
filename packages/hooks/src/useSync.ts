@@ -13,7 +13,7 @@ export interface SyncState {
 export interface SyncActions {
   triggerSync: () => void;
   retryFailed: () => void;
-  clearQueue: () => void;
+  clearQueue: () => Promise<void>;
 }
 
 export function useSync(): SyncState & SyncActions {

@@ -14,7 +14,7 @@ export const ApiVersion = (version: string | string[]) =>
 export const ApiDeprecated = (message?: string) =>
   SetMetadata('deprecated', {
     deprecated: true,
-    message: message || '此API已废弃，请使用新版本',
+    message: message ?? '此API已废弃，请使用新版本',
   });
 
 /**
@@ -23,5 +23,5 @@ export const ApiDeprecated = (message?: string) =>
 export const ApiExperimental = (message?: string) =>
   SetMetadata('experimental', {
     experimental: true,
-    message: message || '此API为实验性功能，可能会有变更',
+    message: message ?? '此API为实验性功能，可能会有变更',
   });

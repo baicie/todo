@@ -14,8 +14,17 @@ export interface AuditMetadata {
   description?: string;
 }
 
-export const AuditLog = (metadata: AuditMetadata) =>
-  Reflector.prototype.getAllAndOverride.bind(null, AUDIT_LOG_KEY, metadata);
+export const AuditLog = (metadata: AuditMetadata) => SetMetadata(AUDIT_LOG_KEY, metadata);
+
+export const SetMetadata =
+  (key: string, metadata: AuditMetadata) =>
+  (target: object, _propertyKey?: string | symbol, descriptor?: PropertyDescriptor) => {
+    if (descriptor) {
+      Reflect.defineMetadata(key, metadata, descriptor.value);
+    } else {
+      Reflect.defineMetadata(key, metadata, target);
+    }
+  };
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
@@ -31,6 +40,7 @@ export class AuditInterceptor implements NestInterceptor {
       context.getClass(),
     ]);
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!auditMetadata) {
       return next.handle();
     }
@@ -48,7 +58,7 @@ export class AuditInterceptor implements NestInterceptor {
             entityId = result.data.id;
           } else if (result?.id) {
             entityId = result.id;
-          } else if (request.params?.id) {
+          } else if (request.params.id) {
             entityId = parseInt(request.params.id as string);
           }
 
@@ -57,9 +67,9 @@ export class AuditInterceptor implements NestInterceptor {
             entityType: auditMetadata.entityType,
             entityId,
             userId: user?.id,
-            userName: user?.name || user?.email,
+            userName: user?.name ?? user?.email,
             description:
-              auditMetadata.description || `${auditMetadata.action} ${auditMetadata.entityType}`,
+              auditMetadata.description ?? `${auditMetadata.action} ${auditMetadata.entityType}`,
             newData: this.sanitizeData(result),
             request,
           });

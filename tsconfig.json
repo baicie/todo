@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "files": [],
+  "references": [
+    { "path": "./packages/todo-model" },
+    { "path": "./packages/utils" },
+    { "path": "./packages/plugin-system" },
+    { "path": "./packages/hooks" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/web" },
+    { "path": "./apps/desktop" },
+    { "path": "./apps/backend" },
+    { "path": "./apps/mobile" },
+    { "path": "./apps/browser-ext" },
+    { "path": "./apps/vscode-ext" },
+    { "path": "./apps/miniprogram" }
+  ]
+}

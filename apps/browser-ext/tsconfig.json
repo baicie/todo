@@ -15,5 +15,11 @@
     "types": ["chrome"]
   },
   "include": ["src"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules"],
+  "references": [
+    { "path": "../../packages/todo-model" },
+    { "path": "../../packages/utils" },
+    { "path": "../../packages/hooks" },
+    { "path": "../../packages/ui" }
+  ]
 }

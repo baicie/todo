@@ -38,11 +38,11 @@ export class AuditLogService {
       oldData: options.oldData,
       newData: options.newData,
       metadata: options.metadata,
-      userIp: this.extractIpFromRequest(options.request),
+      userIp: this.extractIpFromRequest(options.request) ?? undefined,
       userAgent: options.request?.headers['user-agent'],
     });
 
-    return await this.auditLogRepository.save(auditLog);
+    return this.auditLogRepository.save(auditLog);
   }
 
   async logCreate(
@@ -145,7 +145,7 @@ export class AuditLogService {
   }
 
   async findAll(paginationDto: PaginationDto): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.paginationService.paginate(
+    return this.paginationService.paginate(
       this.auditLogRepository,
       paginationDto,
       {
@@ -160,7 +160,7 @@ export class AuditLogService {
     entityId: number,
     paginationDto: PaginationDto,
   ): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.paginationService.paginate(this.auditLogRepository, paginationDto, {
+    return this.paginationService.paginate(this.auditLogRepository, paginationDto, {
       where: { entityType, entityId },
       order: { createdAt: 'DESC' },
     });
@@ -170,7 +170,7 @@ export class AuditLogService {
     userId: number,
     paginationDto: PaginationDto,
   ): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.paginationService.paginate(this.auditLogRepository, paginationDto, {
+    return this.paginationService.paginate(this.auditLogRepository, paginationDto, {
       where: { userId },
       order: { createdAt: 'DESC' },
     });
@@ -178,8 +178,8 @@ export class AuditLogService {
 
   async getStatistics(days = 30): Promise<{
     totalLogs: number;
-    actionStats: { action: string; count: number }[];
-    entityStats: { entityType: string; count: number }[];
+    actionStats: Array<{ action: string; count: number }>;
+    entityStats: Array<{ entityType: string; count: number }>;
     recentActivity: number;
   }> {
     const daysAgo = new Date();
@@ -230,7 +230,7 @@ export class AuditLogService {
       .where('createdAt < :cutoffDate', { cutoffDate })
       .execute();
 
-    return result.affected || 0;
+    return result.affected ?? 0;
   }
 
   private extractIpFromRequest(request?: Request): string | null {
@@ -246,6 +246,6 @@ export class AuditLogService {
       return realIp;
     }
 
-    return request.ip || null;
+    return request.ip ?? null;
   }
 }

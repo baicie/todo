@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/await-thenable */
 import { Controller, Get, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -41,7 +42,7 @@ export class AuditController {
     @Query() paginationDto: PaginationDto,
     @I18nLang() _lang: string,
   ): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.auditLogService.findAll(paginationDto);
+    return this.auditLogService.findAll(paginationDto);
   }
 
   @Get('entity/:entityType/:entityId')
@@ -66,7 +67,7 @@ export class AuditController {
     @Query() paginationDto: PaginationDto,
     @I18nLang() _lang: string,
   ): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.auditLogService.findByEntity(entityType, entityId, paginationDto);
+    return this.auditLogService.findByEntity(entityType, entityId, paginationDto);
   }
 
   @Get('user/:userId')
@@ -85,7 +86,7 @@ export class AuditController {
     @Query() paginationDto: PaginationDto,
     @I18nLang() _lang: string,
   ): Promise<PaginatedResponseDto<AuditLog>> {
-    return await this.auditLogService.findByUser(userId, paginationDto);
+    return this.auditLogService.findByUser(userId, paginationDto);
   }
 
   @Get('statistics')
