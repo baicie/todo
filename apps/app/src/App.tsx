@@ -16,6 +16,7 @@ import {
   CheckSquare2,
   ChevronDown,
   Info,
+  LayoutGrid,
   ListTodo,
   MoreHorizontal,
   PanelLeft,
@@ -772,7 +773,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           aria-label="打开导航"
           onClick={() => setSidebarOpen(true)}
         >
-          <PanelLeft size={18} />
+          <LayoutGrid size={18} />
         </button>
         <div class="app-topbar__brand">
           <span class="app-topbar__mark" aria-hidden="true">

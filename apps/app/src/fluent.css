@@ -20,14 +20,14 @@
   --radius-lg: 8px;
   --radius-xl: 10px;
 
-  --bg-app: #f3f2f1;
-  --bg-sidebar: #f3f2f1;
+  --bg-app: #faf9f8;
+  --bg-sidebar: #ffffff;
   --bg-canvas: #faf9f8;
   --bg-surface: #ffffff;
   --bg-raised: #ffffff;
   --bg-subtle: #f3f2f1;
   --bg-hover: #f3f2f1;
-  --bg-active: #e1dfdd;
+  --bg-active: #eff6fc;
   --bg-accent-soft: #eff6fc;
   --bg-danger-soft: #fde7e9;
 
@@ -110,7 +110,7 @@ body {
   z-index: 100;
   display: grid;
   flex: none;
-  grid-template-columns: 1fr minmax(280px, 460px) 1fr;
+  grid-template-columns: auto auto minmax(280px, 1fr) auto;
   align-items: center;
   height: 44px;
   padding: 0 12px;
@@ -123,6 +123,7 @@ body {
   align-items: center;
   justify-self: center;
   width: 100%;
+  max-width: 460px;
   height: 29px;
   gap: 7px;
   padding: 0 9px;
@@ -158,16 +159,16 @@ body {
 
 .app-topbar__mark {
   display: grid;
-  width: 25px;
-  height: 25px;
-  color: #2564cf;
-  background: #fff;
-  border-radius: 3px;
+  width: 22px;
+  height: 22px;
+  color: #ffffff;
+  background: transparent;
+  border-radius: 2px;
   place-items: center;
 }
 
 .app-topbar__menu {
-  display: none;
+  display: grid;
   align-items: center;
   justify-content: center;
   width: 30px;
@@ -345,10 +346,7 @@ kbd {
 }
 
 .nav-item--active::before {
-  width: 3px;
-  height: 18px;
-  background: var(--accent);
-  border-radius: 0;
+  display: none;
 }
 
 .nav-item__count {
@@ -673,12 +671,18 @@ kbd {
 /* Detail panel */
 
 .detail {
-  background: var(--bg-canvas);
+  background: #ffffff;
   border-left: 1px solid var(--border-subtle);
 }
 
 .detail__topbar {
+  background: #ffffff;
+}
+
+:root[data-theme='dark'] .detail,
+:root[data-theme='dark'] .detail__topbar {
   background: var(--bg-canvas);
+  border-color: var(--border-subtle);
 }
 
 .detail__eyebrow {
