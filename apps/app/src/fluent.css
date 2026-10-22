@@ -22,7 +22,7 @@
 
   --bg-app: #f3f2f1;
   --bg-sidebar: #f3f2f1;
-  --bg-canvas: #faf9f8;
+  --bg-canvas: #ffffff;
   --bg-surface: #ffffff;
   --bg-raised: #ffffff;
   --bg-subtle: #f3f2f1;
@@ -208,8 +208,9 @@ kbd {
 
 .nav-item--active {
   font-weight: 600;
-  background: var(--bg-active);
-  box-shadow: none;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07);
 }
 
 .nav-item--active::before {
@@ -269,6 +270,27 @@ kbd {
   font-size: clamp(26px, 2.4vw, 30px);
   font-weight: 600;
   letter-spacing: -0.015em;
+}
+
+.page-title__heading {
+  gap: 10px;
+}
+
+.page-title__icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.page-title__icon--sun {
+  color: #c77700;
+}
+
+.page-title__icon--star {
+  color: #d18d00;
+}
+
+.page-title__icon--completed {
+  color: var(--green);
 }
 
 .page-title__subtitle {

@@ -1,6 +1,8 @@
 import {
   For,
+  Match,
   Show,
+  Switch,
   createEffect,
   createMemo,
   createSignal,
@@ -9,7 +11,9 @@ import {
   type JSX,
 } from 'solid-js';
 import {
+  CalendarDays,
   Check,
+  CheckSquare2,
   ChevronDown,
   ListTodo,
   MoreHorizontal,
@@ -17,6 +21,7 @@ import {
   Plus,
   Search,
   Settings2,
+  Star,
   Sun,
   UserRound,
   X,
@@ -840,6 +845,26 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           <div class="page-header__title-row">
             <div class="page-title">
               <div class="page-title__heading">
+                <Switch fallback={null}>
+                  <Match when={view().kind === 'smart' && view().id === 'my-day'}>
+                    <Sun size={26} class="page-title__icon page-title__icon--sun" />
+                  </Match>
+                  <Match when={view().kind === 'smart' && view().id === 'important'}>
+                    <Star size={25} class="page-title__icon page-title__icon--star" />
+                  </Match>
+                  <Match when={view().kind === 'smart' && view().id === 'planned'}>
+                    <CalendarDays size={24} class="page-title__icon" />
+                  </Match>
+                  <Match when={view().kind === 'smart' && view().id === 'calendar'}>
+                    <CalendarDays size={24} class="page-title__icon" />
+                  </Match>
+                  <Match when={view().kind === 'smart' && view().id === 'all'}>
+                    <ListTodo size={24} class="page-title__icon" />
+                  </Match>
+                  <Match when={view().kind === 'smart' && view().id === 'completed'}>
+                    <CheckSquare2 size={24} class="page-title__icon page-title__icon--completed" />
+                  </Match>
+                </Switch>
                 <Show when={view().kind === 'list'}>
                   <span
                     class="page-title__dot"

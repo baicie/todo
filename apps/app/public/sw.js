@@ -1,5 +1,5 @@
 /* A deliberately small offline shell. API responses are never cached. */
-const CACHE = 'shishi-shell-v1';
+const CACHE = 'shishi-shell-v2';
 const SHELL = [
   '/',
   '/index.html',
