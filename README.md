@@ -68,6 +68,18 @@ cargo run -p todo-api
 - [docs/runbooks/backup-restore.md](docs/runbooks/backup-restore.md)
 - [docs/operations.md](docs/operations.md)（`/metrics`、request id、生产 smoke）
 
+## GitHub Actions 发布验收
+
+推送 `v*` 标签或手动运行 `release-acceptance` workflow：
+
+- `api-container`：构建真实 Docker 镜像，启动 PostgreSQL，跑 smoke、带 VAPID 的 Web Push config、`pg_dump` 隔离恢复。
+- `web-e2e`：生产构建 + Playwright 功能/PWA/axe。
+- `release-desktop`：Windows/macOS/Linux 未签名桌面包。
+- `release-web`、`API`、`native`：各自独立回归。
+- 手动运行时可选择 `build_mobile=true` 构建 Android debug APK。
+
+界面采用 Fluent / Microsoft To Do 风格：浅灰导航、Segoe 字体、Fluent 蓝、低圆角、紧凑任务行，深色主题同步适配；视觉回归由 `scripts/visual-check.mjs` 截图。
+
 ## 验收命令
 
 ```bash
