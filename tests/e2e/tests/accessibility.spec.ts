@@ -80,6 +80,8 @@ test('axe WCAG A/AA scan: desktop, mobile, dark and settings', async ({ page }) 
   await page.locator('.sidebar').getByRole('button', { name: '设置与数据' }).click();
   const dialog = page.getByRole('dialog', { name: '设置与数据' });
   await dialog.getByRole('radio', { name: '深色' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.waitForTimeout(200);
   await expectNoAxeViolations(page, 'desktop dark + settings');
   await dialog.getByRole('button', { name: '关闭' }).click();
 

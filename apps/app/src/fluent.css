@@ -557,6 +557,20 @@ kbd {
   color: var(--text-primary);
 }
 
+/* Keep the high-contrast Fluent text on the actual dark surface even while a
+ * theme transition is interpolating legacy background colors. */
+:root[data-theme='dark'] .search-trigger,
+:root[data-theme='dark'] .search-trigger > span,
+:root[data-theme='dark'] .theme-option__label {
+  color: #f3f2f1 !important;
+}
+
+:root[data-theme='dark'] .primary-button {
+  color: #ffffff !important;
+  background: #2b579a !important;
+  transition: none;
+}
+
 .search-modal {
   border-radius: var(--radius-lg);
 }
