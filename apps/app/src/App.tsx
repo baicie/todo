@@ -15,6 +15,7 @@ import {
   Check,
   CheckSquare2,
   ChevronDown,
+  Info,
   ListTodo,
   MoreHorizontal,
   PanelLeft,
@@ -763,419 +764,473 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   };
 
   return (
-    <div
-      class="app-shell"
-      classList={{
-        'app-shell--detail': Boolean(selectedTask()),
-        'app-shell--sidebar': sidebarOpen(),
-      }}
-    >
-      <Sidebar
-        view={view()}
-        lists={lists()}
-        counts={counts()}
-        open={sidebarOpen()}
-        syncLabel={cloudSyncLabel()}
-        syncTone={cloudSyncTone()}
-        onSelect={navigate}
-        onSearch={() => setSearchOpen(true)}
-        onAddList={addList}
-        onOpenSettings={() => {
-          setSettingsOpen(true);
-          setSidebarOpen(false);
-        }}
-        onOpenReview={() => {
-          setSidebarOpen(false);
-          void openWeeklyReview();
-        }}
-        onOpenShared={() => setSharedOpen(true)}
-        onClose={() => setSidebarOpen(false)}
-      />
-      <Show when={sidebarOpen()}>
+    <div class="app-frame">
+      <header class="app-topbar" aria-label="应用栏">
         <button
           type="button"
-          class="page-backdrop sidebar-backdrop"
-          aria-label="关闭导航"
-          onClick={() => setSidebarOpen(false)}
+          class="app-topbar__menu"
+          aria-label="打开导航"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <PanelLeft size={18} />
+        </button>
+        <div class="app-topbar__brand">
+          <span class="app-topbar__mark" aria-hidden="true">
+            <Check size={16} stroke-width={3} />
+          </span>
+          <strong>拾事</strong>
+        </div>
+        <button
+          type="button"
+          class="app-topbar__search"
+          onClick={() => setSearchOpen(true)}
+          aria-label="搜索"
+        >
+          <Search size={16} aria-hidden="true" />
+          <span>搜索</span>
+          <kbd aria-hidden="true">
+            {navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl'} K
+          </kbd>
+        </button>
+        <div class="app-topbar__actions">
+          <button
+            type="button"
+            class="app-topbar__icon"
+            aria-label="设置"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 size={17} />
+          </button>
+          <button
+            type="button"
+            class="app-topbar__icon"
+            aria-label="帮助"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Info size={17} />
+          </button>
+          <button type="button" class="app-topbar__avatar" aria-label="账号">
+            <UserRound size={17} />
+          </button>
+        </div>
+      </header>
+      <div
+        class="app-shell"
+        classList={{
+          'app-shell--detail': Boolean(selectedTask()),
+          'app-shell--sidebar': sidebarOpen(),
+        }}
+      >
+        <Sidebar
+          view={view()}
+          lists={lists()}
+          counts={counts()}
+          open={sidebarOpen()}
+          syncLabel={cloudSyncLabel()}
+          syncTone={cloudSyncTone()}
+          onSelect={navigate}
+          onSearch={() => setSearchOpen(true)}
+          onAddList={addList}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+            setSidebarOpen(false);
+          }}
+          onOpenReview={() => {
+            setSidebarOpen(false);
+            void openWeeklyReview();
+          }}
+          onOpenShared={() => setSharedOpen(true)}
+          onClose={() => setSidebarOpen(false)}
         />
-      </Show>
+        <Show when={sidebarOpen()}>
+          <button
+            type="button"
+            class="page-backdrop sidebar-backdrop"
+            aria-label="关闭导航"
+            onClick={() => setSidebarOpen(false)}
+          />
+        </Show>
 
-      <main class="main-panel" id="main-content">
-        <header class="page-header">
-          <div class="page-header__top">
-            <div class="mobile-only page-header__left">
-              <button
-                type="button"
-                class="icon-button"
-                aria-label="打开导航"
-                onClick={() => setSidebarOpen(true)}
-              >
-                <PanelLeft size={19} />
-              </button>
-            </div>
-            <div class="page-header__crumbs">
-              <span class="crumb-brand">拾事</span>
-              <span class="crumb-separator">/</span>
-              <span>{viewTitle()}</span>
-            </div>
-            <div class="page-header__tools">
-              <button
-                type="button"
-                class="icon-button"
-                aria-label="搜索"
-                title="搜索（Ctrl/⌘ K）"
-                onClick={() => setSearchOpen(true)}
-              >
-                <Search size={18} />
-              </button>
-              <button
-                type="button"
-                class="icon-button mobile-only"
-                aria-label="设置"
-                onClick={() => setSettingsOpen(true)}
-              >
-                <Settings2 size={18} />
-              </button>
-              <div class="header-avatar" aria-hidden="true">
-                <Check size={14} stroke-width={2.6} />
+        <main class="main-panel" id="main-content">
+          <header class="page-header">
+            <div class="page-header__top">
+              <div class="mobile-only page-header__left">
+                <button
+                  type="button"
+                  class="icon-button"
+                  aria-label="打开导航"
+                  onClick={() => setSidebarOpen(true)}
+                >
+                  <PanelLeft size={19} />
+                </button>
               </div>
-            </div>
-          </div>
-
-          <div class="page-header__title-row">
-            <div class="page-title">
-              <div class="page-title__heading">
-                <Switch fallback={null}>
-                  <Match when={view().kind === 'smart' && view().id === 'my-day'}>
-                    <Sun size={26} class="page-title__icon page-title__icon--sun" />
-                  </Match>
-                  <Match when={view().kind === 'smart' && view().id === 'important'}>
-                    <Star size={25} class="page-title__icon page-title__icon--star" />
-                  </Match>
-                  <Match when={view().kind === 'smart' && view().id === 'planned'}>
-                    <CalendarDays size={24} class="page-title__icon" />
-                  </Match>
-                  <Match when={view().kind === 'smart' && view().id === 'calendar'}>
-                    <CalendarDays size={24} class="page-title__icon" />
-                  </Match>
-                  <Match when={view().kind === 'smart' && view().id === 'all'}>
-                    <ListTodo size={24} class="page-title__icon" />
-                  </Match>
-                  <Match when={view().kind === 'smart' && view().id === 'completed'}>
-                    <CheckSquare2 size={24} class="page-title__icon page-title__icon--completed" />
-                  </Match>
-                </Switch>
-                <Show when={view().kind === 'list'}>
-                  <span
-                    class="page-title__dot"
-                    style={{ '--list-color': currentList()?.color ?? 'var(--text-tertiary)' }}
-                  />
-                </Show>
-                <Show when={renaming()} fallback={<h1>{viewTitle()}</h1>}>
-                  <input
-                    class="page-title__input"
-                    value={renameValue()}
-                    autofocus
-                    aria-label="清单名称"
-                    onInput={(event) => setRenameValue(event.currentTarget.value)}
-                    onBlur={() => void renameList()}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        event.currentTarget.blur();
-                      } else if (event.key === 'Escape') {
-                        setRenaming(false);
-                      }
-                    }}
-                  />
-                </Show>
+              <div class="page-header__crumbs">
+                <span class="crumb-brand">拾事</span>
+                <span class="crumb-separator">/</span>
+                <span>{viewTitle()}</span>
               </div>
-              <p class="page-title__subtitle">{viewSubtitle()}</p>
-            </div>
-            <div class="page-header__actions">
-              <Show when={view().kind === 'list'}>
-                <details ref={listMenu} class="list-menu">
-                  <summary class="icon-button" aria-label="清单选项">
-                    <MoreHorizontal size={19} />
-                  </summary>
-                  <div class="list-menu__popover">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRenameValue(currentList()?.name ?? '');
-                        setRenaming(true);
-                        if (listMenu) listMenu.open = false;
-                      }}
-                    >
-                      重命名清单
-                    </button>
-                    <button type="button" class="danger-text" onClick={() => void deleteList()}>
-                      删除清单
-                    </button>
-                  </div>
-                </details>
-              </Show>
-              <button
-                type="button"
-                class="primary-button page-header__add"
-                onClick={() => {
-                  quickAddInput?.focus();
-                  quickAddInput?.select();
-                }}
-              >
-                <Plus size={16} stroke-width={2.4} />
-                新建任务
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <div class="page-scroll">
-          <div class="page-content">
-            <QuickAdd
-              listId={view().kind === 'list' ? view().id : null}
-              inputRef={(element) => (quickAddInput = element)}
-              onAdd={createTask}
-              onOpenTemplates={() => setTemplatesOpen(true)}
-              placeholder={
-                view().kind === 'list'
-                  ? `添加到「${viewTitle()}」，按 Enter 保存`
-                  : '添加任务，按 Enter 保存'
-              }
-            />
-
-            <Show
-              when={!loading()}
-              fallback={
-                <div class="task-skeleton" aria-label="正在加载">
-                  <For each={[1, 2, 3, 4]}>
-                    {() => (
-                      <div class="task-skeleton__row">
-                        <span class="task-skeleton__check" />
-                        <span class="task-skeleton__lines">
-                          <span />
-                          <span />
-                        </span>
-                      </div>
-                    )}
-                  </For>
+              <div class="page-header__tools">
+                <button
+                  type="button"
+                  class="icon-button"
+                  aria-label="搜索"
+                  title="搜索（Ctrl/⌘ K）"
+                  onClick={() => setSearchOpen(true)}
+                >
+                  <Search size={18} />
+                </button>
+                <button
+                  type="button"
+                  class="icon-button mobile-only"
+                  aria-label="设置"
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  <Settings2 size={18} />
+                </button>
+                <div class="header-avatar" aria-hidden="true">
+                  <Check size={14} stroke-width={2.6} />
                 </div>
-              }
-            >
+              </div>
+            </div>
+
+            <div class="page-header__title-row">
+              <div class="page-title">
+                <div class="page-title__heading">
+                  <Switch fallback={null}>
+                    <Match when={view().kind === 'smart' && view().id === 'my-day'}>
+                      <Sun size={26} class="page-title__icon page-title__icon--sun" />
+                    </Match>
+                    <Match when={view().kind === 'smart' && view().id === 'important'}>
+                      <Star size={25} class="page-title__icon page-title__icon--star" />
+                    </Match>
+                    <Match when={view().kind === 'smart' && view().id === 'planned'}>
+                      <CalendarDays size={24} class="page-title__icon" />
+                    </Match>
+                    <Match when={view().kind === 'smart' && view().id === 'calendar'}>
+                      <CalendarDays size={24} class="page-title__icon" />
+                    </Match>
+                    <Match when={view().kind === 'smart' && view().id === 'all'}>
+                      <ListTodo size={24} class="page-title__icon" />
+                    </Match>
+                    <Match when={view().kind === 'smart' && view().id === 'completed'}>
+                      <CheckSquare2
+                        size={24}
+                        class="page-title__icon page-title__icon--completed"
+                      />
+                    </Match>
+                  </Switch>
+                  <Show when={view().kind === 'list'}>
+                    <span
+                      class="page-title__dot"
+                      style={{ '--list-color': currentList()?.color ?? 'var(--text-tertiary)' }}
+                    />
+                  </Show>
+                  <Show when={renaming()} fallback={<h1>{viewTitle()}</h1>}>
+                    <input
+                      class="page-title__input"
+                      value={renameValue()}
+                      autofocus
+                      aria-label="清单名称"
+                      onInput={(event) => setRenameValue(event.currentTarget.value)}
+                      onBlur={() => void renameList()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        } else if (event.key === 'Escape') {
+                          setRenaming(false);
+                        }
+                      }}
+                    />
+                  </Show>
+                </div>
+                <p class="page-title__subtitle">{viewSubtitle()}</p>
+              </div>
+              <div class="page-header__actions">
+                <Show when={view().kind === 'list'}>
+                  <details ref={listMenu} class="list-menu">
+                    <summary class="icon-button" aria-label="清单选项">
+                      <MoreHorizontal size={19} />
+                    </summary>
+                    <div class="list-menu__popover">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenameValue(currentList()?.name ?? '');
+                          setRenaming(true);
+                          if (listMenu) listMenu.open = false;
+                        }}
+                      >
+                        重命名清单
+                      </button>
+                      <button type="button" class="danger-text" onClick={() => void deleteList()}>
+                        删除清单
+                      </button>
+                    </div>
+                  </details>
+                </Show>
+                <button
+                  type="button"
+                  class="primary-button page-header__add"
+                  onClick={() => {
+                    quickAddInput?.focus();
+                    quickAddInput?.select();
+                  }}
+                >
+                  <Plus size={16} stroke-width={2.4} />
+                  新建任务
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <div class="page-scroll">
+            <div class="page-content">
+              <QuickAdd
+                listId={view().kind === 'list' ? view().id : null}
+                inputRef={(element) => (quickAddInput = element)}
+                onAdd={createTask}
+                onOpenTemplates={() => setTemplatesOpen(true)}
+                placeholder={
+                  view().kind === 'list'
+                    ? `添加到「${viewTitle()}」，按 Enter 保存`
+                    : '添加任务，按 Enter 保存'
+                }
+              />
+
               <Show
-                when={view().kind === 'smart' && view().id === 'calendar'}
+                when={!loading()}
                 fallback={
-                  <>
-                    <TaskFilterBar
-                      filter={filter()}
-                      availableTags={availableTags()}
-                      savedViews={savedViews()}
-                      onChange={setFilter}
-                      onSave={saveCurrentView}
-                      onApplySaved={(saved) => navigate(saved.view, { filter: saved.filter })}
-                      onDeleteSaved={deleteSavedView}
-                    />
-                    <TaskList
-                      view={view()}
-                      tasks={filteredTasks()}
-                      suggestions={suggestions()}
-                      lists={lists()}
-                      today={today()}
-                      selectedId={selectedId()}
-                      onSelect={(task) => setSelectedId(task.id)}
-                      onToggle={(task) => void toggleTask(task)}
-                      onStar={(task) => void starTask(task)}
-                      onPlan={(task) => void planTask(task, true)}
-                      onUnplan={(task) => void planTask(task, false)}
-                    />
-                  </>
+                  <div class="task-skeleton" aria-label="正在加载">
+                    <For each={[1, 2, 3, 4]}>
+                      {() => (
+                        <div class="task-skeleton__row">
+                          <span class="task-skeleton__check" />
+                          <span class="task-skeleton__lines">
+                            <span />
+                            <span />
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
                 }
               >
-                <CalendarView
-                  tasks={tasks()}
-                  today={today()}
-                  onSelect={(task) => setSelectedId(task.id)}
-                />
-              </Show>
-            </Show>
-
-            <div class="page-footer-hint">
-              <span>
                 <Show
-                  when={view().kind === 'smart' && view().id === 'my-day'}
+                  when={view().kind === 'smart' && view().id === 'calendar'}
                   fallback={
                     <>
-                      <Check size={13} /> 所有修改已自动保存在本机
+                      <TaskFilterBar
+                        filter={filter()}
+                        availableTags={availableTags()}
+                        savedViews={savedViews()}
+                        onChange={setFilter}
+                        onSave={saveCurrentView}
+                        onApplySaved={(saved) => navigate(saved.view, { filter: saved.filter })}
+                        onDeleteSaved={deleteSavedView}
+                      />
+                      <TaskList
+                        view={view()}
+                        tasks={filteredTasks()}
+                        suggestions={suggestions()}
+                        lists={lists()}
+                        today={today()}
+                        selectedId={selectedId()}
+                        onSelect={(task) => setSelectedId(task.id)}
+                        onToggle={(task) => void toggleTask(task)}
+                        onStar={(task) => void starTask(task)}
+                        onPlan={(task) => void planTask(task, true)}
+                        onUnplan={(task) => void planTask(task, false)}
+                      />
                     </>
                   }
                 >
-                  <Sun size={13} /> 我的一天每天自动刷新，未完成任务仍留在原清单
+                  <CalendarView
+                    tasks={tasks()}
+                    today={today()}
+                    onSelect={(task) => setSelectedId(task.id)}
+                  />
                 </Show>
-              </span>
-              <span class="page-footer-hint__storage">
-                {props.platform.kind === 'tauri' ? 'SQLite' : 'IndexedDB'} 本地保存
-              </span>
+              </Show>
+
+              <div class="page-footer-hint">
+                <span>
+                  <Show
+                    when={view().kind === 'smart' && view().id === 'my-day'}
+                    fallback={
+                      <>
+                        <Check size={13} /> 所有修改已自动保存在本机
+                      </>
+                    }
+                  >
+                    <Sun size={13} /> 我的一天每天自动刷新，未完成任务仍留在原清单
+                  </Show>
+                </span>
+                <span class="page-footer-hint__storage">
+                  {props.platform.kind === 'tauri' ? 'SQLite' : 'IndexedDB'} 本地保存
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-      </main>
+        </main>
 
-      <Show when={selectedTask()}>
-        {(task) => (
-          <>
-            <button
-              type="button"
-              class="page-backdrop detail-backdrop"
-              aria-label="关闭任务详情"
-              onClick={() => setSelectedId(null)}
-            />
-            <DetailPanel
-              task={task()}
-              lists={lists()}
-              today={today()}
-              timeZone={timeZone()}
-              onClose={() => setSelectedId(null)}
-              onToggle={() => void toggleTask(task())}
-              onPatch={patchSelected}
-              onSaveTemplate={saveTemplateFromTask}
-              onDelete={() => void deleteTask(task())}
-              onAddStep={addStep}
-              onPatchStep={patchStep}
-              onDeleteStep={deleteStep}
-              onPlan={(planned) => planTask(task(), planned)}
-              onReorder={reorderSelected}
-            />
-          </>
-        )}
-      </Show>
-
-      <nav class="bottom-nav" aria-label="移动端导航">
-        <button
-          type="button"
-          classList={{
-            'bottom-nav__item--active': view().kind === 'smart' && view().id === 'my-day',
-          }}
-          onClick={() => navigate({ kind: 'smart', id: 'my-day' })}
-        >
-          <Sun size={20} />
-          <span>今天</span>
-        </button>
-        <button
-          type="button"
-          classList={{
-            'bottom-nav__item--active': view().kind === 'smart' && view().id === 'all',
-          }}
-          onClick={() => navigate({ kind: 'smart', id: 'all' })}
-        >
-          <ListTodo size={20} />
-          <span>全部</span>
-        </button>
-        <button
-          type="button"
-          classList={{ 'bottom-nav__item--active': sidebarOpen() || view().kind === 'list' }}
-          onClick={() => setSidebarOpen(true)}
-        >
-          <PanelLeft size={20} />
-          <span>清单</span>
-        </button>
-        <button
-          type="button"
-          classList={{ 'bottom-nav__item--active': settingsOpen() }}
-          onClick={() => setSettingsOpen(true)}
-        >
-          <UserRound size={20} />
-          <span>我</span>
-        </button>
-      </nav>
-
-      <SharedListsDialog open={sharedOpen()} cloud={cloud} onClose={() => setSharedOpen(false)} />
-
-      <WeeklyReviewDialog
-        open={reviewOpen()}
-        tasks={reviewTasks()}
-        lists={lists()}
-        today={today()}
-        onClose={() => setReviewOpen(false)}
-      />
-
-      <TemplateDialog
-        open={templatesOpen()}
-        templates={templates()}
-        onClose={() => setTemplatesOpen(false)}
-        onUse={(template) => void useTemplate(template)}
-        onDelete={deleteTemplate}
-      />
-
-      <SearchDialog
-        open={searchOpen()}
-        lists={lists()}
-        today={today()}
-        repository={props.platform.repository}
-        onClose={() => setSearchOpen(false)}
-        onOpenTask={openTaskFromSearch}
-      />
-
-      <SettingsDialog
-        open={settingsOpen()}
-        onClose={() => setSettingsOpen(false)}
-        theme={theme()}
-        onThemeChange={setThemePreference}
-        platformKind={props.platform.kind}
-        taskCount={counts().all + counts().completed}
-        listCount={lists().length}
-        cloud={cloud}
-        desktop={props.platform.lifecycle.desktop}
-        reminderPermission={() => props.platform.reminder.getPermission()}
-        onRequestNotifications={requestNotifications}
-        onExportJson={exportJson}
-        onExportCsv={exportCsv}
-        onExportIcs={exportIcs}
-        onImport={importBackup}
-        onClear={clearAll}
-      />
-
-      <Show when={toast()}>
-        {(current) => (
-          <div
-            class="toast"
-            classList={{
-              'toast--success': current().tone === 'success',
-              'toast--danger': current().tone === 'danger',
-            }}
-            role="status"
-          >
-            <Show when={current().tone === 'success'}>
-              <Check size={16} class="toast__icon" />
-            </Show>
-            <span class="toast__message">{current().message}</span>
-            <Show when={current().action}>
+        <Show when={selectedTask()}>
+          {(task) => (
+            <>
               <button
                 type="button"
-                class="toast__action"
-                onClick={async () => {
-                  const action = current().action;
-                  setToast(null);
-                  try {
-                    await action?.();
-                  } catch (error) {
-                    reportError(error);
-                  }
-                }}
-              >
-                {current().actionLabel ?? '撤销'}
-              </button>
-            </Show>
-            <button
-              type="button"
-              class="icon-button icon-button--small toast__close"
-              aria-label="关闭提示"
-              onClick={() => setToast(null)}
+                class="page-backdrop detail-backdrop"
+                aria-label="关闭任务详情"
+                onClick={() => setSelectedId(null)}
+              />
+              <DetailPanel
+                task={task()}
+                lists={lists()}
+                today={today()}
+                timeZone={timeZone()}
+                onClose={() => setSelectedId(null)}
+                onToggle={() => void toggleTask(task())}
+                onPatch={patchSelected}
+                onSaveTemplate={saveTemplateFromTask}
+                onDelete={() => void deleteTask(task())}
+                onAddStep={addStep}
+                onPatchStep={patchStep}
+                onDeleteStep={deleteStep}
+                onPlan={(planned) => planTask(task(), planned)}
+                onReorder={reorderSelected}
+              />
+            </>
+          )}
+        </Show>
+
+        <nav class="bottom-nav" aria-label="移动端导航">
+          <button
+            type="button"
+            classList={{
+              'bottom-nav__item--active': view().kind === 'smart' && view().id === 'my-day',
+            }}
+            onClick={() => navigate({ kind: 'smart', id: 'my-day' })}
+          >
+            <Sun size={20} />
+            <span>今天</span>
+          </button>
+          <button
+            type="button"
+            classList={{
+              'bottom-nav__item--active': view().kind === 'smart' && view().id === 'all',
+            }}
+            onClick={() => navigate({ kind: 'smart', id: 'all' })}
+          >
+            <ListTodo size={20} />
+            <span>全部</span>
+          </button>
+          <button
+            type="button"
+            classList={{ 'bottom-nav__item--active': sidebarOpen() || view().kind === 'list' }}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <PanelLeft size={20} />
+            <span>清单</span>
+          </button>
+          <button
+            type="button"
+            classList={{ 'bottom-nav__item--active': settingsOpen() }}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <UserRound size={20} />
+            <span>我</span>
+          </button>
+        </nav>
+
+        <SharedListsDialog open={sharedOpen()} cloud={cloud} onClose={() => setSharedOpen(false)} />
+
+        <WeeklyReviewDialog
+          open={reviewOpen()}
+          tasks={reviewTasks()}
+          lists={lists()}
+          today={today()}
+          onClose={() => setReviewOpen(false)}
+        />
+
+        <TemplateDialog
+          open={templatesOpen()}
+          templates={templates()}
+          onClose={() => setTemplatesOpen(false)}
+          onUse={(template) => void useTemplate(template)}
+          onDelete={deleteTemplate}
+        />
+
+        <SearchDialog
+          open={searchOpen()}
+          lists={lists()}
+          today={today()}
+          repository={props.platform.repository}
+          onClose={() => setSearchOpen(false)}
+          onOpenTask={openTaskFromSearch}
+        />
+
+        <SettingsDialog
+          open={settingsOpen()}
+          onClose={() => setSettingsOpen(false)}
+          theme={theme()}
+          onThemeChange={setThemePreference}
+          platformKind={props.platform.kind}
+          taskCount={counts().all + counts().completed}
+          listCount={lists().length}
+          cloud={cloud}
+          desktop={props.platform.lifecycle.desktop}
+          reminderPermission={() => props.platform.reminder.getPermission()}
+          onRequestNotifications={requestNotifications}
+          onExportJson={exportJson}
+          onExportCsv={exportCsv}
+          onExportIcs={exportIcs}
+          onImport={importBackup}
+          onClear={clearAll}
+        />
+
+        <Show when={toast()}>
+          {(current) => (
+            <div
+              class="toast"
+              classList={{
+                'toast--success': current().tone === 'success',
+                'toast--danger': current().tone === 'danger',
+              }}
+              role="status"
             >
-              <X size={14} />
-            </button>
-          </div>
-        )}
-      </Show>
+              <Show when={current().tone === 'success'}>
+                <Check size={16} class="toast__icon" />
+              </Show>
+              <span class="toast__message">{current().message}</span>
+              <Show when={current().action}>
+                <button
+                  type="button"
+                  class="toast__action"
+                  onClick={async () => {
+                    const action = current().action;
+                    setToast(null);
+                    try {
+                      await action?.();
+                    } catch (error) {
+                      reportError(error);
+                    }
+                  }}
+                >
+                  {current().actionLabel ?? '撤销'}
+                </button>
+              </Show>
+              <button
+                type="button"
+                class="icon-button icon-button--small toast__close"
+                aria-label="关闭提示"
+                onClick={() => setToast(null)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

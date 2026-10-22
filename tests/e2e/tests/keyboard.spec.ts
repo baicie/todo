@@ -3,7 +3,7 @@ import { addTask, openApp, taskRow, uniqueTitle } from './helpers';
 
 test('Control+K opens a focused search and Escape restores focus', async ({ page }) => {
   await openApp(page);
-  const trigger = page.locator('.sidebar .search-trigger');
+  const trigger = page.locator('.app-topbar__search');
   await trigger.click();
   const search = page.getByRole('searchbox', { name: '搜索任务' });
   await expect(search).toBeFocused();
