@@ -776,9 +776,6 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           <LayoutGrid size={18} />
         </button>
         <div class="app-topbar__brand">
-          <span class="app-topbar__mark" aria-hidden="true">
-            <Check size={16} stroke-width={3} />
-          </span>
           <strong>拾事</strong>
         </div>
         <button

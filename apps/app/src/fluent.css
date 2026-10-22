@@ -31,9 +31,9 @@
   --bg-accent-soft: #eff6fc;
   --bg-danger-soft: #fde7e9;
 
-  --text-primary: #201f1e;
-  --text-secondary: #484644;
-  --text-tertiary: #605e5c;
+  --text-primary: #292827;
+  --text-secondary: #605e5c;
+  --text-tertiary: #6e6c6b;
   --text-inverse: #ffffff;
   --text-accent: #2564cf;
   --text-danger: #a4262c;
@@ -354,9 +354,21 @@ kbd {
   font-size: 10.5px;
 }
 
+.nav-item svg {
+  color: var(--text-secondary);
+}
+
+.nav-item--active svg {
+  color: var(--text-primary);
+}
+
+.sidebar .list-dot {
+  display: none;
+}
+
 .nav-icon--sun,
 .nav-icon--star {
-  color: var(--amber);
+  color: inherit;
 }
 
 .sidebar__footer {
