@@ -1,0 +1,20 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+Default permission set for the Shishi native plugin. The Shishi app normally
+calls these commands from its Rust reminder adapter and secure-token bridge; do
+not grant this set to arbitrary WebView content.
+"""
+permissions = [
+  "allow-schedule",
+  "allow-cancel",
+  "allow-reschedule",
+  "allow-list",
+  "allow-clear",
+  "allow-checkPermission",
+  "allow-requestPermission",
+  "allow-secureTokenGet",
+  "allow-secureTokenSet",
+  "allow-secureTokenRemove",
+]

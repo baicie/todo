@@ -1,0 +1,5 @@
+# Keep the E2E harness self-contained. This nested workspace stops pnpm from
+# walking up to the repository root, which intentionally does not include
+# tests/e2e (so `pnpm install` at the root never downloads Playwright).
+packages:
+  - '.'

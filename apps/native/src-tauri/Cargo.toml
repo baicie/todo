@@ -1,0 +1,52 @@
+[package]
+name = "todo-native"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+description = "Shishi Tauri desktop and mobile shell"
+build = "build.rs"
+
+[lib]
+name = "todo_native_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-shishi-reminder = { path = "../plugins/tauri-plugin-shishi-reminder" }
+todo-native-core = { package = "todo-native-core", path = "../../../crates/native-core" }
+
+# Desktop-only lifecycle plugins. Keeping them target-scoped ensures Android
+# and iOS builds never attempt to compile desktop autostart/single-instance code.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+keyring = { version = "3.6.3", features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+
+# The native shell owns its platform build and lockfile. The repository root
+# workspace only includes backend/core crates, so this manifest is deliberately
+# a standalone workspace.
+[workspace]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# The Windows MSVC linker can hit LNK1318 (PDB limit) when the Tauri test
+# binary carries full debug info. Tests do not need a PDB.
+[profile.test]
+debug = 0

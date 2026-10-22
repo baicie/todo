@@ -1,0 +1,98 @@
+name: API
+
+on:
+  push:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'apps/api/**'
+      - 'crates/native-core/**'
+      - 'db/postgres/**'
+      - 'scripts/ops/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - 'docs/runbooks/**'
+      - '.github/workflows/api.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'apps/api/**'
+      - 'crates/native-core/**'
+      - 'db/postgres/**'
+      - 'scripts/ops/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - 'docs/runbooks/**'
+      - '.github/workflows/api.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: todo
+          POSTGRES_USER: todo
+          POSTGRES_PASSWORD: todo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U todo -d todo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://todo:todo@127.0.0.1:5432/todo
+      JWT_SECRET: ci-only-jwt-secret-that-is-longer-than-32-bytes
+      APP_ENV: test
+      BIND_ADDR: 127.0.0.1:8787
+      CORS_ORIGINS: http://localhost:5173
+      OPS_ADMIN_TOKEN: ci-only-operations-token-with-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+      - name: Format
+        run: cargo fmt -p todo-api -- --check
+      - name: Clippy
+        run: cargo clippy -p todo-api --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test -p todo-api
+      - name: Docker Compose config
+        run: docker compose config --quiet
+      - name: PostgreSQL integration tests
+        run: |
+          cargo test -p todo-api --test postgres_smoke -- --ignored --test-threads=1
+          cargo test -p todo-api --test postgres_production -- --ignored --test-threads=1
+          cargo test -p todo-api --test postgres_shared -- --ignored --test-threads=1
+      - name: Operations CLI dry-run
+        run: cargo run -p todo-api -- ops all --dry-run
+      - name: Readiness smoke test
+        run: |
+          cargo run -p todo-api &
+          API_PID=$!
+          trap 'kill "$API_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/readyz > /dev/null; then
+              echo "API became ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API failed to become ready"
+          exit 1

@@ -1,0 +1,20 @@
+{
+  "name": "@todo/e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained Playwright browser/PWA/accessibility tests for the 拾事 web build.",
+  "scripts": {
+    "test": "playwright test",
+    "test:pwa": "playwright test tests/pwa.spec.ts",
+    "test:functional": "playwright test tests/app.spec.ts tests/keyboard.spec.ts",
+    "test:a11y": "playwright test tests/accessibility.spec.ts",
+    "test:headed": "playwright test --headed",
+    "install:browsers": "playwright install chromium",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1"
+  }
+}

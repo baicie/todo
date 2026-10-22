@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-secureTokenRemove"
+description = "Enables the secureTokenRemove command without any pre-configured scope."
+commands.allow = ["secureTokenRemove"]
+
+[[permission]]
+identifier = "deny-secureTokenRemove"
+description = "Denies the secureTokenRemove command without any pre-configured scope."
+commands.deny = ["secureTokenRemove"]

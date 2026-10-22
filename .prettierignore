@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+target
+playwright-report
+test-results
+pnpm-lock.yaml
+apps/native/src-tauri/Cargo.lock
+Cargo.lock

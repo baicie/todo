@@ -1,0 +1,288 @@
+openapi: 3.1.0
+info:
+  title: Local-first To Do API
+  version: 1.0.0-draft
+  description: >-
+    API design draft. All authenticated endpoints are user-scoped. Client mutations
+    are written through sync operations; this is not a conventional CRUD API.
+servers:
+  - url: https://api.example.com
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Process health check
+      responses:
+        '200':
+          description: Healthy
+  /api/v1/auth/code/request:
+    post:
+      security: []
+      summary: Request one-time sign-in code
+      description: Generic response even when email is unknown; server must rate-limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202': { description: Code request accepted if eligible }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/auth/code/verify:
+    post:
+      security: []
+      summary: Verify code and initialize device session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, code, device_id, platform, device_name]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, minLength: 6, maxLength: 8 }
+                device_id: { $ref: '#/components/schemas/Id' }
+                device_name: { type: string, minLength: 1, maxLength: 100 }
+                platform:
+                  type: string
+                  enum: [windows, macos, linux, android, ios, web]
+      responses:
+        '200':
+          description: Session established
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/refresh:
+    post:
+      security: []
+      summary: Rotate refresh credential
+      description: >-
+        Native sends refresh credential in a secure request body; Web uses
+        HttpOnly cookie with CSRF protection. Web and Native should expose
+        separate adapters to avoid leaking browser refresh credentials to JS.
+      responses:
+        '200':
+          description: New access credential issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke current session
+      responses:
+        '204': { description: Logged out }
+  /api/v1/devices:
+    get:
+      summary: List account devices
+      responses:
+        '200':
+          description: Devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Device' }
+  /api/v1/devices/{deviceId}:
+    delete:
+      summary: Revoke a device
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Id' }
+      responses:
+        '204': { description: Revoked }
+        '404': { description: Device not found under caller account }
+  /api/v1/sync:
+    post:
+      summary: Apply local operations idempotently, then pull changes
+      description: >-
+        `ops` are accepted only as contiguous monotonically increasing
+        `client_seq` per active device. Server serializes mutations per
+        account inside a PostgreSQL transaction. Client must persist server
+        shadow, acknowledgement state, materialized view and next cursor
+        atomically. A stale cursor requires bootstrap/rebase.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SyncRequest' }
+      responses:
+        '200':
+          description: Acknowledgements and incremental changes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: Cursor expired or operation/client-sequence mismatch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/sync/bootstrap:
+    get:
+      summary: Consistent paginated full account snapshot
+      description: >-
+        First page establishes a stable snapshot revision. Continuation token
+        binds to the same account and snapshot version. Delta pull after that
+        revision catches changes made while pages were downloading.
+      parameters:
+        - name: continuation
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 500 }
+      responses:
+        '200':
+          description: Snapshot page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BootstrapPage' }
+  /api/v1/export:
+    get:
+      summary: Export account data as structured JSON
+      responses:
+        '200':
+          description: Export stream
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/v1/account:
+    delete:
+      summary: Initiate account data deletion
+      description: Require recent authentication / secondary verification.
+      responses:
+        '202': { description: Deletion accepted }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Invalid or expired session
+    TooManyRequests:
+      description: Rate limit exceeded
+  schemas:
+    Id:
+      type: string
+      format: uuid
+    TokenPair:
+      type: object
+      required: [access_token, expires_in]
+      properties:
+        access_token: { type: string }
+        expires_in: { type: integer }
+        refresh_token:
+          type: string
+          description: Native only; never return browser refresh token to JS.
+    Device:
+      type: object
+      required: [id, name, platform]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        platform: { type: string }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+    EntityKind:
+      type: string
+      enum: [task, list, step, day_plan]
+    MutationKind:
+      type: string
+      enum: [create, patch, delete, restore]
+    Mutation:
+      type: object
+      additionalProperties: false
+      required: [op_id, client_seq, entity, entity_id, kind, patch]
+      properties:
+        op_id: { $ref: '#/components/schemas/Id' }
+        client_seq: { type: integer, minimum: 1 }
+        entity: { $ref: '#/components/schemas/EntityKind' }
+        entity_id: { $ref: '#/components/schemas/Id' }
+        kind: { $ref: '#/components/schemas/MutationKind' }
+        patch: { type: object, additionalProperties: true }
+    SyncRequest:
+      type: object
+      additionalProperties: false
+      required: [device_id, cursor, ops]
+      properties:
+        device_id: { $ref: '#/components/schemas/Id' }
+        cursor:
+          type: string
+          description: Opaque per-account change cursor, initial value '0'.
+        ops:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Mutation' }
+        limit: { type: integer, minimum: 1, maximum: 500, default: 500 }
+    Ack:
+      type: object
+      required: [op_id, status]
+      properties:
+        op_id: { $ref: '#/components/schemas/Id' }
+        server_seq: { type: [integer, 'null'] }
+        status:
+          type: string
+          enum: [applied, rejected, already_processed]
+        error_code: { type: [string, 'null'] }
+    Change:
+      type: object
+      required: [server_seq, op_id, entity, entity_id, kind, patch]
+      properties:
+        server_seq: { type: integer, minimum: 1 }
+        op_id: { $ref: '#/components/schemas/Id' }
+        entity: { $ref: '#/components/schemas/EntityKind' }
+        entity_id: { $ref: '#/components/schemas/Id' }
+        kind: { $ref: '#/components/schemas/MutationKind' }
+        patch: { type: object, additionalProperties: true }
+    SyncResponse:
+      type: object
+      required: [ack, changes, next_cursor, has_more, server_time]
+      properties:
+        ack:
+          type: array
+          items: { $ref: '#/components/schemas/Ack' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/Change' }
+        next_cursor: { type: string }
+        has_more: { type: boolean }
+        server_time: { type: string, format: date-time }
+    BootstrapPage:
+      type: object
+      required: [entities, snapshot_cursor, next_page, has_more]
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            required: [entity, entity_id, data]
+            properties:
+              entity: { $ref: '#/components/schemas/EntityKind' }
+              entity_id: { $ref: '#/components/schemas/Id' }
+              data: { type: object, additionalProperties: true }
+        snapshot_cursor: { type: string }
+        next_page: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [CURSOR_EXPIRED, SEQUENCE_MISMATCH, ENTITY_NOT_FOUND, VALIDATION_FAILED, FORBIDDEN]
+        message: { type: string }

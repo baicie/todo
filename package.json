@@ -1,0 +1,34 @@
+{
+  "name": "todo-local-first",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @todo/app dev",
+    "build": "pnpm --filter @todo/app build",
+    "preview": "pnpm --filter @todo/app preview",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm rust:test",
+    "test:e2e:install": "pnpm --dir tests/e2e install && pnpm --dir tests/e2e exec playwright install chromium",
+    "test:e2e": "pnpm --filter @todo/app build && pnpm --dir tests/e2e test",
+    "perf:web": "node scripts/perf/benchmark.mjs --sizes=100,1000,10000 --iterations=6",
+    "perf:budget": "node scripts/perf/check-budget.mjs artifacts/perf-100k-full.json",
+    "sbom": "node scripts/ops/sbom.mjs",
+    "rust:test": "cargo test --workspace",
+    "rust:lint": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:up": "docker compose up -d postgres",
+    "api": "cargo run -p todo-api"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3"
+  }
+}

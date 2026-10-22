@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+**/node_modules
+target
+**/target
+dist
+**/dist
+artifacts
+docs/design

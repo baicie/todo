@@ -1,0 +1,96 @@
+name: release-desktop
+
+# Unsigned desktop builds on tags. No signing credentials are available in this
+# repository, so these artifacts are QA-only and MUST NOT be published as a
+# production release. See docs/runbooks/release.md for the signing hooks.
+#
+# Signing placeholders (configure as repository/environment secrets later):
+#   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (updater)
+#   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD
+#   APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+#   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD  (base64 PFX + password)
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-14
+            label: macos-arm64
+          - os: ubuntu-22.04
+            label: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Build web frontend
+        run: pnpm --filter @todo/app build
+
+      # `beforeBuildCommand` in tauri.conf.json rebuilds the frontend as part of
+      # the Tauri build. The explicit build above makes failures easier to read.
+      - name: Build desktop bundles (unsigned)
+        working-directory: apps/native/src-tauri
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo tauri build
+
+      - name: Upload desktop bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.label }}-unsigned
+          path: apps/native/src-tauri/target/release/bundle
+          retention-days: 14
+          if-no-files-found: warn

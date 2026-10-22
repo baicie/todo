@@ -1,0 +1,55 @@
+name: release-web
+
+# Tag-driven static web release. The artifact is the complete `dist/` folder,
+# including manifest.webmanifest, sw.js and icons. Publishing to a host is a
+# separate deployment step because there is no hosting credential in-repo.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build production web app
+        run: pnpm --filter @todo/app build
+
+      - name: Verify PWA assets
+        run: |
+          test -f apps/app/dist/manifest.webmanifest
+          test -f apps/app/dist/sw.js
+          test -f apps/app/dist/index.html
+
+      - name: Write SHA-256 checksums
+        working-directory: apps/app/dist
+        run: |
+          find . -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Upload web dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: shishi-web-${{ github.ref_name }}
+          path: apps/app/dist
+          retention-days: 30
+          if-no-files-found: error

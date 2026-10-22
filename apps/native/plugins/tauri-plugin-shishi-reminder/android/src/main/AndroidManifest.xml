@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!--
+    Optional exact-alarm capability. The app defaults to inexact
+    setAndAllowWhileIdle scheduling. If this special permission is available,
+    callers may opt into exact scheduling; otherwise the plugin degrades
+    explicitly to inexact and returns mode="inexact".
+  -->
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+  <application>
+    <receiver
+      android:name="app.shishi.todo.reminder.ReminderAlarmReceiver"
+      android:exported="false" />
+    <receiver
+      android:name="app.shishi.todo.reminder.ReminderBootReceiver"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+        <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>

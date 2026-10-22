@@ -1,0 +1,41 @@
+name: web
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm --filter @todo/domain test
+      - run: pnpm --filter @todo/application test
+      - run: pnpm --filter @todo/sync test
+      - run: pnpm --filter @todo/app test
+      - run: pnpm --filter @todo/app typecheck
+      - run: pnpm --filter @todo/app build
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/app/dist
+          retention-days: 7
+      - name: Generate SBOM
+        run: pnpm sbom
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: artifacts/sbom.cdx.json
+          retention-days: 30

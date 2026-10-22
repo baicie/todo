@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["apps/api", "crates/native-core"]
+# The Tauri shell is its own workspace so desktop/mobile toolchains and the
+# server workspace can be resolved independently.
+exclude = ["apps/native/src-tauri"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.96"
+version = "0.1.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

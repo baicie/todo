@@ -1,0 +1,125 @@
+name: todo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-todo}
+      POSTGRES_USER: ${POSTGRES_USER:-todo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-todo}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - todo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: todo-api:local
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-todo}:${POSTGRES_PASSWORD:-todo}@postgres:5432/${POSTGRES_DB:-todo}
+      BIND_ADDR: 0.0.0.0:8787
+      # Local-only default. Production startup rejects this value.
+      JWT_SECRET: ${JWT_SECRET:-local-development-only-change-this-jwt-secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      AUTH_DEV_CODE: ${AUTH_DEV_CODE:-246810}
+      # Empty lets the API choose its secure default by APP_ENV.
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      # Required when APP_ENV=production.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      RUST_LOG: ${RUST_LOG:-todo_api=info,tower_http=info,sqlx=warn}
+    ports:
+      - '${API_PORT:-8787}:8787'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8787/readyz']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Optional TLS termination: docker compose --profile tls up -d
+  caddy:
+    image: caddy:2.10-alpine
+    profiles: ['tls']
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - todo_caddy_data:/data
+      - todo_caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional administrative backup: docker compose --profile ops run --rm backup
+  backup:
+    image: postgres:16-alpine
+    profiles: ['ops']
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-todo}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-todo}
+      PGDATABASE: ${POSTGRES_DB:-todo}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./scripts/ops/backup.sh:/opt/ops/backup.sh:ro
+      - ./scripts/ops/restore.sh:/opt/ops/restore.sh:ro
+      - ./backups:/backups
+    entrypoint: ['/bin/sh', '/opt/ops/backup.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Optional protected maintenance CLI:
+  #   docker compose --profile ops run --rm ops ops cleanup --dry-run
+  #   docker compose --profile ops run --rm ops ops all --dry-run
+  # Apply requires OPS_CONFIRM=APPLY in the environment.
+  ops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: todo-api:local
+    profiles: ['ops']
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-todo}:${POSTGRES_PASSWORD:-todo}@postgres:5432/${POSTGRES_DB:-todo}
+      OPS_ADMIN_TOKEN: ${OPS_ADMIN_TOKEN:-}
+      OPS_CONFIRM: ${OPS_CONFIRM:-}
+      OPS_BATCH_SIZE: ${OPS_BATCH_SIZE:-5000}
+      AUTH_CODE_RETENTION_DAYS: ${AUTH_CODE_RETENTION_DAYS:-1}
+      SESSION_RETENTION_DAYS: ${SESSION_RETENTION_DAYS:-7}
+      OP_RECEIPT_RETENTION_DAYS: ${OP_RECEIPT_RETENTION_DAYS:-90}
+      CHANGE_LOG_RETENTION_DAYS: ${CHANGE_LOG_RETENTION_DAYS:-90}
+      ACCOUNT_PURGE_GRACE_DAYS: ${ACCOUNT_PURGE_GRACE_DAYS:-7}
+      RATE_LIMIT_RETENTION_HOURS: ${RATE_LIMIT_RETENTION_HOURS:-24}
+      RUST_LOG: ${RUST_LOG:-todo_api=info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ['ops', 'cleanup', '--dry-run']
+
+volumes:
+  todo_pgdata:
+  todo_caddy_data:
+  todo_caddy_config:

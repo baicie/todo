@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-secureTokenSet"
+description = "Enables the secureTokenSet command without any pre-configured scope."
+commands.allow = ["secureTokenSet"]
+
+[[permission]]
+identifier = "deny-secureTokenSet"
+description = "Denies the secureTokenSet command without any pre-configured scope."
+commands.deny = ["secureTokenSet"]
