@@ -5,8 +5,13 @@ import { generateKeyPairSync } from 'node:crypto';
 const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const pub = publicKey.export({ format: 'jwk' });
 const priv = privateKey.export({ format: 'jwk' });
-const encode = (value) => Buffer.from(value, 'base64url').toString('base64url');
+const rawPublic = Buffer.concat([
+  Buffer.from([0x04]),
+  Buffer.from(pub.x, 'base64url'),
+  Buffer.from(pub.y, 'base64url'),
+]);
+const rawPrivate = Buffer.from(priv.d, 'base64url');
 
-console.log(`VAPID_PUBLIC_KEY=04${encode(pub.x)}${encode(pub.y)}`);
-console.log(`VAPID_PRIVATE_KEY=${encode(priv.d)}`);
+console.log(`VAPID_PUBLIC_KEY=${rawPublic.toString('base64url')}`);
+console.log(`VAPID_PRIVATE_KEY=${rawPrivate.toString('base64url')}`);
 console.log('VAPID_SUBJECT=mailto:ops@example.com');
