@@ -21,7 +21,7 @@ export function normalizeTags(tags: string[] | undefined): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const raw of tags ?? []) {
-    const tag = cleanSingleLine(String(raw), MAX_TAG_LENGTH).replace(/^#/, '');
+    const tag = cleanSingleLine(String(raw), MAX_TAG_LENGTH).replace(/^#+/, '');
     if (!tag) continue;
     const key = tag.toLowerCase();
     if (seen.has(key)) continue;
