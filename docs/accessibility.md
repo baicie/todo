@@ -1,7 +1,7 @@
 # 无障碍审查（WCAG 2.2 AA）
 
-- 审查日期：2026-10-21
-- 构建：生产预览 `apps/app/dist`（Vite production `index-Ck6taOgQ.js`；Chromium 156）
+- 审查日期：2026-10-22
+- 构建：生产预览 `apps/app/dist`（Vite production `index-v2Fy7ofr.js`；Chromium 156）
 - 工具：`@axe-core/playwright` 4.14.0 + Playwright 1.64.1，手工键盘检查
 - 范围：桌面 1440×900、移动 390×844，浅色/深色，首页、任务详情、设置、搜索
 - 结论：**自动化 axe WCAG A/AA 扫描为 0 violation**；`tests/e2e` 已移除

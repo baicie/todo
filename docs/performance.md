@@ -1,7 +1,7 @@
 # Web 性能基准
 
 > 测量日期：2026-10-22
-> 构建：`apps/app/dist`（Vite production，入口 `index-DKwWlfHZ.js`）
+> 构建：`apps/app/dist`（Vite production，入口 `index-v2Fy7ofr.js`）
 > 机器：Windows 10.0.26200 / Intel Core i5-10400F，6C/12T，2.9 GHz，15.9 GiB RAM
 > 浏览器：Playwright Chromium 156.0.8078.4（headless）
 > 测试地址：`http://127.0.0.1:4173`（`vite preview`，本机回环）
