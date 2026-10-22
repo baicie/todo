@@ -598,6 +598,8 @@ kbd {
 .task-check {
   width: 18px;
   height: 18px;
+  padding: 0;
+  line-height: 1;
   border-width: 1.5px;
   border-color: var(--text-secondary);
 }
