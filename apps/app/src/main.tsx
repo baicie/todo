@@ -4,6 +4,7 @@ import { App } from './App';
 import { createAppPlatform } from './adapters/platform';
 import { applyTheme, getThemePreference } from './lib/theme';
 import './styles.css';
+import './fluent.css';
 
 applyTheme(getThemePreference());
 

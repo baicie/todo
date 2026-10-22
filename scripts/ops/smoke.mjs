@@ -17,6 +17,7 @@ const apiUrl = (process.env.API_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '
 const email = process.env.SMOKE_EMAIL;
 const code =
   process.env.SMOKE_CODE ?? (process.env.APP_ENV === 'production' ? undefined : '246810');
+const requirePush = process.env.SMOKE_REQUIRE_PUSH === '1';
 const checks = [];
 let failed = false;
 
@@ -116,10 +117,15 @@ if (email) {
     }
     const push = await request('/api/v1/push/config', { headers: authorization });
     if (!push.response.ok) throw new Error(`push/config returned ${push.response.status}`);
+    const pushBody = JSON.parse(push.text);
+    if (requirePush && (!pushBody.enabled || !pushBody.public_key)) {
+      throw new Error('push/config is disabled but SMOKE_REQUIRE_PUSH=1');
+    }
     return {
       exportStatus: exported.response.status,
       syncStatus: sync.response.status,
       pushStatus: push.response.status,
+      pushEnabled: Boolean(pushBody.enabled),
     };
   });
 }

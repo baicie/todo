@@ -5,7 +5,7 @@ const browser = await chromium.launch({
   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   headless: true,
 });
-const APP_URL = process.env.APP_URL ?? 'http://127.0.0.1:5174';
+const APP_URL = process.env.APP_URL ?? 'http://127.0.0.1:5173';
 await mkdir('artifacts', { recursive: true });
 
 const errors = [];
@@ -30,7 +30,7 @@ await page.locator('.task-row').first().click();
 await page.waitForTimeout(350);
 await page.screenshot({ path: 'artifacts/desktop-detail.png', fullPage: false });
 await page.getByRole('button', { name: '关闭详情' }).click();
-await page.getByRole('button', { name: '全部' }).first().click();
+await page.locator('.sidebar').getByRole('button', { name: '全部任务' }).click();
 await page.waitForTimeout(300);
 await page.screenshot({ path: 'artifacts/desktop-all.png', fullPage: false });
 await context.close();

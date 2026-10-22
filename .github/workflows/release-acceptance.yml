@@ -1,0 +1,217 @@
+name: release-acceptance
+
+# Tag/manual acceptance gate for the release candidate. This workflow is
+# deliberately independent of the unit-test workflows: it builds the real
+# container image, runs it against PostgreSQL, exercises the public smoke path,
+# checks Web Push configuration with generated VAPID keys, and restores a
+# pg_dump into a separate database.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_mobile:
+        description: 'Build the unsigned Android debug APK (needs Android SDK/NDK)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-container:
+    name: API container, smoke, push config, backup restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: todo
+          POSTGRES_USER: todo
+          POSTGRES_PASSWORD: todo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U todo -d todo"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      PGPASSWORD: todo
+      DATABASE_URL: postgres://todo:todo@127.0.0.1:5432/todo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build API container
+        run: docker build --tag todo-api:acceptance .
+
+      - name: Start API container
+        run: |
+          docker run --detach --name todo-api \
+            --network host \
+            -e APP_ENV=development \
+            -e DATABASE_URL=postgres://todo:todo@127.0.0.1:5432/todo \
+            -e BIND_ADDR=127.0.0.1:8787 \
+            -e JWT_SECRET=github-actions-acceptance-secret-at-least-32-bytes \
+            -e CORS_ORIGINS=http://127.0.0.1:4173 \
+            -e AUTH_DEV_CODE=246810 \
+            -e COOKIE_SECURE=false \
+            todo-api:acceptance
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8787/readyz > /dev/null; then
+              echo "API ready after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs todo-api
+          exit 1
+
+      - name: Public smoke path
+        env:
+          API_URL: http://127.0.0.1:8787
+          SMOKE_EMAIL: acceptance-${{ github.run_id }}-${{ github.run_attempt }}@example.com
+          SMOKE_CODE: '246810'
+        run: node scripts/ops/smoke.mjs
+
+      - name: Start API with generated VAPID keys
+        run: |
+          node scripts/ops/vapid-keys.mjs > /tmp/vapid.env
+          set -a
+          . /tmp/vapid.env
+          set +a
+          docker stop todo-api
+          docker rm todo-api
+          docker run --detach --name todo-api-push \
+            --network host \
+            -e APP_ENV=development \
+            -e DATABASE_URL=postgres://todo:todo@127.0.0.1:5432/todo \
+            -e BIND_ADDR=127.0.0.1:8787 \
+            -e JWT_SECRET=github-actions-acceptance-secret-at-least-32-bytes \
+            -e CORS_ORIGINS=http://127.0.0.1:4173 \
+            -e AUTH_DEV_CODE=246810 \
+            -e COOKIE_SECURE=false \
+            -e WEB_PUSH_ENABLED=true \
+            -e PUSH_WORKER_INTERVAL_SECONDS=5 \
+            -e VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY" \
+            -e VAPID_PRIVATE_KEY="$VAPID_PRIVATE_KEY" \
+            -e VAPID_SUBJECT="$VAPID_SUBJECT" \
+            todo-api:acceptance
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8787/readyz > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs todo-api-push
+          exit 1
+
+      - name: Push-enabled smoke path
+        env:
+          API_URL: http://127.0.0.1:8787
+          SMOKE_EMAIL: push-${{ github.run_id }}-${{ github.run_attempt }}@example.com
+          SMOKE_CODE: '246810'
+          SMOKE_REQUIRE_PUSH: '1'
+        run: node scripts/ops/smoke.mjs
+
+      - name: PostgreSQL backup and isolated restore
+        run: |
+          docker run --rm --network host -e PGPASSWORD=todo postgres:16-alpine \
+            pg_dump -h 127.0.0.1 -U todo -d todo --format=custom > /tmp/todo.dump
+          docker run --rm --network host -e PGPASSWORD=todo postgres:16-alpine \
+            psql -h 127.0.0.1 -U todo -d postgres -v ON_ERROR_STOP=1 \
+            -c 'DROP DATABASE IF EXISTS todo_restore' \
+            -c 'CREATE DATABASE todo_restore'
+          docker run --rm --network host -e PGPASSWORD=todo \
+            -v /tmp:/backup postgres:16-alpine \
+            pg_restore -h 127.0.0.1 -U todo -d todo_restore --no-owner /backup/todo.dump
+          SOURCE=$(docker run --rm --network host -e PGPASSWORD=todo postgres:16-alpine \
+            psql -h 127.0.0.1 -U todo -d todo -tAc 'select count(*) from users')
+          RESTORED=$(docker run --rm --network host -e PGPASSWORD=todo postgres:16-alpine \
+            psql -h 127.0.0.1 -U todo -d todo_restore -tAc 'select count(*) from users')
+          echo "users source=${SOURCE} restored=${RESTORED}"
+          test "$SOURCE" = "$RESTORED"
+
+      - name: Dump container logs
+        if: always()
+        run: |
+          docker logs todo-api 2>/dev/null || true
+          docker logs todo-api-push 2>/dev/null || true
+
+      - name: Stop containers
+        if: always()
+        run: docker rm -f todo-api todo-api-push 2>/dev/null || true
+
+  web-e2e:
+    name: Web build, Playwright and axe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm --filter @todo/app build
+      - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - run: pnpm --dir tests/e2e exec playwright install --with-deps chromium
+      - run: pnpm --dir tests/e2e test
+        env:
+          CI: true
+
+  android-debug:
+    name: Android debug APK (optional)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mobile }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @todo/app build
+      - run: cargo install tauri-cli --version '^2' --locked
+      - name: Initialize and build Android debug APK
+        working-directory: apps/native/src-tauri
+        run: |
+          cargo tauri android init --ci
+          cargo tauri android build --debug --apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-unsigned
+          path: apps/native/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+          retention-days: 14
