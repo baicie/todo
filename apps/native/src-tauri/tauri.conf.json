@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "identifier": "app.shishi.todo",
   "build": {
-    "beforeDevCommand": "pnpm --dir ../../app dev",
-    "beforeBuildCommand": "pnpm --dir ../../app build",
+    "beforeDevCommand": "pnpm --dir ../app dev",
+    "beforeBuildCommand": "pnpm --dir ../app build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../app/dist"
   },
