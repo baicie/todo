@@ -791,7 +791,7 @@ kbd {
   }
 
   .app-topbar {
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto auto 1fr auto;
     padding: 0 8px;
   }
 
@@ -808,10 +808,12 @@ kbd {
   }
 
   .app-topbar__search {
+    grid-column: 3;
     justify-self: end;
     width: 30px;
     height: 30px;
     padding: 0;
+    margin-right: 2px;
     border: 0;
   }
 
@@ -821,10 +823,11 @@ kbd {
   }
 
   .app-topbar__actions {
+    grid-column: 4;
     gap: 1px;
   }
 
-  .app-topbar__actions .app-topbar__icon:first-child {
+  .app-topbar__actions .app-topbar__icon {
     display: none;
   }
 
