@@ -83,7 +83,7 @@ describe('SyncEngine', () => {
       expect(store.applyServerResult).not.toHaveBeenCalled();
     } finally {
       if (originalOnLine) Object.defineProperty(navigator, 'onLine', originalOnLine);
-      else delete (navigator as Navigator & { onLine?: boolean }).onLine;
+      else Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
     }
   });
 
