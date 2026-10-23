@@ -15,9 +15,11 @@ pub trait ReminderAdapter: Send + Sync {
         title: &str,
         body: &str,
         exact: bool,
-    ) -> Result<(), String>;
+    ) -> Result<String, String>;
     fn cancel(&self, reminder_id: &str) -> Result<(), String>;
-    fn clear(&self) -> Result<(), String>;
+    /// IDs currently held by the platform queue, used for a differential
+    /// reconcile instead of clearing every pending notification.
+    fn scheduled_ids(&self) -> Result<Vec<String>, String>;
     fn permission(&self) -> String;
     /// Requests runtime permission when the platform supports a prompt.
     fn request_permission(&self) -> Result<String, String>;
@@ -93,7 +95,7 @@ impl ReminderAdapter for DesktopTimerAdapter {
         title: &str,
         body: &str,
         _exact: bool,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         if reminder_id.trim().is_empty() {
             return Err("reminderId 不能为空".to_owned());
         }
@@ -110,7 +112,7 @@ impl ReminderAdapter for DesktopTimerAdapter {
         if fire_at <= Utc::now() {
             entries.remove(reminder_id);
             self.queue.wake.notify_all();
-            return Ok(());
+            return Ok("skipped-past".to_owned());
         }
         entries.insert(
             reminder_id.to_owned(),
@@ -122,7 +124,7 @@ impl ReminderAdapter for DesktopTimerAdapter {
         );
         drop(entries);
         self.queue.wake.notify_all();
-        Ok(())
+        Ok("scheduled".to_owned())
     }
 
     fn cancel(&self, reminder_id: &str) -> Result<(), String> {
@@ -137,16 +139,13 @@ impl ReminderAdapter for DesktopTimerAdapter {
         Ok(())
     }
 
-    fn clear(&self) -> Result<(), String> {
-        let mut entries = self
+    fn scheduled_ids(&self) -> Result<Vec<String>, String> {
+        let entries = self
             .queue
             .entries
             .lock()
             .map_err(|_| "reminder queue is unavailable".to_owned())?;
-        entries.clear();
-        drop(entries);
-        self.queue.wake.notify_all();
-        Ok(())
+        Ok(entries.keys().cloned().collect())
     }
 
     fn permission(&self) -> String {
@@ -268,14 +267,20 @@ impl ReminderAdapter for MobileReminderAdapter {
         title: &str,
         body: &str,
         exact: bool,
-    ) -> Result<(), String> {
-        let mode = self.app.shishi_reminder().schedule(&ScheduleRequest {
+    ) -> Result<String, String> {
+        let mode = match self.app.shishi_reminder().schedule(&ScheduleRequest {
             reminder_id: reminder_id.to_owned(),
             fire_at_utc: fire_at_utc.to_owned(),
             title: title.to_owned(),
             body: body.to_owned(),
             exact,
-        })?;
+        }) {
+            Ok(mode) => mode,
+            Err(error) if error.to_lowercase().contains("pending notification limit") => {
+                "capacity-exceeded".to_owned()
+            }
+            Err(error) => return Err(error),
+        };
         if exact && mode != "exact" && mode != "scheduled" {
             eprintln!(
                 "shishi: exact reminder {} degraded to mode={mode}",
@@ -288,15 +293,18 @@ impl ReminderAdapter for MobileReminderAdapter {
                 reminder_id
             );
         }
-        Ok(())
+        Ok(mode)
     }
 
     fn cancel(&self, reminder_id: &str) -> Result<(), String> {
         self.app.shishi_reminder().cancel(reminder_id)
     }
 
-    fn clear(&self) -> Result<(), String> {
-        self.app.shishi_reminder().clear()
+    fn scheduled_ids(&self) -> Result<Vec<String>, String> {
+        self.app
+            .shishi_reminder()
+            .list()
+            .map(|items| items.into_iter().map(|item| item.reminder_id).collect())
     }
 
     fn permission(&self) -> String {

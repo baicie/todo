@@ -478,6 +478,14 @@ export class DexieTaskRepository implements CloudSyncStorage {
     };
   }
 
+  async listReminderCandidates(): Promise<Task[]> {
+    await this.initialize();
+    const tasks = await this.allTasksSnapshot();
+    return tasks
+      .filter((task) => !task.deletedAt && task.status === 'open' && Boolean(task.remindAt))
+      .sort((a, b) => (a.remindAt ?? '').localeCompare(b.remindAt ?? ''));
+  }
+
   async getCounts(localDate: DateOnly): Promise<ViewCounts> {
     await this.initialize();
     const [tasks, lists, plans] = await Promise.all([

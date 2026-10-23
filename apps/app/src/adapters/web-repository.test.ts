@@ -235,6 +235,56 @@ describe('DexieTaskRepository', () => {
     expect((await repository.syncGetDiagnostics()).enabled).toBe(false);
     expect((await repository.getTask('task-remote'))?.title).toBe('offline edit');
   });
+
+  it('keeps the previous database intact when an import is rejected', async () => {
+    await service.createTask({ title: '保留任务' });
+    const before = await repository.listTasks({ view: 'all', limit: 1000 });
+    const bundle = await repository.exportData();
+    const invalid = {
+      ...bundle,
+      tasks: [{ ...bundle.tasks[0]!, title: '   ' }],
+    };
+    await expect(repository.importData(invalid, 'replace')).rejects.toThrow('无效任务');
+    const after = await repository.listTasks({ view: 'all', limit: 1000 });
+    expect(after.items.map((task) => task.id)).toEqual(before.items.map((task) => task.id));
+  });
+
+  it('restores 100 offline tasks through a new repository instance', async () => {
+    const databaseName = `shishi-restart-${Date.now()}`;
+    const first = new DexieTaskRepository(databaseName);
+    await first.initialize();
+    for (let index = 0; index < 100; index += 1) {
+      await first.createTask({ title: `离线任务 ${index}` });
+    }
+    const second = new DexieTaskRepository(databaseName);
+    await second.initialize();
+    const page = await second.listTasks({ view: 'all', limit: 1000 });
+    expect(page.items.filter((task) => task.title.startsWith('离线任务'))).toHaveLength(100);
+  });
+
+  it('lists every open reminder without the old task-list limit', async () => {
+    const base = Date.now() + 60_000;
+    for (let index = 0; index < 1001; index += 1) {
+      await repository.createTask({
+        title: `提醒 ${index}`,
+        remindAt: new Date(base + index * 60_000).toISOString(),
+      });
+    }
+    const hidden = await repository.createTask({
+      title: '已完成提醒',
+      remindAt: new Date(base + 2_000_000).toISOString(),
+    });
+    await repository.commitCompletion({
+      taskId: hidden.id,
+      completedAt: new Date().toISOString(),
+      nextTask: null,
+    });
+
+    const candidates = await repository.listReminderCandidates();
+    expect(candidates).toHaveLength(1001);
+    expect(candidates.every((task) => task.status === 'open')).toBe(true);
+    expect(candidates[0]!.remindAt! <= candidates[1]!.remindAt!).toBe(true);
+  });
 });
 
 function cloudSnapshot(id: string, title: string, note: string): CloudSnapshot {

@@ -73,7 +73,7 @@ pub async fn schedule_reminder(
     title: String,
     body: Option<String>,
     exact: Option<bool>,
-) -> Result<(), CommandError> {
+) -> Result<String, CommandError> {
     ensure_reminder_permission(&state)?;
     state
         .reminders
@@ -101,27 +101,54 @@ pub fn cancel_reminder(
 /// Rebuild the platform queue from open tasks in SQLite. On desktop this arms
 /// fresh timers; on Android/iOS it clears the plugin queue and schedules each
 /// future reminder through the native platform bridge.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderReconcileReport {
+    pub scheduled: u32,
+    pub skipped_past: u32,
+    pub outside_window: u32,
+    pub capacity_exceeded: u32,
+    pub failed: Vec<String>,
+}
+
 #[tauri::command]
-pub async fn reschedule_reminders(state: State<'_, AppState>) -> Result<(), CommandError> {
+pub async fn reschedule_reminders(
+    state: State<'_, AppState>,
+) -> Result<ReminderReconcileReport, CommandError> {
     let store = Arc::clone(&state.store);
     let reminders: Arc<dyn ReminderAdapter> = Arc::clone(&state.reminders);
     let tasks = tauri::async_runtime::spawn_blocking(move || store.upcoming_reminders())
         .await
         .map_err(|error| CommandError::new("INTERNAL", format!("提醒查询异常: {error}")))?
         .map_err(CommandError::from_store)?;
-    reminders.clear().map_err(CommandError::reminder)?;
+    let active: std::collections::HashSet<&str> =
+        tasks.iter().map(|task| task.id.as_str()).collect();
+    let existing = reminders.scheduled_ids().map_err(CommandError::reminder)?;
+    let mut report = ReminderReconcileReport::default();
+    for id in existing {
+        if active.contains(id.as_str()) {
+            continue;
+        }
+        match reminders.cancel(&id) {
+            Ok(()) => {}
+            Err(error) => report.failed.push(format!("{id}: cancel failed: {error}")),
+        }
+    }
     for task in tasks {
         if let Some(fire_at) = &task.remind_at {
-            // A platform cap (for example iOS's 64 pending notifications)
-            // must not prevent later reminders from being attempted.
-            if let Err(error) =
-                reminders.schedule(&task.id, fire_at, &task.title, &task.note, false)
-            {
-                eprintln!("shishi: reminder {} was not scheduled: {error}", task.id);
+            match reminders.schedule(&task.id, fire_at, &task.title, &task.note, false) {
+                Ok(mode) if mode == "scheduled" || mode == "exact" || mode == "inexact" => {
+                    report.scheduled += 1;
+                }
+                Ok(mode) if mode == "past" || mode == "skipped-past" => report.skipped_past += 1,
+                Ok(mode) if mode == "outside-window" => report.outside_window += 1,
+                Ok(mode) if mode == "capacity-exceeded" => report.capacity_exceeded += 1,
+                Ok(mode) => report.failed.push(format!("{}: unknown mode {mode}", task.id)),
+                Err(error) => report.failed.push(format!("{}: {error}", task.id)),
             }
         }
     }
-    Ok(())
+    Ok(report)
 }
 
 #[tauri::command]

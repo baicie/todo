@@ -67,6 +67,7 @@ import {
 import { loadSavedViews, persistSavedViews } from './lib/saved-views';
 import { applyTheme, getThemePreference, watchSystemTheme } from './lib/theme';
 import { createCloudController } from './sync/cloud';
+import { reconcileReminders, type ReminderIssue } from './reminders/reconcile';
 import type { AppView, SavedView, TaskFilter } from './types';
 import { EMPTY_FILTER, SMART_TITLES } from './types';
 
@@ -125,7 +126,9 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   let quickAddInput: HTMLInputElement | undefined;
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
-  const scheduledReminders = new Set<string>();
+  const scheduledReminders = new Map<string, string>();
+  const [reminderIssues, setReminderIssues] = createSignal<ReminderIssue[]>([]);
+  let reminderReconcileInFlight: Promise<void> | null = null;
 
   const timeZone = () => props.platform.lifecycle.timeZone;
   const refresh = () => setRevision((value) => value + 1);
@@ -262,35 +265,52 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     return `本地清单 · ${counts().lists[selection.id] ?? 0} 项待办`;
   };
 
-  const refreshReminders = async () => {
-    try {
-      const page = await props.platform.repository.listTasks({
-        view: 'all',
-        includeCompleted: false,
-        limit: 1000,
-      });
-      const upcoming = new Set<string>();
-      for (const task of page.items) {
-        if (!task.remindAt || task.status !== 'open') continue;
-        upcoming.add(task.id);
-        await props.platform.reminder.schedule({
-          reminderId: task.id,
-          fireAtUtc: task.remindAt,
-          title: task.title,
-          body: task.note.trim().slice(0, 120) || '该完成这项任务了',
+  const refreshReminders = (): Promise<void> => {
+    if (reminderReconcileInFlight) return reminderReconcileInFlight;
+    reminderReconcileInFlight = (async () => {
+      try {
+        const candidates = await props.platform.repository.listReminderCandidates();
+        const report = await reconcileReminders({
+          tasks: candidates.map((task) => ({
+            id: task.id,
+            status: task.status,
+            remindAt: task.remindAt,
+            title: task.title,
+            note: task.note,
+          })),
+          scheduled: scheduledReminders,
+          schedule: (task) =>
+            props.platform.reminder.schedule({
+              reminderId: task.id,
+              fireAtUtc: task.remindAt!,
+              title: task.title,
+              body: task.note.trim().slice(0, 120) || '该完成这项任务了',
+            }),
+          cancel: (id) => props.platform.reminder.cancel(id),
         });
+        scheduledReminders.clear();
+        report.nextScheduled.forEach((value, key) => scheduledReminders.set(key, value));
+        setReminderIssues(report.issues);
+      } catch (error) {
+        setReminderIssues([
+          {
+            reminderId: '*',
+            status: 'failed',
+            message: error instanceof Error ? error.message : '提醒对账失败',
+          },
+        ]);
       }
-      for (const id of [...scheduledReminders]) {
-        if (!upcoming.has(id)) {
-          await props.platform.reminder.cancel(id);
-          scheduledReminders.delete(id);
-        }
-      }
-      upcoming.forEach((id) => scheduledReminders.add(id));
-    } catch {
-      // Reminder scheduling is best-effort and must not block data loading.
-    }
+    })().finally(() => {
+      reminderReconcileInFlight = null;
+    });
+    return reminderReconcileInFlight;
   };
+
+  const reminderIssueSummary = () =>
+    reminderIssues()
+      .filter((issue) => issue.status !== 'skipped-past')
+      .map((issue) => issue.message ?? issue.status)
+      .join('；');
 
   const loadView = async (selection: AppView, date: string) => {
     const generation = ++loadGeneration;
@@ -385,8 +405,12 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
       const next = todayInTimeZone(timeZone());
       if (next !== today()) setToday(next);
       refresh();
+      void refreshReminders();
     });
-    const stopOnline = props.platform.lifecycle.onOnline(() => refresh());
+    const stopOnline = props.platform.lifecycle.onOnline(() => {
+      refresh();
+      void refreshReminders();
+    });
     const onKeydown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       if (mod && event.key.toLowerCase() === 'k') {
@@ -451,6 +475,11 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
 
   createEffect(() => {
     revision();
+    void refreshReminders();
+  });
+
+  createEffect(() => {
+    today();
     void refreshReminders();
   });
 
@@ -548,21 +577,8 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     const task = selectedTask();
     if (!task) return;
     try {
-      const updated = await service.patchTask(task.id, patch);
-      if ('remindAt' in patch) {
-        if (updated.remindAt && updated.status === 'open') {
-          await props.platform.reminder.schedule({
-            reminderId: updated.id,
-            fireAtUtc: updated.remindAt,
-            title: updated.title,
-            body: updated.note.slice(0, 120) || '该完成这项任务了',
-          });
-          scheduledReminders.add(updated.id);
-        } else {
-          await props.platform.reminder.cancel(updated.id);
-          scheduledReminders.delete(updated.id);
-        }
-      }
+      await service.patchTask(task.id, patch);
+      if ('remindAt' in patch) await refreshReminders();
       refresh();
     } catch (error) {
       reportError(error);
@@ -1067,6 +1083,12 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
                 <span class="page-footer-hint__storage">
                   {props.platform.kind === 'tauri' ? 'SQLite' : 'IndexedDB'} 本地保存
                 </span>
+                <Show when={reminderIssueSummary()}>
+                  <span class="reminder-issue" title={reminderIssueSummary()}>
+                    ⚠ {reminderIssues().filter((issue) => issue.status !== 'skipped-past').length}{' '}
+                    条提醒未安排
+                  </span>
+                </Show>
               </div>
             </div>
           </div>

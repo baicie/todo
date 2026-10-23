@@ -79,6 +79,11 @@ export class TauriTaskRepository implements CloudSyncStorage {
     return call<Page<TaskWithSteps>>('list_tasks', { query });
   }
 
+  async listReminderCandidates(): Promise<Task[]> {
+    await this.initialize();
+    return call<Task[]>('list_reminder_candidates');
+  }
+
   async getCounts(localDate: DateOnly): Promise<ViewCounts> {
     await this.initialize();
     return call<ViewCounts>('get_counts', { localDate });

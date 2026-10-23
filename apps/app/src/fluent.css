@@ -682,6 +682,11 @@ kbd {
   color: var(--text-tertiary);
 }
 
+.reminder-issue {
+  color: var(--text-danger);
+  cursor: help;
+}
+
 /* Detail panel */
 
 .detail {

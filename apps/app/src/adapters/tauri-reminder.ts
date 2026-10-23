@@ -1,4 +1,8 @@
-import type { ReminderPermission, ReminderScheduler } from '@todo/application';
+import type {
+  ReminderPermission,
+  ReminderScheduler,
+  ReminderScheduleResult,
+} from '@todo/application';
 
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -11,13 +15,34 @@ export class TauriReminderScheduler implements ReminderScheduler {
     fireAtUtc: string;
     title: string;
     body?: string;
-  }): Promise<void> {
-    await invokeCommand('schedule_reminder', {
-      reminderId: input.reminderId,
-      fireAtUtc: input.fireAtUtc,
-      title: input.title,
-      body: input.body ?? '',
-    });
+  }): Promise<ReminderScheduleResult> {
+    try {
+      const mode = await invokeCommand<string>('schedule_reminder', {
+        reminderId: input.reminderId,
+        fireAtUtc: input.fireAtUtc,
+        title: input.title,
+        body: input.body ?? '',
+      });
+      switch (mode) {
+        case 'exact':
+        case 'inexact':
+        case 'scheduled':
+          return { status: 'scheduled', mode };
+        case 'past':
+        case 'skipped-past':
+          return { status: 'skipped-past' };
+        case 'outside-window':
+          return { status: 'outside-window', message: '提醒超出系统预调度窗口' };
+        case 'capacity-exceeded':
+          return { status: 'capacity-exceeded', message: '系统提醒队列已满' };
+        case 'permission-denied':
+          return { status: 'permission-denied', message: '系统通知权限未授予' };
+        default:
+          return { status: 'failed', message: `未知调度结果: ${mode}` };
+      }
+    } catch (error) {
+      return { status: 'failed', message: error instanceof Error ? error.message : '调度失败' };
+    }
   }
 
   async cancel(reminderId: string): Promise<void> {

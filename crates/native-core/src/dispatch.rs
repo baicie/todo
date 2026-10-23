@@ -137,6 +137,7 @@ pub fn dispatch(store: &TodoStore, action: &str, payload: Value) -> StoreResult<
             let query: TaskQuery = parse(payload)?;
             serialize(store.list_tasks(query)?)
         }
+        "list_reminder_candidates" => serialize(store.upcoming_reminders()?),
         "get_counts" => {
             let request: CountsPayload = parse(payload)?;
             serialize(store.get_counts(&request.local_date)?)
@@ -288,6 +289,7 @@ pub fn action_names() -> &'static [&'static str] {
         "patch_task",
         "get_task",
         "list_tasks",
+        "list_reminder_candidates",
         "get_counts",
         "commit_completion",
         "delete_task",

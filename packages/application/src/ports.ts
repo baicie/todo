@@ -53,6 +53,8 @@ export interface TaskRepository {
   patchTask(id: Id, patch: TaskPatch): Promise<Task>;
   getTask(id: Id): Promise<TaskWithSteps | null>;
   listTasks(query: TaskQuery): Promise<Page<TaskWithSteps>>;
+  /** Open, non-deleted tasks with a reminder, ordered by remindAt ascending. */
+  listReminderCandidates(): Promise<Task[]>;
   getCounts(localDate: DateOnly): Promise<ViewCounts>;
   /** Marks complete and inserts the generated recurrence instance atomically. */
   commitCompletion(commit: CompletionCommit): Promise<CompleteResult>;
@@ -91,13 +93,27 @@ export const systemClock: Clock = {
 
 export type ReminderPermission = 'granted' | 'denied' | 'prompt';
 
+export type ReminderScheduleStatus =
+  | 'scheduled'
+  | 'skipped-past'
+  | 'outside-window'
+  | 'permission-denied'
+  | 'capacity-exceeded'
+  | 'failed';
+
+export interface ReminderScheduleResult {
+  status: ReminderScheduleStatus;
+  message?: string;
+  mode?: string;
+}
+
 export interface ReminderScheduler {
   schedule(input: {
     reminderId: string;
     fireAtUtc: string;
     title: string;
     body?: string;
-  }): Promise<void>;
+  }): Promise<ReminderScheduleResult>;
   cancel(reminderId: string): Promise<void>;
   rescheduleUpcoming(): Promise<void>;
   getPermission(): Promise<ReminderPermission>;
