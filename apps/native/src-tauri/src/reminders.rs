@@ -32,6 +32,30 @@ pub trait ReminderAdapter: Send + Sync {
     fn request_permission(&self) -> Result<String, String>;
 }
 
+/// The native queue is device-wide. Remove entries that do not belong to the
+/// newly active account before the WebView can schedule anything. Callers must
+/// treat an error as a visible platform limitation, not as success.
+pub fn cleanup_foreign_queue(
+    adapter: &dyn ReminderAdapter,
+    account_id: &str,
+) -> Result<(), String> {
+    let prefix = format!("account:{account_id}:");
+    let entries = adapter.scheduled()?;
+    for entry in entries {
+        if !entry.reminder_id.starts_with(&prefix) {
+            adapter.cancel(&entry.reminder_id)?;
+        }
+    }
+    let remaining = adapter.scheduled()?;
+    if remaining
+        .iter()
+        .any(|entry| !entry.reminder_id.starts_with(&prefix))
+    {
+        return Err("系统提醒队列仍有其他账号的残留通知".to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(desktop)]
 pub fn create_adapter(app: AppHandle) -> Arc<dyn ReminderAdapter> {
     Arc::new(DesktopTimerAdapter::new(app))
