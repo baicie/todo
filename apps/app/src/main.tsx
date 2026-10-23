@@ -1,6 +1,5 @@
 import { ErrorBoundary } from 'solid-js';
 import { render } from 'solid-js/web';
-import { App } from './App';
 import { createAppPlatform } from './adapters/platform';
 import { applyTheme, getThemePreference } from './lib/theme';
 import './styles.css';
@@ -31,6 +30,10 @@ async function bootstrap() {
   if (!root) throw new Error('Missing #root');
   try {
     const platform = await createAppPlatform();
+    // App (and therefore cloud.ts) must load only after the native account
+    // context has updated localStorage; module-level account ids are frozen on
+    // first import.
+    const { App } = await import('./App');
     render(
       () => (
         <ErrorBoundary fallback={(error) => <FatalError error={error} />}>

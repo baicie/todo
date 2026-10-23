@@ -4,7 +4,7 @@ import { AuthClient, RestSyncTransport, type DeviceInfo } from '@todo/sync/rest'
 import type { Ack, BootstrapPage, Change } from '@todo/contracts';
 import type { AppPlatform } from '../adapters/platform';
 import { downloadBlob, exportFilename } from '@todo/application';
-import { activeAccountId, updateActiveAccountEmail } from '../lib/accounts';
+import { activeAccountId, cloudConfigKey, updateActiveAccountEmail } from '../lib/accounts';
 import { subscribeWebPush, unsubscribeWebPush, webPushSupported } from '../lib/web-push';
 import type {
   CloudDiagnostics,
@@ -23,8 +23,7 @@ import {
 } from './snapshot';
 
 const ACCOUNT_ID = activeAccountId();
-const CONFIG_KEY =
-  ACCOUNT_ID === 'default' ? 'shishi.cloud.config' : `shishi.cloud.config.${ACCOUNT_ID}`;
+const CONFIG_KEY = cloudConfigKey(ACCOUNT_ID);
 const REFRESH_KEY = `cloud-refresh:${ACCOUNT_ID}`;
 
 interface StoredConfig {
