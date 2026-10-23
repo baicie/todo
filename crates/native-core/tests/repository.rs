@@ -907,6 +907,62 @@ fn stale_sync_session_cannot_commit_server_results() {
 }
 
 #[test]
+fn stale_sync_session_clear_cannot_remove_a_newer_token() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    store.sync_set_enabled(true).expect("enable sync");
+    store.create_task(new_task("session fence")).expect("task");
+    let pending = store.pending_mutations(10).expect("pending");
+    let op = pending.first().expect("op").clone();
+
+    store
+        .sync_set_session(Some("session-a"))
+        .expect("session a");
+    store
+        .sync_set_session(Some("session-b"))
+        .expect("session b");
+    store
+        .sync_clear_session_if(Some("session-a"))
+        .expect("old clear is a no-op");
+    store
+        .apply_server_result(ApplyServerResultRequest {
+            acks: vec![todo_native_core::ServerAck {
+                op_id: op.op_id.clone(),
+                server_seq: Some(1),
+                status: "applied".to_owned(),
+                error_code: None,
+            }],
+            changes: vec![],
+            next_cursor: "1".to_owned(),
+            session_id: Some("session-b".to_owned()),
+        })
+        .expect("session b still owns the fence");
+
+    store.create_task(new_task("after clear")).expect("task 2");
+    store
+        .sync_set_session(Some("session-c"))
+        .expect("session c");
+    store
+        .sync_clear_session_if(Some("session-c"))
+        .expect("current clear");
+    let pending = store.pending_mutations(10).expect("pending 2");
+    let op = pending.first().expect("op 2").clone();
+    let error = store
+        .apply_server_result(ApplyServerResultRequest {
+            acks: vec![todo_native_core::ServerAck {
+                op_id: op.op_id,
+                server_seq: Some(2),
+                status: "applied".to_owned(),
+                error_code: None,
+            }],
+            changes: vec![],
+            next_cursor: "2".to_owned(),
+            session_id: Some("session-c".to_owned()),
+        })
+        .expect_err("cleared session must be stale");
+    assert_eq!(error.code().as_str(), "STALE_SYNC_SESSION");
+}
+
+#[test]
 fn stale_sync_session_cannot_replace_a_snapshot() {
     let store = TodoStore::open_in_memory().expect("open store");
     let task = store.create_task(new_task("keep")).expect("task");

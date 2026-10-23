@@ -991,10 +991,19 @@ export class DexieTaskRepository implements CloudSyncStorage {
     await this.db.meta.put({ key, value });
   }
 
-  async syncSetSession(sessionId: string | null): Promise<void> {
+  async syncSetSession(sessionId: string): Promise<void> {
     await this.initialize();
-    if (sessionId === null) await this.db.meta.delete('syncSession');
-    else await this.db.meta.put({ key: 'syncSession', value: sessionId });
+    await this.db.meta.put({ key: 'syncSession', value: sessionId });
+  }
+
+  async syncClearSession(expectedToken: string | null): Promise<void> {
+    if (expectedToken === null) return;
+    await this.initialize();
+    await this.db.transaction('rw', [this.db.meta], async () => {
+      const current = await this.db.meta.get('syncSession');
+      if (current?.value !== expectedToken) return;
+      await this.db.meta.delete('syncSession');
+    });
   }
 
   private async assertSyncSession(expected?: string): Promise<void> {

@@ -61,6 +61,22 @@ impl TodoStore {
         Ok(())
     }
 
+    /// Clear the fence only when it still belongs to the caller's session.
+    /// A delayed logout from session A must never delete session B's token.
+    pub fn sync_clear_session_if(&self, expected_session_id: Option<&str>) -> StoreResult<()> {
+        let Some(expected_session_id) = expected_session_id else {
+            return Ok(());
+        };
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        if kv_string(&transaction, "sync_session").as_deref() != Some(expected_session_id) {
+            return Ok(());
+        }
+        transaction.execute("DELETE FROM kv_state WHERE key = 'sync_session'", [])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Device and sync identity
     // ------------------------------------------------------------------

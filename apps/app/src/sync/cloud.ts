@@ -217,9 +217,13 @@ export function createCloudController(options: {
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let refreshInFlight: Promise<string> | null = null;
   let runInFlight: Promise<void> | null = null;
+  let bootstrapInFlight: Promise<void> | null = null;
+  let bootstrapCompletion: Promise<void> | null = null;
+  let queuedSync: Promise<void> | null = null;
   let sessionGeneration = 0;
   let sessionToken: string | null = null;
   let disposed = false;
+  let fenceTail: Promise<void> = Promise.resolve();
   let unsubscribe: (() => void) | null = null;
   let stopOnline: (() => void) | null = null;
   let stopResume: (() => void) | null = null;
@@ -232,11 +236,43 @@ export function createCloudController(options: {
   const isCurrentGeneration = (generation: number): boolean =>
     !disposed && generation === sessionGeneration;
 
+  // Fence writes are serialized in invocation order. A write is a no-op if a
+  // newer generation has already superseded it, so an old logout clear can
+  // never erase a token installed by a newer beginSession.
+  const enqueueFenceWrite = (generation: number, token: string): Promise<void> => {
+    const operation = fenceTail.then(async () => {
+      if (generation !== sessionGeneration) return;
+      await repository.syncSetSession(token);
+    });
+    fenceTail = operation.catch(() => {
+      // Keep the queue alive; the caller still observes the failure.
+    });
+    return operation;
+  };
+
+  const enqueueFenceClear = (generation: number, expectedToken: string | null): Promise<void> => {
+    const operation = fenceTail.then(async () => {
+      // A newer beginSession owns the DB fence now; do not touch it.
+      if (generation !== sessionGeneration) return;
+      // The repository compares expectedToken inside its write transaction.
+      // If a newer session already installed a token, this is a no-op.
+      await repository.syncClearSession(expectedToken);
+    });
+    fenceTail = operation.catch(() => {
+      // Keep the queue alive; the caller still observes the failure.
+    });
+    return operation;
+  };
+
   const beginSession = async (): Promise<{ generation: number; token: string }> => {
+    if (disposed) throw new StaleSyncSessionError();
     const token = crypto.randomUUID();
-    sessionGeneration += 1;
+    const generation = (sessionGeneration += 1);
     sessionToken = token;
     runInFlight = null;
+    bootstrapInFlight = null;
+    bootstrapCompletion = null;
+    queuedSync = null;
     refreshInFlight = null;
     if (autoSyncTimer) clearTimeout(autoSyncTimer);
     autoSyncTimer = undefined;
@@ -249,15 +285,22 @@ export function createCloudController(options: {
     stopResume?.();
     stopResume = null;
     engine = null;
-    await repository.syncSetSession(token);
-    return { generation: sessionGeneration, token };
+    await enqueueFenceWrite(generation, token);
+    if (!isCurrentGeneration(generation) || sessionToken !== token) {
+      throw new StaleSyncSessionError();
+    }
+    return { generation, token };
   };
 
-  const invalidateSession = (): void => {
-    sessionGeneration += 1;
+  const invalidateSession = (): Promise<void> => {
+    const generation = (sessionGeneration += 1);
+    const expectedToken = sessionToken;
     sessionToken = null;
     engine = null;
     runInFlight = null;
+    bootstrapInFlight = null;
+    bootstrapCompletion = null;
+    queuedSync = null;
     refreshInFlight = null;
     if (autoSyncTimer) clearTimeout(autoSyncTimer);
     autoSyncTimer = undefined;
@@ -269,7 +312,7 @@ export function createCloudController(options: {
     stopOnline = null;
     stopResume?.();
     stopResume = null;
-    void repository.syncSetSession(null).catch(() => {});
+    return enqueueFenceClear(generation, expectedToken);
   };
 
   const persist = (enabled = state().phase === 'connected') => {
@@ -463,6 +506,17 @@ export function createCloudController(options: {
   };
 
   const runSync = (): Promise<void> => {
+    if (bootstrapInFlight) {
+      if (!queuedSync) {
+        const queuedGeneration = sessionGeneration;
+        queuedSync = bootstrapInFlight.then(() => {
+          queuedSync = null;
+          if (queuedGeneration !== sessionGeneration) return;
+          return runSync();
+        });
+      }
+      return queuedSync;
+    }
     if (runInFlight) return runInFlight;
     const generation = sessionGeneration;
     const pending = executeSync(generation);
@@ -579,6 +633,7 @@ export function createCloudController(options: {
     const nextDiagnostics = await diagnostics();
     update({ boundAccount: nextDiagnostics.boundAccount });
     if (!config?.enabled || !config.email) return;
+    const initializeGeneration = sessionGeneration;
     buildClients();
     try {
       await refreshAccessToken();
@@ -586,12 +641,14 @@ export function createCloudController(options: {
       update({ email: config.email, lastSyncedAt: config.lastSyncedAt });
       await activateCloud();
     } catch {
-      update({
-        phase: 'expired',
-        syncStatus: 'auth-required',
-        email: config.email,
-        error: '上次登录已失效，请重新获取验证码。',
-      });
+      if (!disposed && sessionGeneration === initializeGeneration) {
+        update({
+          phase: 'expired',
+          syncStatus: 'auth-required',
+          email: config.email,
+          error: '上次登录已失效，请重新获取验证码。',
+        });
+      }
     }
   };
 
@@ -665,7 +722,7 @@ export function createCloudController(options: {
       }
       update({ busy: null });
     } catch (error) {
-      invalidateSession();
+      await invalidateSession();
       pendingSnapshot = null;
       pendingSession = null;
       try {
@@ -687,7 +744,7 @@ export function createCloudController(options: {
       update({ phase: 'disconnected', mergePreview: null, error: null });
       pendingSnapshot = null;
       pendingSession = null;
-      invalidateSession();
+      await invalidateSession();
       try {
         if (auth) await auth.logout();
       } catch {
@@ -726,27 +783,53 @@ export function createCloudController(options: {
     await runSync();
   };
 
-  const forceBootstrap = async () => {
+  const forceBootstrap = async (): Promise<void> => {
     if (state().phase !== 'connected') return;
+    if (bootstrapCompletion) return bootstrapCompletion;
     const generation = sessionGeneration;
     const token = sessionToken;
-    // Serialize with an in-flight sync so a late sync response cannot apply an
-    // older cursor after the bootstrap snapshot is installed.
-    if (runInFlight) await runInFlight;
-    if (!isCurrentGeneration(generation) || !token) return;
-    update({ busy: 'bootstrap', error: null });
-    try {
-      const snapshot = await fetchSnapshot();
+    if (!token) return;
+
+    // The whole bootstrap (wait for old sync -> snapshot -> replace -> cursor
+    // diagnostics) is one mutually exclusive operation. While
+    // `bootstrapInFlight` is set, every new sync trigger is deferred into a
+    // single queued run after the snapshot is installed.
+    const core = (async () => {
+      if (runInFlight) await runInFlight;
       if (!isCurrentGeneration(generation) || !token) return;
-      await repository.syncReplaceSnapshot(snapshot, token);
-      if (!isCurrentGeneration(generation)) return;
-      await diagnostics(generation);
-      await runSync();
-    } catch (error) {
-      if (isCurrentGeneration(generation)) await handleSyncError(error);
-    } finally {
-      if (isCurrentGeneration(generation)) update({ busy: null });
-    }
+      update({ busy: 'bootstrap', error: null });
+      try {
+        const snapshot = await fetchSnapshot();
+        if (!isCurrentGeneration(generation) || !token) return;
+        await repository.syncReplaceSnapshot(snapshot, token);
+        if (!isCurrentGeneration(generation)) return;
+        await diagnostics(generation);
+      } catch (error) {
+        if (isCurrentGeneration(generation)) await handleSyncError(error);
+      } finally {
+        if (isCurrentGeneration(generation)) update({ busy: null });
+      }
+    })();
+    const tracked = core.finally(() => {
+      if (bootstrapInFlight === tracked) bootstrapInFlight = null;
+    });
+    bootstrapInFlight = tracked;
+
+    const completion: Promise<void> = tracked
+      .then(async () => {
+        if (!isCurrentGeneration(generation)) return;
+        const queued = queuedSync;
+        if (queued) {
+          await queued;
+          return;
+        }
+        await runSync();
+      })
+      .finally(() => {
+        if (bootstrapCompletion === completion) bootstrapCompletion = null;
+      });
+    bootstrapCompletion = completion;
+    return completion;
   };
 
   const clearRejected = async () => {
@@ -813,9 +896,8 @@ export function createCloudController(options: {
     update({ busy: 'logout' });
     // Stop all future work and invalidate the DB fence before touching local
     // data. Any late HTTP response now fails at syncApplyResult time.
-    invalidateSession();
+    await invalidateSession();
     try {
-      await repository.syncSetSession(null);
       if (auth) {
         try {
           // Best-effort server-side revoke. A refresh is deliberately not
@@ -958,7 +1040,7 @@ export function createCloudController(options: {
 
   const dispose = () => {
     disposed = true;
-    invalidateSession();
+    void invalidateSession();
   };
 
   return {

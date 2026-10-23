@@ -301,9 +301,14 @@ export class TauriTaskRepository implements CloudSyncStorage {
     this.notify(result.changes.map((change) => change.entity_id));
   }
 
-  async syncSetSession(sessionId: string | null): Promise<void> {
+  async syncSetSession(sessionId: string): Promise<void> {
     await this.initialize();
     await call<void>('sync_set_session', { sessionId });
+  }
+
+  async syncClearSession(expectedToken: string | null): Promise<void> {
+    await this.initialize();
+    await call<void>('sync_clear_session', { expectedSessionId: expectedToken });
   }
 
   async syncInitializeCloud(

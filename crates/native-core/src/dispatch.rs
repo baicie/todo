@@ -93,6 +93,13 @@ struct SyncSessionPayload {
     session_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncSessionClearPayload {
+    #[serde(default)]
+    expected_session_id: Option<String>,
+}
+
 /// Execute one frontend storage action against the SQLite store.
 ///
 /// The action surface is deliberately finite: no SQL, file or shell input
@@ -232,6 +239,11 @@ pub fn dispatch(store: &TodoStore, action: &str, payload: Value) -> StoreResult<
             store.sync_set_session(request.session_id.as_deref())?;
             Ok(Value::Null)
         }
+        "sync_clear_session" => {
+            let request: SyncSessionClearPayload = parse(payload)?;
+            store.sync_clear_session_if(request.expected_session_id.as_deref())?;
+            Ok(Value::Null)
+        }
         "sync_clear_rejected" => {
             store.sync_clear_rejected()?;
             Ok(Value::Null)
@@ -325,6 +337,7 @@ pub fn action_names() -> &'static [&'static str] {
         "sync_diagnostics",
         "sync_set_enabled",
         "sync_set_session",
+        "sync_clear_session",
         "sync_clear_rejected",
         "sync_clear_account_binding",
         "sync_initialize_cloud",

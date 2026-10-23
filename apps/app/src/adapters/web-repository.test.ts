@@ -304,6 +304,36 @@ describe('DexieTaskRepository', () => {
     );
   });
 
+  it('does not let an old session clear a newer fence token', async () => {
+    await repository.syncSetEnabled(true);
+    const task = await service.createTask({ title: 'fence owner' });
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await repository.syncClearSession('session-a');
+    const pending = await repository.syncGetPending(10);
+    const op = pending.find((item) => item.entityId === task.id)!;
+    await repository.syncApplyResult(
+      {
+        acks: [{ op_id: op.opId, status: 'applied', server_seq: 1 }],
+        changes: [],
+        nextCursor: '1',
+      },
+      'session-b',
+    );
+
+    await repository.syncClearSession('session-b');
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [],
+          changes: [],
+          nextCursor: '2',
+        },
+        'session-b',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+  });
+
   it('deletes the session fence before an old apply can run after clearAll', async () => {
     await repository.syncSetEnabled(true);
     const task = await service.createTask({ title: 'old session' });

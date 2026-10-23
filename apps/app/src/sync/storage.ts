@@ -55,7 +55,8 @@ export interface CloudSyncStorage extends TaskRepository {
   syncListRejected?(limit: number): Promise<RejectedMutation[]>;
   syncDiscardRejected?(opId: string): Promise<void>;
   /** Binds subsequent server writes to this local session generation. */
-  syncSetSession(sessionId: string | null): Promise<void>;
+  syncSetSession(sessionId: string): Promise<void>;
+  syncClearSession(expectedToken: string | null): Promise<void>;
   syncApplyResult(
     result: { acks: Ack[]; changes: Change[]; nextCursor: string },
     sessionId?: string,
