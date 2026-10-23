@@ -8,6 +8,7 @@ import WebKit
 private let maxPendingNotifications = 64
 private let schedulingWindowSeconds: TimeInterval = 30 * 24 * 60 * 60
 private let secureTokenService = "app.shishi.todo.secure-token"
+private let fallbackBody = "该完成这项任务了"
 
 struct ScheduleArgs: Decodable {
   let reminderId: String
@@ -122,16 +123,18 @@ class ReminderPlugin: Plugin {
 
       center.removePendingNotificationRequests(withIdentifiers: [args.reminderId])
       let content = UNMutableNotificationContent()
-      content.title = args.title.isEmpty ? "拾事提醒" : args.title
-      content.body = (args.body?.isEmpty == false)
-        ? args.body!
-        : "该完成这项任务了"
+      let rawTitle = args.title
+      let rawBody = args.body ?? ""
+      content.title = rawTitle.isEmpty ? "拾事提醒" : rawTitle
+      content.body = rawBody.isEmpty ? fallbackBody : rawBody
       content.sound = .default
       content.badge = nil
       content.threadIdentifier = "shishi-reminders"
       content.userInfo = [
         "reminderId": args.reminderId,
         "fireAtUtc": args.fireAtUtc,
+        "title": rawTitle,
+        "body": rawBody,
         "exact": args.exact ?? false,
         "mode": "scheduled",
       ]
@@ -188,11 +191,17 @@ class ReminderPlugin: Plugin {
         else {
           return nil
         }
+        let rawTitle = request.content.userInfo["title"] as? String ?? request.content.title
+        let rawBody = request.content.userInfo["body"] as? String
+        // Entries scheduled before raw body was persisted must not look
+        // "changed" merely because iOS substituted its display fallback.
+        let body = rawBody
+          ?? (request.content.body == fallbackBody ? "" : request.content.body)
         return ScheduledReminderResponse(
           reminderId: reminderId,
           fireAtUtc: fireAtUtc,
-          title: request.content.title,
-          body: request.content.body,
+          title: rawTitle,
+          body: body,
           exact: request.content.userInfo["exact"] as? Bool ?? false,
           mode: "scheduled"
         )

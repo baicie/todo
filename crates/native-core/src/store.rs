@@ -2227,6 +2227,7 @@ impl TodoStore {
         transaction.execute("DELETE FROM local_lists", [])?;
         transaction.execute("DELETE FROM outbox", [])?;
         transaction.execute("DELETE FROM server_shadow", [])?;
+        transaction.execute("DELETE FROM kv_state WHERE key = 'sync_session'", [])?;
         transaction.commit()?;
         Ok(())
     }
@@ -2302,6 +2303,7 @@ impl TodoStore {
     pub fn apply_server_result(&self, request: ApplyServerResultRequest) -> StoreResult<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
+        sync_support::assert_sync_session(&transaction, request.session_id.as_deref())?;
         let mut affected = Vec::new();
         for ack in &request.acks {
             // Acks only carry opId. Resolve the entity before deleting the

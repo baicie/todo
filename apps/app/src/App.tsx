@@ -269,6 +269,37 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     if (reminderReconcileInFlight) return reminderReconcileInFlight;
     reminderReconcileInFlight = (async () => {
       try {
+        if (props.platform.kind === 'tauri') {
+          const report = await props.platform.reminder.rescheduleUpcoming();
+          const issues: ReminderIssue[] = report.failed.map((message) => ({
+            reminderId: '*',
+            status: 'failed',
+            message,
+          }));
+          if (report.permissionDenied > 0) {
+            issues.push({
+              reminderId: '*',
+              status: 'permission-denied',
+              message: `${report.permissionDenied} 条提醒因通知权限未授予而跳过`,
+            });
+          }
+          if (report.outsideWindow > 0) {
+            issues.push({
+              reminderId: '*',
+              status: 'outside-window',
+              message: `${report.outsideWindow} 条提醒超出系统预调度窗口`,
+            });
+          }
+          if (report.capacityExceeded > 0) {
+            issues.push({
+              reminderId: '*',
+              status: 'capacity-exceeded',
+              message: `${report.capacityExceeded} 条提醒因系统队列容量不足而跳过`,
+            });
+          }
+          setReminderIssues(issues);
+          return;
+        }
         const candidates = await props.platform.repository.listReminderCandidates();
         const report = await reconcileReminders({
           tasks: candidates.map((task) => ({
@@ -767,12 +798,15 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   };
 
   const requestNotifications = async () => {
-    if (props.platform.reminder.requestPermission) {
-      return props.platform.reminder.requestPermission();
-    }
-    if (typeof Notification === 'undefined') return 'denied' as const;
-    const result = await Notification.requestPermission();
-    return result === 'default' ? ('prompt' as const) : result;
+    const permission = props.platform.reminder.requestPermission
+      ? await props.platform.reminder.requestPermission()
+      : typeof Notification === 'undefined'
+        ? ('denied' as const)
+        : await Notification.requestPermission().then((result) =>
+            result === 'default' ? ('prompt' as const) : result,
+          );
+    if (permission === 'granted') void refreshReminders();
+    return permission;
   };
 
   const openTaskFromSearch = (task: TaskWithSteps) => {

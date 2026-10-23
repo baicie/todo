@@ -86,6 +86,20 @@ struct DatePayload {
     date: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncSessionPayload {
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncSessionClearPayload {
+    #[serde(default)]
+    expected_session_id: Option<String>,
+}
+
 /// Execute one frontend storage action against the SQLite store.
 ///
 /// The action surface is deliberately finite: no SQL, file or shell input
@@ -220,6 +234,16 @@ pub fn dispatch(store: &TodoStore, action: &str, payload: Value) -> StoreResult<
             store.sync_set_enabled(request.enabled)?;
             Ok(Value::Null)
         }
+        "sync_set_session" => {
+            let request: SyncSessionPayload = parse(payload)?;
+            store.sync_set_session(request.session_id.as_deref())?;
+            Ok(Value::Null)
+        }
+        "sync_clear_session" => {
+            let request: SyncSessionClearPayload = parse(payload)?;
+            store.sync_clear_session_if(request.expected_session_id.as_deref())?;
+            Ok(Value::Null)
+        }
         "sync_clear_rejected" => {
             store.sync_clear_rejected()?;
             Ok(Value::Null)
@@ -234,7 +258,7 @@ pub fn dispatch(store: &TodoStore, action: &str, payload: Value) -> StoreResult<
         }
         "sync_replace_snapshot" => {
             let request: SyncReplaceSnapshotRequest = parse(payload)?;
-            store.sync_replace_snapshot(&request.snapshot)?;
+            store.sync_replace_snapshot_fenced(&request.snapshot, request.session_id.as_deref())?;
             Ok(Value::Null)
         }
         "bootstrap_required" => {
@@ -312,6 +336,8 @@ pub fn action_names() -> &'static [&'static str] {
         "rotate_device_id",
         "sync_diagnostics",
         "sync_set_enabled",
+        "sync_set_session",
+        "sync_clear_session",
         "sync_clear_rejected",
         "sync_clear_account_binding",
         "sync_initialize_cloud",

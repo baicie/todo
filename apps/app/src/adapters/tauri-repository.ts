@@ -7,6 +7,7 @@ import type {
   CloudMergeMode,
   CloudSyncStorage,
 } from '../sync/storage';
+import { StaleSyncSessionError } from '../sync/storage';
 import type { CloudSnapshot } from '../sync/snapshot';
 import type {
   DateOnly,
@@ -34,6 +35,21 @@ async function call<T>(action: string, payload?: Record<string, unknown>): Promi
   const { invoke } = await import('@tauri-apps/api/core');
   const request: StorageRequest = { action, ...(payload ? { payload } : {}) };
   return invoke<T>('todo_storage', { request });
+}
+
+async function callFenced<T>(action: string, payload?: Record<string, unknown>): Promise<T> {
+  try {
+    return await call<T>(action, payload);
+  } catch (error) {
+    const text =
+      typeof error === 'string'
+        ? error
+        : error instanceof Error
+          ? error.message
+          : JSON.stringify(error);
+    if (text.includes('STALE_SYNC_SESSION')) throw new StaleSyncSessionError();
+    throw error;
+  }
 }
 
 /**
@@ -267,38 +283,54 @@ export class TauriTaskRepository implements CloudSyncStorage {
     return call<CloudDiagnostics>('sync_diagnostics');
   }
 
-  async syncApplyResult(result: {
-    acks: Ack[];
-    changes: Change[];
-    nextCursor: string;
-  }): Promise<void> {
+  async syncApplyResult(
+    result: {
+      acks: Ack[];
+      changes: Change[];
+      nextCursor: string;
+    },
+    sessionId?: string,
+  ): Promise<void> {
     await this.initialize();
-    await call<void>('apply_server_result', {
+    await callFenced<void>('apply_server_result', {
       acks: result.acks,
       changes: result.changes,
       nextCursor: result.nextCursor,
+      sessionId,
     });
     this.notify(result.changes.map((change) => change.entity_id));
+  }
+
+  async syncSetSession(sessionId: string): Promise<void> {
+    await this.initialize();
+    await call<void>('sync_set_session', { sessionId });
+  }
+
+  async syncClearSession(expectedToken: string | null): Promise<void> {
+    await this.initialize();
+    await call<void>('sync_clear_session', { expectedSessionId: expectedToken });
   }
 
   async syncInitializeCloud(
     snapshot: CloudSnapshot,
     mode: CloudMergeMode,
     accountEmail: string,
+    sessionId?: string,
   ): Promise<CloudInitializeResult> {
     await this.initialize();
     const result = await call<CloudInitializeResult>('sync_initialize_cloud', {
       snapshot,
       mode,
       accountEmail,
+      sessionId,
     });
     this.notify(snapshot.tasks.map((task) => task.id));
     return result;
   }
 
-  async syncReplaceSnapshot(snapshot: CloudSnapshot): Promise<void> {
+  async syncReplaceSnapshot(snapshot: CloudSnapshot, sessionId?: string): Promise<void> {
     await this.initialize();
-    await call<void>('sync_replace_snapshot', { snapshot });
+    await callFenced<void>('sync_replace_snapshot', { snapshot, sessionId });
     this.notify(snapshot.tasks.map((task) => task.id));
   }
 

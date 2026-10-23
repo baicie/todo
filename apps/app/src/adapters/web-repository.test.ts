@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskService } from '@todo/application';
 import type { CloudSnapshot } from '../sync/snapshot';
+import { StaleSyncSessionError } from '../sync/storage';
 import { DexieTaskRepository } from './web-repository';
 
 let repository: DexieTaskRepository;
@@ -236,6 +237,123 @@ describe('DexieTaskRepository', () => {
     expect((await repository.getTask('task-remote'))?.title).toBe('offline edit');
   });
 
+  it('rejects stale server results at the DB transaction boundary', async () => {
+    await repository.syncSetEnabled(true);
+    const first = await service.createTask({ title: 'session a task' });
+    const firstPending = await repository.syncGetPending(10);
+    const firstOp = firstPending[0]!;
+    await repository.syncSetSession('session-a');
+    await repository.syncApplyResult(
+      {
+        acks: [{ op_id: firstOp.opId, status: 'applied', server_seq: 1 }],
+        changes: [],
+        nextCursor: '1',
+      },
+      'session-a',
+    );
+
+    const second = await service.createTask({ title: 'session b task' });
+    const secondPending = await repository.syncGetPending(10);
+    const secondOp = secondPending.find((item) => item.entityId === second.id)!;
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [{ op_id: secondOp.opId, status: 'applied', server_seq: 2 }],
+          changes: [],
+          nextCursor: '2',
+        },
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+
+    expect(await repository.syncGetCursor()).toBe('1');
+    expect((await repository.syncGetPending(10)).some((item) => item.opId === secondOp.opId)).toBe(
+      true,
+    );
+    expect((await repository.getTask(first.id))?.title).toBe('session a task');
+  });
+
+  it('rejects a stale bootstrap snapshot after the session changes', async () => {
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncReplaceSnapshot(
+        cloudSnapshot('stale-task', 'stale snapshot', 'must not land'),
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.getTask('stale-task')).toBeNull();
+  });
+
+  it('rejects a stale cloud initialization after the session changes', async () => {
+    const seeded = await repository.listTasks({ view: 'all', limit: 1000 });
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncInitializeCloud(
+        cloudSnapshot('init-stale', 'init stale', 'must not land'),
+        'cloud',
+        'a@example.com',
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.getTask('init-stale')).toBeNull();
+    expect((await repository.listTasks({ view: 'all', limit: 1000 })).items).toHaveLength(
+      seeded.items.length,
+    );
+  });
+
+  it('does not let an old session clear a newer fence token', async () => {
+    await repository.syncSetEnabled(true);
+    const task = await service.createTask({ title: 'fence owner' });
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await repository.syncClearSession('session-a');
+    const pending = await repository.syncGetPending(10);
+    const op = pending.find((item) => item.entityId === task.id)!;
+    await repository.syncApplyResult(
+      {
+        acks: [{ op_id: op.opId, status: 'applied', server_seq: 1 }],
+        changes: [],
+        nextCursor: '1',
+      },
+      'session-b',
+    );
+
+    await repository.syncClearSession('session-b');
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [],
+          changes: [],
+          nextCursor: '2',
+        },
+        'session-b',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+  });
+
+  it('deletes the session fence before an old apply can run after clearAll', async () => {
+    await repository.syncSetEnabled(true);
+    const task = await service.createTask({ title: 'old session' });
+    const pending = await repository.syncGetPending(10);
+    const op = pending.find((item) => item.entityId === task.id)!;
+    await repository.syncSetSession('session-a');
+    await repository.clearAll();
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [{ op_id: op.opId, status: 'applied', server_seq: 1 }],
+          changes: [],
+          nextCursor: '1',
+        },
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.listTasks({ view: 'all' })).toMatchObject({ items: [] });
+  });
+
   it('keeps the previous database intact when an import is rejected', async () => {
     await service.createTask({ title: '保留任务' });
     const before = await repository.listTasks({ view: 'all', limit: 1000 });
@@ -280,8 +398,11 @@ describe('DexieTaskRepository', () => {
       nextTask: null,
     });
 
+    const started = performance.now();
     const candidates = await repository.listReminderCandidates();
+    const elapsed = performance.now() - started;
     expect(candidates).toHaveLength(1001);
+    console.info(`[reminder-query] 1001 candidates in ${elapsed.toFixed(2)}ms`);
     expect(candidates.every((task) => task.status === 'open')).toBe(true);
     expect(candidates[0]!.remindAt! <= candidates[1]!.remindAt!).toBe(true);
   });

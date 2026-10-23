@@ -80,6 +80,30 @@ describe('reconcileReminders', () => {
     expect(result.issues[0]).toMatchObject({ reminderId: 'task-2', status: 'failed' });
   });
 
+  it('handles 1001 unchanged candidates without scheduling duplicates', async () => {
+    const tasks = Array.from({ length: 1001 }, (_, index) => ({
+      ...task({
+        id: `task-${index}`,
+        remindAt: `2026-10-24T09:${String(index % 60).padStart(2, '0')}:00Z`,
+      }),
+    }));
+    const scheduledMap = new Map(tasks.map((item) => [item.id, reminderFingerprint(item)]));
+    const schedule = vi.fn(async () => scheduled());
+    const started = performance.now();
+    const result = await reconcileReminders({
+      tasks,
+      scheduled: scheduledMap,
+      schedule,
+      cancel: vi.fn(),
+    });
+    const elapsed = performance.now() - started;
+    expect(schedule).not.toHaveBeenCalled();
+    expect(result.unchanged).toHaveLength(1001);
+    console.info(
+      `[reminder-reconcile] 1001 unchanged candidates in ${elapsed.toFixed(1)}ms; schedule calls=0`,
+    );
+  });
+
   it('keeps a cancellation retryable when the platform cancel fails', async () => {
     const result = await reconcileReminders({
       tasks: [],

@@ -107,6 +107,17 @@ export interface ReminderScheduleResult {
   mode?: string;
 }
 
+export interface ReminderReconcileReport {
+  scheduled: number;
+  cancelled: number;
+  unchanged: number;
+  skippedPast: number;
+  outsideWindow: number;
+  capacityExceeded: number;
+  permissionDenied: number;
+  failed: string[];
+}
+
 export interface ReminderScheduler {
   schedule(input: {
     reminderId: string;
@@ -115,7 +126,8 @@ export interface ReminderScheduler {
     body?: string;
   }): Promise<ReminderScheduleResult>;
   cancel(reminderId: string): Promise<void>;
-  rescheduleUpcoming(): Promise<void>;
+  /** Reconcile the platform queue against SQLite; return a structured report. */
+  rescheduleUpcoming(): Promise<ReminderReconcileReport>;
   getPermission(): Promise<ReminderPermission>;
   /** Present on platforms where permission must be requested interactively. */
   requestPermission?(): Promise<ReminderPermission>;

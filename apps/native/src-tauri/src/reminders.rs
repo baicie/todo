@@ -2,6 +2,14 @@ use std::sync::Arc;
 
 use tauri::AppHandle;
 
+#[derive(Debug, Clone)]
+pub struct ScheduledReminderInfo {
+    pub reminder_id: String,
+    pub fire_at_utc: String,
+    pub title: String,
+    pub body: String,
+}
+
 /// Explicit boundary for platform reminder schedulers.
 ///
 /// Desktop uses an in-process timer queue plus the notification plugin.
@@ -17,9 +25,8 @@ pub trait ReminderAdapter: Send + Sync {
         exact: bool,
     ) -> Result<String, String>;
     fn cancel(&self, reminder_id: &str) -> Result<(), String>;
-    /// IDs currently held by the platform queue, used for a differential
-    /// reconcile instead of clearing every pending notification.
-    fn scheduled_ids(&self) -> Result<Vec<String>, String>;
+    /// Snapshot of the platform queue used for a differential reconcile.
+    fn scheduled(&self) -> Result<Vec<ScheduledReminderInfo>, String>;
     fn permission(&self) -> String;
     /// Requests runtime permission when the platform supports a prompt.
     fn request_permission(&self) -> Result<String, String>;
@@ -139,13 +146,21 @@ impl ReminderAdapter for DesktopTimerAdapter {
         Ok(())
     }
 
-    fn scheduled_ids(&self) -> Result<Vec<String>, String> {
+    fn scheduled(&self) -> Result<Vec<ScheduledReminderInfo>, String> {
         let entries = self
             .queue
             .entries
             .lock()
             .map_err(|_| "reminder queue is unavailable".to_owned())?;
-        Ok(entries.keys().cloned().collect())
+        Ok(entries
+            .iter()
+            .map(|(id, reminder)| ScheduledReminderInfo {
+                reminder_id: id.clone(),
+                fire_at_utc: reminder.fire_at.to_rfc3339(),
+                title: reminder.title.clone(),
+                body: reminder.body.clone(),
+            })
+            .collect())
     }
 
     fn permission(&self) -> String {
@@ -300,11 +315,18 @@ impl ReminderAdapter for MobileReminderAdapter {
         self.app.shishi_reminder().cancel(reminder_id)
     }
 
-    fn scheduled_ids(&self) -> Result<Vec<String>, String> {
-        self.app
-            .shishi_reminder()
-            .list()
-            .map(|items| items.into_iter().map(|item| item.reminder_id).collect())
+    fn scheduled(&self) -> Result<Vec<ScheduledReminderInfo>, String> {
+        self.app.shishi_reminder().list().map(|items| {
+            items
+                .into_iter()
+                .map(|item| ScheduledReminderInfo {
+                    reminder_id: item.reminder_id,
+                    fire_at_utc: item.fire_at_utc,
+                    title: item.title,
+                    body: item.body,
+                })
+                .collect()
+        })
     }
 
     fn permission(&self) -> String {

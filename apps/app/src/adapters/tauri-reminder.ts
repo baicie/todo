@@ -1,5 +1,6 @@
 import type {
   ReminderPermission,
+  ReminderReconcileReport,
   ReminderScheduler,
   ReminderScheduleResult,
 } from '@todo/application';
@@ -49,8 +50,8 @@ export class TauriReminderScheduler implements ReminderScheduler {
     await invokeCommand('cancel_reminder', { reminderId });
   }
 
-  async rescheduleUpcoming(): Promise<void> {
-    await invokeCommand('reschedule_reminders');
+  async rescheduleUpcoming(): Promise<ReminderReconcileReport> {
+    return invokeCommand<ReminderReconcileReport>('reschedule_reminders');
   }
 
   async getPermission(): Promise<ReminderPermission> {
