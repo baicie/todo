@@ -1,6 +1,6 @@
-# Native 多账号隔离设计（RC2-A 实现版）
+# Native 多账号隔离设计（RC2-A/RC2-B 实现版）
 
-> 状态：RC2-A 底座已实现；仍不开放多账号 UI、热切换和 RC2-B 写入路由。  
+> 状态：RC2-A 存储底座已合并；RC2-B 实现冷切换、切换 journal、运行时写门、账号级 Token/提醒隔离与 Native UI。
 > 约束：旧用户升级不能丢失任务、outbox、shadow、cursor 或设备身份；任何异常都不能把旧数据误归属给云账号。
 
 ## 1. 对旧设计的修正
@@ -152,9 +152,99 @@ FAILED                    # 任一步失败；旧库/备份保留，下次启动
 - 完成后任何异常：不删除旧库、不删除 backup。
 - 旧版本降级：RC2-A 保留根目录旧库，但迁移后的新写入只进入账号目录；发布说明必须注明降级会看不到新写入。
 
-## 7. RC2-B 契约（未实现）
+## 7. RC2-B 冷切换实现
 
-- 真正的账号切换 UI、热切换、提醒取消/重建、WebView 重建。
-- 各账号的云配置读写完全以 active account 为根。
-- 账号删除需要 pending-deletion marker 和重试；不得半删除。
-- 双窗口、真实 Provider、断电级持久性仍需人工验收。
+### 7.1 实际生命周期调用图
+
+```text
+Tauri setup
+  -> db::open_app_store
+     -> recover_pending_switch(root)
+        -> 验证 target DB / identity，必要时原子切换 registry active
+     -> ensure_active_account(root)
+     -> TodoStore::open(active DB)
+     -> 成功打开 target 后 finish_pending_switch
+     -> 失败则 rollback_pending_switch 恢复 source 并打开 source
+  -> secure token legacy migration（仅迁移并已验证的旧库）
+  -> reminders::create_adapter
+  -> cleanup_foreign_queue(active account)
+  -> AppState { Arc<TodoStore>, reminders, account, RuntimeGate }
+
+WebView
+  -> native_account_context
+  -> adoptNativeAccountContext (localStorage active/config only)
+  -> 动态加载 App/cloud.ts
+  -> cloud controller 初始化 account-scoped config/token
+
+切换
+  -> native_prepare_account_switch(target)
+     -> 校验 target registry/DB/integrity/email+api server identity
+     -> 写 pending-account-switch.json (PREPARED)
+     -> 关闭 RuntimeGate（拒绝旧账号新写入）
+     -> 等待最多 2s 让 in-flight 本地写完成
+  -> WebView cloud.quiesceForAccountSwitch()
+     -> 停止 timer/poll/生命周期订阅
+     -> 失效 sync generation + 清理 SQLite sync_session fence（唯一允许的 gate 例外）
+     -> 保留 token/config/outbox，不 logout
+  -> native_request_account_switch(target,generation)
+     -> 取消当前账号系统提醒并核对残留
+     -> journal RESTART_REQUIRED
+     -> desktop: tauri::process::restart；mobile: 返回 RESTART_UNSUPPORTED
+  -> 新进程启动协议同上
+```
+
+### 7.2 切换状态机
+
+```text
+ACTIVE
+  -> PREPARED             # 目标预检通过，journal 已持久化，写门关闭
+  -> RESTART_REQUIRED     # 请求已确认，提醒已取消，进程即将重启
+  -> VERIFYING_TARGET     # 新进程已验证 target，registry 将/已指向 target
+  -> ACTIVE               # target Store 打开成功，删除 journal
+  -> FAILED               # target 校验/打开失败，registry 恢复 source
+```
+
+- `PREPARED` 在重启前从未被 request 时，新进程会丢弃它，不自动切换。
+- `RESTART_REQUIRED` / `VERIFYING_TARGET` 在 SIGKILL 后由新进程继续。
+- 目标缺失、损坏、email/API 身份不符或无法打开时，写 `FAILED` 并恢复 source；不创建空目标库。
+- 重复相同 prepare/request 幂等；`generation` 必须匹配。
+- 旧账号 token、cloud config、outbox、DB 均不删除；切换不是登出。
+
+### 7.3 Runtime write gate 与旧连接
+
+- `RuntimeGate` 只允许一个切换关闭 gate。
+- 新 `todo_storage` 请求通过 lease 计数；`begin_switch` 关闭 gate 后最多等待 2 秒 in-flight 本地写，然后进程重启。
+- gate 关闭后：普通 SQLite 写、提醒调度、Token 读写均拒绝；仅 `sync_clear_session` 允许用于 quiesce fence。
+- `Arc<TodoStore>` 从不热替换；进程完整重启释放旧 SQLite 连接。任何切换后继续写入旧账号的路径必须在 gate 处被拒绝。
+- 旧进程迟到 HTTP 响应由既有 generation/session fence 丢弃，不等待无限期请求。
+
+### 7.4 凭据与云配置隔离
+
+- Native 安全命令只允许当前 active account 的 `cloud-refresh:<account-id>`；其他 key 返回 `CROSS_ACCOUNT_TOKEN`。
+- cloud config 仍使用 `shishi.cloud.config[.<account-id>]`；启动时 `adoptNativeAccountContext` 将 target account id 写入 localStorage，再动态加载 cloud 模块。
+- 切换前 `cloud.quiesceForAccountSwitch()` 只清 sync session fence，不删除 Refresh Token、不 revoke 服务端登录、不清 outbox。
+- 账号记录包含 `api_url`；数据库 `kv_state.bound_api_url` 记录已绑定服务端。同邮箱不同 API 服务端创建不同 opaque account，切换时校验 DB 绑定服务端。
+- 未验证的新账号为 `pending=true`，其 DB 为空；不得把 anonymous/default 数据复制给它。登录并写入 bound account/API 后 `mark_account_verified` 清除 pending。
+- RC2-A 旧库只有 bound_account 时，服务端身份未知，不允许用它新建同邮箱其他服务端账号。
+- RC2-A 的 `COMPLETE` 迁移目标在切换后不再是 active。`ensure_active_account` 只对 active == migration target 校验 complete 目标；active 为其他账号时仍校验历史 target 存在/结构，但 `migrated_from_legacy=false`，避免把旧 legacy token 迁移给新账号。
+
+### 7.5 系统提醒隔离
+
+- 原生队列 ID = `account:<account-id>:<task-id>`；桌面 in-memory queue 和移动端持久队列都使用该 ID。
+- 切换 request 先取消当前账号前缀通知及旧版无前缀通知，并再次读取队列核对残留；取消失败返回 `REMINDER_ERROR`，不虚报成功。
+- 新进程 setup 调用 `cleanup_foreign_queue`，仅保留当前账号前缀；随后 WebView reconcile 重新调度当前账号提醒。
+- 旧通知点击不包含任务打开路由；当前代码不会把旧 account 的 task id 解释为 B 的任务。移动端点击路由/开机重排仍是 NOT_RUN 的人工验收项。
+- 平台能力不足/取消失败会向命令调用方返回错误，不宣称成功。
+
+### 7.6 UI 与账号身份
+
+- Native Tauri 下显示 registry 账号列表、当前账号、最近打开时间、pending 标记。
+- 切换确认显示旧账号 pending outbox 数量；确认后先 quiesce，再请求冷重启。
+- 添加账号要求邮箱 + API 地址，创建 pending 独立空 DB；登录成功并绑定身份后标为 verified。
+- 移动端目前拒绝冷切换并明确提示未实现，不伪造成功。
+- Web 端原有 localStorage 切账号仅保留给 Web 模式；Native 端 `switchAccount`/`createAndSwitchAccount` 会拒绝直接修改 localStorage。
+- 不提供破坏性账号目录删除。
+
+### 7.7 REQUIRES_REVIEW 诊断
+
+`legacy_review_report(root)` 是只读诊断：返回 reason、source/backup 路径与指纹、`requires_manual_identity_verification=true`。它不写 registry、不打开空库、不提供 force-bind。恢复流程必须由独立工具在服务端身份校验后执行；不能在 UI 中简化为“强制绑定”按钮。
