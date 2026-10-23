@@ -509,11 +509,12 @@ export function createCloudController(options: {
     if (bootstrapInFlight) {
       if (!queuedSync) {
         const queuedGeneration = sessionGeneration;
-        queuedSync = bootstrapInFlight.then(() => {
-          queuedSync = null;
+        const queued = bootstrapInFlight.then(() => {
+          if (queuedSync === queued) queuedSync = null;
           if (queuedGeneration !== sessionGeneration) return;
           return runSync();
         });
+        queuedSync = queued;
       }
       return queuedSync;
     }
