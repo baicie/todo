@@ -40,6 +40,10 @@ pub struct AccountRecord {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
+    /// A newly added cloud account has no verified server identity yet. It must
+    /// not receive anonymous data or existing account data.
+    #[serde(default)]
+    pub pending: bool,
     pub created_at: String,
     pub schema_version: u32,
     pub last_opened_at: String,
@@ -53,6 +57,7 @@ impl AccountRecord {
             kind: AccountKind::Anonymous,
             email: None,
             api_url: None,
+            pending: false,
             created_at: now.clone(),
             schema_version: 1,
             last_opened_at: now,
@@ -70,10 +75,31 @@ impl AccountRecord {
             kind: AccountKind::Cloud,
             email: Some(normalize_email(email)),
             api_url: None,
+            pending: false,
             created_at: now.clone(),
             schema_version: 1,
             last_opened_at: now,
         }
+    }
+
+    pub fn cloud_with_identity(
+        id: &str,
+        email: &str,
+        api_url: &str,
+        pending: bool,
+    ) -> AccountResult<Self> {
+        let api_url = normalize_api_url(api_url)?;
+        let now = timestamp();
+        Ok(Self {
+            id: id.to_owned(),
+            kind: AccountKind::Cloud,
+            email: Some(normalize_email(email)),
+            api_url: Some(api_url),
+            pending,
+            created_at: now.clone(),
+            schema_version: 1,
+            last_opened_at: now,
+        })
     }
 
     pub fn touch(&mut self) {
@@ -151,6 +177,11 @@ impl AccountRegistry {
                             "anonymous account must not contain email".to_owned(),
                         ));
                     }
+                    if account.api_url.is_some() || account.pending {
+                        return Err(AccountError::InvalidRegistry(
+                            "anonymous account must not have server identity".to_owned(),
+                        ));
+                    }
                 }
                 AccountKind::Cloud => {
                     if account.id == DEFAULT_ACCOUNT_ID {
@@ -171,6 +202,20 @@ impl AccountRegistry {
                     if email != normalize_email(email) {
                         return Err(AccountError::InvalidRegistry(format!(
                             "cloud account {} email is not normalized",
+                            account.id
+                        )));
+                    }
+                    if let Some(api_url) = &account.api_url {
+                        let normalized = normalize_api_url(api_url)?;
+                        if normalized != *api_url {
+                            return Err(AccountError::InvalidRegistry(format!(
+                                "cloud account {} api url is not normalized",
+                                account.id
+                            )));
+                        }
+                    } else if account.pending {
+                        return Err(AccountError::InvalidRegistry(format!(
+                            "pending account {} must have an api url",
                             account.id
                         )));
                     }
@@ -204,6 +249,16 @@ impl AccountRegistry {
         self.accounts.iter().find(|account| {
             account.kind == AccountKind::Cloud
                 && account.email.as_deref() == Some(normalized.as_str())
+        })
+    }
+
+    pub fn find_cloud_by_identity(&self, email: &str, api_url: &str) -> Option<&AccountRecord> {
+        let normalized_email = normalize_email(email);
+        let normalized_api = normalize_api_url(api_url).ok()?;
+        self.accounts.iter().find(|account| {
+            account.kind == AccountKind::Cloud
+                && account.email.as_deref() == Some(normalized_email.as_str())
+                && account.api_url.as_deref() == Some(normalized_api.as_str())
         })
     }
 
@@ -256,6 +311,7 @@ pub struct ActiveAccountContext {
     pub account_id: String,
     pub kind: AccountKind,
     pub email: Option<String>,
+    pub api_url: Option<String>,
     pub database_path: PathBuf,
     pub migrated_from_legacy: bool,
 }
@@ -271,6 +327,7 @@ impl ActiveAccountContext {
             account_id: active.id.clone(),
             kind: active.kind,
             email: active.email.clone(),
+            api_url: active.api_url.clone(),
             database_path: registry.database_path(root, &active.id)?,
             migrated_from_legacy,
         })
@@ -287,6 +344,19 @@ pub fn valid_email(email: &str) -> bool {
         && !trimmed.chars().any(char::is_whitespace)
         && trimmed.split('@').count() == 2
         && trimmed.split('@').all(|part| !part.is_empty())
+}
+
+pub fn normalize_api_url(api_url: &str) -> AccountResult<String> {
+    let trimmed = api_url.trim().trim_end_matches('/');
+    if trimmed.is_empty()
+        || !(trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return Err(AccountError::InvalidRegistry(
+            "api url must be an absolute http(s) URL".to_owned(),
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
 }
 
 pub fn timestamp() -> String {

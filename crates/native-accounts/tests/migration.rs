@@ -7,8 +7,9 @@ use rusqlite::{Connection, params};
 use tempfile::TempDir;
 use todo_native_accounts::{
     AccountError, AccountKind, AccountRecord, AccountRegistry, DEFAULT_ACCOUNT_ID, MigrationPhase,
-    account_database_path, ensure_account_dir, ensure_active_account, migration_state,
-    read_snapshot, refresh_token_key,
+    account_database_path, create_pending_cloud_account, ensure_account_dir, ensure_active_account,
+    finish_pending_switch, migration_state, prepare_account_switch, read_snapshot,
+    recover_pending_switch, refresh_token_key, request_account_switch,
 };
 use todo_native_core::{NewTask, TodoStore};
 
@@ -404,6 +405,13 @@ fn ambiguous_ownership_preserves_source_and_blocks_empty_initialization() {
 
     let second = ensure_active_account(&root).expect_err("still blocked");
     assert!(matches!(second, AccountError::NeedsReview { .. }));
+    let review = todo_native_accounts::legacy_review_report(&root)
+        .expect("report")
+        .expect("review");
+    assert!(review.requires_manual_identity_verification);
+    assert!(review.reason.is_some());
+    assert!(review.source_fingerprint.is_some());
+    assert!(review.backup_fingerprint.is_some());
 }
 
 #[test]
@@ -598,6 +606,47 @@ fn complete_migration_with_corrupt_target_fails_closed() {
         .expect("state exists");
     assert_eq!(state.phase, MigrationPhase::Complete);
     assert!(root.join(state.backup_file.expect("backup")).is_file());
+}
+
+#[test]
+fn completed_migration_allows_switching_to_another_account_and_back() {
+    let (_dir, root) = temp_root();
+    {
+        let store = create_legacy(&root);
+        store
+            .create_task(NewTask {
+                title: "legacy account A".to_owned(),
+                ..NewTask::default()
+            })
+            .expect("task");
+    }
+    let a = ensure_active_account(&root).expect("migrate A");
+    assert_eq!(a.account_id, DEFAULT_ACCOUNT_ID);
+    assert!(a.migrated_from_legacy);
+
+    let b = create_pending_cloud_account(&root, "b@example.com", "https://b.example")
+        .expect("pending B");
+    let prepared = prepare_account_switch(&root, &b.id).expect("prepare B");
+    request_account_switch(&root, &b.id, prepared.generation.expect("generation"))
+        .expect("request B");
+    recover_pending_switch(&root).expect("recover B");
+    finish_pending_switch(&root).expect("finish B");
+    let active_b = ensure_active_account(&root).expect("B active after COMPLETE migration");
+    assert_eq!(active_b.account_id, b.id);
+    assert!(!active_b.migrated_from_legacy);
+
+    let back = prepare_account_switch(&root, DEFAULT_ACCOUNT_ID).expect("prepare A");
+    request_account_switch(
+        &root,
+        DEFAULT_ACCOUNT_ID,
+        back.generation.expect("generation"),
+    )
+    .expect("request A");
+    recover_pending_switch(&root).expect("recover A");
+    finish_pending_switch(&root).expect("finish A");
+    let active_a = ensure_active_account(&root).expect("A active");
+    assert_eq!(active_a.account_id, DEFAULT_ACCOUNT_ID);
+    assert!(active_a.migrated_from_legacy);
 }
 
 #[test]

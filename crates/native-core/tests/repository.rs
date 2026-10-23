@@ -36,6 +36,7 @@ fn seed_shadow(store: &TodoStore) {
             snapshot,
             mode: CloudMergeMode::Cloud,
             account_email: "test@example.com".to_owned(),
+            account_api_url: None,
             session_id: None,
         })
         .expect("seed shadow");
@@ -541,6 +542,7 @@ fn merge_initialization_prepares_ordered_ops_and_remote_wins_day_plan_slot() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "user@example.com".to_owned(),
+            account_api_url: None,
             session_id: None,
         })
         .expect("initialize");
@@ -609,6 +611,7 @@ fn clear_account_binding_resets_outbox_and_cloud_state() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "first@example.com".to_owned(),
+            account_api_url: None,
             session_id: None,
         })
         .expect("initialize");
@@ -642,6 +645,7 @@ fn clear_rejected_reprojects_from_shadow() {
             snapshot,
             mode: CloudMergeMode::Cloud,
             account_email: "user@example.com".to_owned(),
+            account_api_url: None,
             session_id: None,
         })
         .expect("initialize");
@@ -815,10 +819,16 @@ fn merge_and_snapshot_preserve_task_tags() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "tags@example.com".to_owned(),
+            account_api_url: Some("https://tags.example/".to_owned()),
             session_id: None,
         })
         .expect("merge");
     assert_eq!(result.prepared_ops, 0);
+    let diagnostics = store.sync_diagnostics().expect("diagnostics");
+    assert_eq!(
+        diagnostics.bound_api_url.as_deref(),
+        Some("https://tags.example")
+    );
     assert_eq!(
         store.get_task(&task.id).expect("get").expect("task").tags,
         vec!["remote".to_owned()]
@@ -1003,6 +1013,7 @@ fn stale_sync_session_cannot_initialize_cloud_data() {
             },
             mode: CloudMergeMode::Cloud,
             account_email: "a@example.com".to_owned(),
+            account_api_url: None,
             session_id: Some("session-a".to_owned()),
         })
         .expect_err("stale initialize must fail");
