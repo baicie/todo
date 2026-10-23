@@ -100,6 +100,12 @@ class ShishiDatabase extends Dexie {
       tasks: 'id, listId, status, important, dueOn, updatedAt, deletedAt, *tags, [listId+status]',
       shadow: 'key, entity, entityId',
     });
+    this.version(4).stores({
+      ...DB_STORES,
+      tasks:
+        'id, listId, status, important, dueOn, updatedAt, deletedAt, remindAt, *tags, [listId+status]',
+      shadow: 'key, entity, entityId',
+    });
   }
 }
 
@@ -480,7 +486,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
 
   async listReminderCandidates(): Promise<Task[]> {
     await this.initialize();
-    const tasks = await this.allTasksSnapshot();
+    const tasks = await this.db.tasks.where('remindAt').above('').toArray();
     return tasks
       .filter((task) => !task.deletedAt && task.status === 'open' && Boolean(task.remindAt))
       .sort((a, b) => (a.remindAt ?? '').localeCompare(b.remindAt ?? ''));

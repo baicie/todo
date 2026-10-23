@@ -122,6 +122,8 @@ CREATE TABLE IF NOT EXISTS kv_state (
 CREATE INDEX IF NOT EXISTS idx_local_tasks_list ON local_tasks(list_id, status, rank);
 CREATE INDEX IF NOT EXISTS idx_local_tasks_due ON local_tasks(due_on, status);
 CREATE INDEX IF NOT EXISTS idx_local_tasks_status ON local_tasks(status, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_local_tasks_remind ON local_tasks(remind_at)
+  WHERE remind_at IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_local_lists_rank ON local_lists(rank);
 CREATE INDEX IF NOT EXISTS idx_local_steps_task ON local_steps(task_id, rank);
 CREATE INDEX IF NOT EXISTS idx_local_day_plans ON local_day_plans(local_date, rank);
@@ -1221,6 +1223,10 @@ fn migrate(connection: &mut Connection) -> StoreResult<()> {
             "local_tasks",
             "tags_json",
             "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_local_tasks_remind ON local_tasks(remind_at)
+             WHERE remind_at IS NOT NULL AND deleted_at IS NULL;",
         )?;
         return Ok(());
     }
