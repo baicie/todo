@@ -33,8 +33,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let opened =
-                db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
+            let opened = db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
             let account = opened.account;
             if account.migrated_from_legacy
                 && account.kind == todo_native_accounts::AccountKind::Cloud

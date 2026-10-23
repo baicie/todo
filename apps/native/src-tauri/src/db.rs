@@ -138,8 +138,7 @@ pub fn open_store_at(data_dir: &std::path::Path) -> Result<OpenedStore, String> 
             // account and retry it; never create an empty target.
             let _failure = rollback_pending_switch(data_dir, "TARGET_OPEN_FAILED")
                 .map_err(|rollback| format!("{error}; 回滚失败: {rollback}"))?;
-            let recovered =
-                ensure_active_account(data_dir).map_err(|error| error.to_string())?;
+            let recovered = ensure_active_account(data_dir).map_err(|error| error.to_string())?;
             let store = TodoStore::open(&recovered.database_path)
                 .map_err(|error| format!("回滚后无法打开原账号数据库: {error}"))?;
             return Ok(OpenedStore {
@@ -228,7 +227,9 @@ mod tests {
                 .is_empty()
         );
 
-        let restarted = open_store_at(directory.path()).expect("fresh restart").account;
+        let restarted = open_store_at(directory.path())
+            .expect("fresh restart")
+            .account;
         assert_eq!(restarted.account_id, DEFAULT_ACCOUNT_ID);
     }
 

@@ -111,9 +111,10 @@ pub fn native_create_account(
     api_url: String,
 ) -> Result<AccountSummary, CommandError> {
     ensure_runtime_active(&state)?;
-    let _lease = state.runtime.enter_storage().ok_or_else(|| {
-        CommandError::new("ACCOUNT_SWITCH_IN_PROGRESS", "账号切换进行中")
-    })?;
+    let _lease = state
+        .runtime
+        .enter_storage()
+        .ok_or_else(|| CommandError::new("ACCOUNT_SWITCH_IN_PROGRESS", "账号切换进行中"))?;
     create_pending_cloud_account(&data_dir(&app)?, &email, &api_url)
         .map_err(|error| CommandError::account_switch(error.to_string()))
 }
@@ -160,11 +161,7 @@ pub fn native_request_account_switch(
         state.runtime.reset_after_failure();
         return Err(error);
     }
-    let status = match request_account_switch(
-        &data_dir(&app)?,
-        &target_account_id,
-        generation,
-    ) {
+    let status = match request_account_switch(&data_dir(&app)?, &target_account_id, generation) {
         Ok(status) => status,
         Err(error) => {
             state.runtime.reset_after_failure();
@@ -192,8 +189,7 @@ pub fn native_abort_account_switch(
 
 #[tauri::command]
 pub fn native_account_switch_status(app: AppHandle) -> Result<SwitchStatus, CommandError> {
-    switch_status(&data_dir(&app)?)
-        .map_err(|error| CommandError::account_switch(error.to_string()))
+    switch_status(&data_dir(&app)?).map_err(|error| CommandError::account_switch(error.to_string()))
 }
 
 #[tauri::command]
@@ -207,9 +203,10 @@ pub fn native_mark_account_verified(
             "账号切换进行中",
         ));
     }
-    let _lease = state.runtime.enter_storage().ok_or_else(|| {
-        CommandError::new("ACCOUNT_SWITCH_IN_PROGRESS", "账号切换进行中")
-    })?;
+    let _lease = state
+        .runtime
+        .enter_storage()
+        .ok_or_else(|| CommandError::new("ACCOUNT_SWITCH_IN_PROGRESS", "账号切换进行中"))?;
     mark_account_verified(&data_dir(&app)?)
         .map_err(|error| CommandError::account_switch(error.to_string()))
 }
@@ -264,8 +261,7 @@ fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), C
     let leftover = remaining
         .into_iter()
         .filter(|entry| {
-            entry.reminder_id.starts_with(&prefix)
-                || !entry.reminder_id.starts_with("account:")
+            entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:")
         })
         .count();
     if leftover > 0 {
@@ -295,10 +291,9 @@ fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), C
         .reminders
         .scheduled()
         .map_err(CommandError::reminder)?;
-    if remaining
-        .iter()
-        .any(|entry| entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:"))
-    {
+    if remaining.iter().any(|entry| {
+        entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:")
+    }) {
         return Err(CommandError::reminder(
             "旧账号系统通知仍有残留，已中止切换".to_owned(),
         ));
@@ -320,17 +315,12 @@ pub async fn todo_storage(
     let _lease = if request.action == "sync_clear_session" {
         None
     } else {
-        Some(
-            state
-                .runtime
-                .enter_storage()
-                .ok_or_else(|| {
-                    CommandError::new(
-                        "ACCOUNT_SWITCH_IN_PROGRESS",
-                        "账号切换进行中，当前账号已停止接受写入",
-                    )
-                })?,
-        )
+        Some(state.runtime.enter_storage().ok_or_else(|| {
+            CommandError::new(
+                "ACCOUNT_SWITCH_IN_PROGRESS",
+                "账号切换进行中，当前账号已停止接受写入",
+            )
+        })?)
     };
     let store = Arc::clone(&state.store);
     tauri::async_runtime::spawn_blocking(move || {
@@ -797,8 +787,7 @@ mod tests {
         let adapter = FakeReminderAdapter::granted();
         let tasks = vec![reminder_task("a", ""), reminder_task("b", "note")];
 
-        let first =
-            reconcile_reminder_queue(&adapter, &tasks, "default").expect("first reconcile");
+        let first = reconcile_reminder_queue(&adapter, &tasks, "default").expect("first reconcile");
         assert_eq!(first.scheduled, 2);
         assert_eq!(first.unchanged, 0);
         assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
@@ -859,10 +848,7 @@ mod tests {
     fn refresh_tokens_are_bound_to_the_current_account() {
         let a = "01a1673d-1000-7000-8000-000000000001";
         let b = "01a1673d-1000-7000-8000-000000000002";
-        assert!(is_refresh_key_for(
-            a,
-            &format!("cloud-refresh:{a}")
-        ));
+        assert!(is_refresh_key_for(a, &format!("cloud-refresh:{a}")));
         assert!(!is_refresh_key_for(a, &format!("cloud-refresh:{b}")));
         assert!(!is_refresh_key_for(a, "refresh_token:v1"));
     }
@@ -870,30 +856,26 @@ mod tests {
     #[test]
     fn foreign_account_and_legacy_reminders_are_cancelled_before_scheduling() {
         let adapter = FakeReminderAdapter::granted();
-        adapter
-            .entries
-            .lock()
-            .expect("entries")
-            .extend([
-                ScheduledReminderInfo {
-                    reminder_id: "account:other:a".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "other".to_owned(),
-                    body: String::new(),
-                },
-                ScheduledReminderInfo {
-                    reminder_id: "account:default:stale".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "stale".to_owned(),
-                    body: String::new(),
-                },
-                ScheduledReminderInfo {
-                    reminder_id: "legacy-raw-id".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "legacy".to_owned(),
-                    body: String::new(),
-                },
-            ]);
+        adapter.entries.lock().expect("entries").extend([
+            ScheduledReminderInfo {
+                reminder_id: "account:other:a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "other".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "account:default:stale".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "stale".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "legacy-raw-id".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "legacy".to_owned(),
+                body: String::new(),
+            },
+        ]);
         let report = reconcile_reminder_queue(&adapter, &[reminder_task("a", "")], "default")
             .expect("reconcile");
         assert_eq!(report.cancelled, 3);
@@ -906,30 +888,26 @@ mod tests {
     #[test]
     fn startup_cleanup_removes_other_account_and_legacy_notifications() {
         let adapter = FakeReminderAdapter::granted();
-        adapter
-            .entries
-            .lock()
-            .expect("entries")
-            .extend([
-                ScheduledReminderInfo {
-                    reminder_id: "account:a:task-a".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "A".to_owned(),
-                    body: String::new(),
-                },
-                ScheduledReminderInfo {
-                    reminder_id: "account:b:task-b".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "B".to_owned(),
-                    body: String::new(),
-                },
-                ScheduledReminderInfo {
-                    reminder_id: "legacy".to_owned(),
-                    fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
-                    title: "legacy".to_owned(),
-                    body: String::new(),
-                },
-            ]);
+        adapter.entries.lock().expect("entries").extend([
+            ScheduledReminderInfo {
+                reminder_id: "account:a:task-a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "A".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "account:b:task-b".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "B".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "legacy".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "legacy".to_owned(),
+                body: String::new(),
+            },
+        ]);
         crate::reminders::cleanup_foreign_queue(&adapter, "b").expect("cleanup");
         let entries = adapter.scheduled().expect("entries");
         assert_eq!(entries.len(), 1);
