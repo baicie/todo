@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RestSyncTransport, toServerPatch } from './rest-transport';
+import { AuthClient, RestSyncTransport, toServerPatch } from './rest-transport';
+import { SyncHttpError } from './index';
 import type { SyncRequest } from '@todo/contracts';
 
 const opId = '019a0000-0000-7000-8000-000000000002';
@@ -73,5 +74,50 @@ describe('REST sync transport field mapping', () => {
       due_on: '2026-10-22',
     });
     expect(result.changes[0]?.patch).toEqual({ dueOn: '2026-10-22', listId: null });
+  });
+});
+
+describe('AuthClient refresh', () => {
+  it('posts the rotating refresh token and returns the new access token', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            access_token: 'new-access',
+            expires_in: 900,
+            refresh_token: 'rotated',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    );
+    const auth = new AuthClient({
+      baseUrl: 'http://localhost:8787',
+      fetch: fetchMock as unknown as typeof fetch,
+      getAccessToken: () => 'old-access',
+    });
+    await expect(auth.refresh('old-refresh')).resolves.toMatchObject({
+      access_token: 'new-access',
+      refresh_token: 'rotated',
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain('/api/v1/auth/refresh');
+    expect(JSON.parse(String(init.body))).toEqual({ refresh_token: 'old-refresh' });
+  });
+
+  it('surfaces an expired refresh credential as a 401 SyncHttpError', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ code: 'UNAUTHORIZED', message: 'expired' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    const auth = new AuthClient({
+      baseUrl: 'http://localhost:8787',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const error = await auth.refresh('expired').catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SyncHttpError);
+    expect(error).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
   });
 });

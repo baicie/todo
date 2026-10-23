@@ -100,10 +100,10 @@ export class SyncEngine {
         limit: this.batchSize,
       });
 
-      if (response.ack.some((ack) => ack.status === 'rejected')) {
-        const rejected = response.ack.filter((ack) => ack.status === 'rejected');
+      const rejectedAcks = response.ack.filter((ack) => ack.status === 'rejected');
+      if (rejectedAcks.length > 0) {
         this.setState({
-          lastError: `有 ${rejected.length} 个操作被服务器拒绝：${rejected
+          lastError: `有 ${rejectedAcks.length} 个操作被服务器拒绝：${rejectedAcks
             .map((ack) => ack.error_code)
             .filter(Boolean)
             .join(', ')}`,
@@ -117,11 +117,16 @@ export class SyncEngine {
       });
 
       const pendingCount = await this.store.getPendingCount();
+      const hasRejected = rejectedAcks.length > 0;
       const nextState: SyncState = {
-        status: pendingCount > 0 || response.has_more ? 'syncing' : 'synced',
+        status: hasRejected
+          ? 'error'
+          : pendingCount > 0 || response.has_more
+            ? 'syncing'
+            : 'synced',
         pendingCount,
         lastSyncedAt: response.server_time,
-        lastError: this.state.lastError,
+        lastError: hasRejected ? this.state.lastError : null,
         needsBootstrap: false,
       };
       this.setState(nextState);
@@ -163,7 +168,11 @@ export class SyncEngine {
         this.setState({ status: 'auth-required', lastError: '登录已过期' });
         return this.getState();
       }
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (
+        !(error instanceof SyncHttpError) &&
+        typeof navigator !== 'undefined' &&
+        !navigator.onLine
+      ) {
         this.setState({ status: 'offline', lastError: '当前离线，修改已保存在本机' });
         return this.getState();
       }

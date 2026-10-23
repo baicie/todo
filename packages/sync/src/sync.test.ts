@@ -67,6 +67,97 @@ describe('SyncEngine', () => {
     expect(states.at(-1)).toBe('synced');
   });
 
+  it('reports offline without clearing pending mutations', async () => {
+    const store = fakeStore();
+    const transport: SyncTransport = {
+      sync: vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+      bootstrap: vi.fn(),
+    };
+    const engine = new SyncEngine(transport, store);
+    const originalOnLine = Object.getOwnPropertyDescriptor(navigator, 'onLine');
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+    try {
+      await expect(engine.syncNow()).resolves.toMatchObject({ status: 'offline' });
+      expect(store.applyServerResult).not.toHaveBeenCalled();
+    } finally {
+      if (originalOnLine) Object.defineProperty(navigator, 'onLine', originalOnLine);
+      else delete (navigator as Navigator & { onLine?: boolean }).onLine;
+    }
+  });
+
+  it('reports HTTP 500 as an error without advancing the success timestamp', async () => {
+    const store = fakeStore();
+    const transport: SyncTransport = {
+      sync: vi.fn(async () => {
+        throw new SyncHttpError(500, 'INTERNAL', 'server failed');
+      }),
+      bootstrap: vi.fn(),
+    };
+    const engine = new SyncEngine(transport, store);
+    const result = await engine.syncNow();
+    expect(result.status).toBe('error');
+    expect(result.lastError).toContain('server failed');
+    expect(result.lastSyncedAt).toBeNull();
+    expect(store.applyServerResult).not.toHaveBeenCalled();
+  });
+
+  it('surfaces rejected acknowledgements instead of reporting synced', async () => {
+    const store = fakeStore();
+    const transport: SyncTransport = {
+      sync: vi.fn(async () =>
+        response({
+          ack: [
+            {
+              op_id: opId,
+              status: 'rejected',
+              server_seq: 11,
+              error_code: 'VALIDATION',
+            } as Ack,
+          ],
+        }),
+      ),
+      bootstrap: vi.fn(),
+    };
+    const engine = new SyncEngine(transport, store);
+    const result = await engine.syncNow();
+    expect(result.status).toBe('error');
+    expect(result.lastError).toContain('VALIDATION');
+    expect(store.applyServerResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent syncNow calls', async () => {
+    const store = fakeStore();
+    let resolveSync!: (value: SyncResponse) => void;
+    const sync = vi.fn(
+      () =>
+        new Promise<SyncResponse>((resolve) => {
+          resolveSync = resolve;
+        }),
+    );
+    const transport: SyncTransport = { sync, bootstrap: vi.fn() };
+    const engine = new SyncEngine(transport, store);
+
+    const first = engine.syncNow();
+    const second = engine.syncNow();
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1));
+    resolveSync(response());
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.status).toBe('synced');
+    expect(two.status).toBe('synced');
+  });
+
+  it('completes cleanly when there are no pending operations', async () => {
+    const store = fakeStore(0);
+    const transport: SyncTransport = {
+      sync: vi.fn(async () => response({ ack: [], changes: [] })),
+      bootstrap: vi.fn(),
+    };
+    const engine = new SyncEngine(transport, store);
+    await expect(engine.syncNow()).resolves.toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
   it('rebases from bootstrap on an expired cursor without clearing pending work', async () => {
     const store = fakeStore();
     const transport: SyncTransport = {

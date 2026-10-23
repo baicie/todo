@@ -12,6 +12,7 @@ import type {
   CloudSyncStorage,
   RejectedMutation,
 } from './storage';
+import { resolveCloudSyncOutcome } from './cloud-status';
 import {
   normalizeBootstrap,
   readFullBootstrap,
@@ -202,6 +203,7 @@ export function createCloudController(options: {
   let autoSyncTimer: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let refreshInFlight: Promise<string> | null = null;
+  let runInFlight: Promise<void> | null = null;
   let unsubscribe: (() => void) | null = null;
   let stopOnline: (() => void) | null = null;
   let stopResume: (() => void) | null = null;
@@ -304,7 +306,7 @@ export function createCloudController(options: {
       syncStatus: sync.status,
       pending: sync.pendingCount,
       lastSyncedAt: sync.lastSyncedAt ?? state().lastSyncedAt,
-      error: sync.lastError ?? state().error,
+      error: sync.lastError,
     });
   };
 
@@ -319,52 +321,73 @@ export function createCloudController(options: {
     autoSyncTimer = setTimeout(() => void runSync(), 1000);
   };
 
+  const expireSession = async (): Promise<void> => {
+    await clearTokens();
+    update({
+      phase: 'expired',
+      syncStatus: 'auth-required',
+      error: '登录已过期，请重新验证邮箱。',
+    });
+  };
+
   const handleSyncError = async (error: unknown): Promise<void> => {
     if (error instanceof SyncHttpError && error.status === 401) {
-      try {
-        await refreshAccessToken();
-        update({ phase: 'connected', error: null });
-        if (engine) await engine.syncNow();
-      } catch {
-        await clearTokens();
-        update({ phase: 'expired', error: '登录已过期，请重新验证邮箱。' });
-      }
+      await expireSession();
       return;
     }
     update({
-      syncStatus: 'error',
+      syncStatus:
+        typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'error',
       error: error instanceof Error ? error.message : '同步失败',
     });
   };
 
-  const runSync = async (): Promise<void> => {
+  const executeSync = async (): Promise<void> => {
     if (!engine || state().phase !== 'connected') return;
     update({ busy: 'sync', error: null });
     try {
       let result = await engine.syncNow();
       if (result.status === 'auth-required') {
-        await refreshAccessToken();
-        update({ phase: 'connected', error: null });
-        result = await engine.syncNow();
+        // Retry at most once per run. A second auth-required response means
+        // the refresh credential is also invalid; do not loop indefinitely.
+        try {
+          await refreshAccessToken();
+          result = await engine.syncNow();
+        } catch (error) {
+          await handleSyncError(error);
+          return;
+        }
       }
+      if (result.status === 'auth-required') {
+        await expireSession();
+        return;
+      }
+
       const next = await diagnostics();
+      const outcome = resolveCloudSyncOutcome(result, next.rejected, state());
       update({
-        syncStatus: result.status === 'offline' ? 'offline' : 'synced',
-        lastSyncedAt: result.lastSyncedAt ?? new Date().toISOString(),
+        syncStatus: outcome.syncStatus,
+        lastSyncedAt: outcome.lastSyncedAt,
         pending: next.pending,
         rejected: next.rejected,
         cursor: next.cursor,
-        error:
-          next.rejected > 0
-            ? `有 ${next.rejected} 个本地修改被服务器拒绝，请查看并清除失败操作。`
-            : null,
+        error: outcome.error,
       });
-      persist(true);
+      if (result.lastSyncedAt) persist(true);
+      if (outcome.syncStatus === 'syncing') scheduleSync();
     } catch (error) {
       await handleSyncError(error);
     } finally {
       update({ busy: null });
     }
+  };
+
+  const runSync = (): Promise<void> => {
+    if (runInFlight) return runInFlight;
+    runInFlight = executeSync().finally(() => {
+      runInFlight = null;
+    });
+    return runInFlight;
   };
 
   const fetchSnapshot = async (): Promise<CloudSnapshot> => {
@@ -458,6 +481,7 @@ export function createCloudController(options: {
     } catch {
       update({
         phase: 'expired',
+        syncStatus: 'auth-required',
         email: config.email,
         error: '上次登录已失效，请重新获取验证码。',
       });
