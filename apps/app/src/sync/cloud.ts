@@ -212,6 +212,7 @@ export function createCloudController(options: {
   let transport: RestSyncTransport | null = null;
   let engine: SyncEngine | null = null;
   let pendingSnapshot: CloudSnapshot | null = null;
+  let pendingSession: { generation: number; token: string } | null = null;
   let autoSyncTimer: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let refreshInFlight: Promise<string> | null = null;
@@ -477,10 +478,14 @@ export function createCloudController(options: {
     return readFullBootstrap(transport);
   };
 
-  const prepareMergePreview = async (snapshot: CloudSnapshot) => {
+  const prepareMergePreview = async (
+    snapshot: CloudSnapshot,
+    session: { generation: number; token: string },
+  ) => {
     const localBundle = await repository.exportData();
     const local = visibleCountsFromBundle(localBundle);
     pendingSnapshot = snapshot;
+    pendingSession = session;
     update({
       phase: 'choose-merge',
       mergePreview: {
@@ -518,8 +523,11 @@ export function createCloudController(options: {
     }
   };
 
-  const activateCloud = async () => {
-    const session = await beginSession();
+  const activateCloud = async (existing?: { generation: number; token: string }) => {
+    const session =
+      existing && isCurrentGeneration(existing.generation) && sessionToken === existing.token
+        ? existing
+        : await beginSession();
     const generation = session.generation;
     installEngine(generation, session.token);
     const next = await diagnostics(generation);
@@ -643,14 +651,23 @@ export function createCloudController(options: {
       const snapshot = await fetchSnapshot();
       const local = visibleCountsFromBundle(await repository.exportData());
       const remote = snapshotCounts(snapshot);
+      const session = await beginSession();
       if (local.tasks === 0 && local.lists === 0) {
-        await repository.syncInitializeCloud(snapshot, 'cloud', state().email.trim().toLowerCase());
-        await activateCloud();
+        await repository.syncInitializeCloud(
+          snapshot,
+          'cloud',
+          state().email.trim().toLowerCase(),
+          session.token,
+        );
+        await activateCloud(session);
       } else {
-        await prepareMergePreview(snapshot);
+        await prepareMergePreview(snapshot, session);
       }
       update({ busy: null });
     } catch (error) {
+      invalidateSession();
+      pendingSnapshot = null;
+      pendingSession = null;
       try {
         if (auth) await auth.logout();
       } catch {
@@ -669,6 +686,8 @@ export function createCloudController(options: {
     if (mode === 'cancel') {
       update({ phase: 'disconnected', mergePreview: null, error: null });
       pendingSnapshot = null;
+      pendingSession = null;
+      invalidateSession();
       try {
         if (auth) await auth.logout();
       } catch {
@@ -684,13 +703,16 @@ export function createCloudController(options: {
     }
     update({ busy: 'merge', error: null });
     try {
+      const session = pendingSession ?? (await beginSession());
       await repository.syncInitializeCloud(
         pendingSnapshot,
         mode,
         state().email.trim().toLowerCase(),
+        session.token,
       );
       pendingSnapshot = null;
-      await activateCloud();
+      pendingSession = null;
+      await activateCloud(session);
     } catch (error) {
       update({ error: error instanceof Error ? error.message : '合并失败' });
       throw error;

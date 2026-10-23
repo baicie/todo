@@ -1260,6 +1260,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
     snapshot: CloudSnapshot,
     mode: CloudMergeMode,
     accountEmail: string,
+    sessionId?: string,
   ): Promise<CloudInitializeResult> {
     await this.initialize();
     const now = new Date().toISOString();
@@ -1276,6 +1277,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
         this.db.shadow,
       ],
       async () => {
+        await this.assertSyncSession(sessionId);
         const shadowRows: ShadowRow[] = [
           ...snapshot.lists.map((list) => ({
             key: shadowKey('list', list.id),

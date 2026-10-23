@@ -36,6 +36,7 @@ fn seed_shadow(store: &TodoStore) {
             snapshot,
             mode: CloudMergeMode::Cloud,
             account_email: "test@example.com".to_owned(),
+            session_id: None,
         })
         .expect("seed shadow");
     assert_eq!(result.prepared_ops, 0);
@@ -540,6 +541,7 @@ fn merge_initialization_prepares_ordered_ops_and_remote_wins_day_plan_slot() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "user@example.com".to_owned(),
+            session_id: None,
         })
         .expect("initialize");
     assert_eq!(result.prepared_ops, 1, "only the local-only task is an op");
@@ -607,6 +609,7 @@ fn clear_account_binding_resets_outbox_and_cloud_state() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "first@example.com".to_owned(),
+            session_id: None,
         })
         .expect("initialize");
     assert_eq!(result.prepared_ops, 1);
@@ -639,6 +642,7 @@ fn clear_rejected_reprojects_from_shadow() {
             snapshot,
             mode: CloudMergeMode::Cloud,
             account_email: "user@example.com".to_owned(),
+            session_id: None,
         })
         .expect("initialize");
     store
@@ -811,6 +815,7 @@ fn merge_and_snapshot_preserve_task_tags() {
             snapshot,
             mode: CloudMergeMode::Merge,
             account_email: "tags@example.com".to_owned(),
+            session_id: None,
         })
         .expect("merge");
     assert_eq!(result.prepared_ops, 0);
@@ -920,6 +925,31 @@ fn stale_sync_session_cannot_replace_a_snapshot() {
             Some("session-a"),
         )
         .expect_err("stale snapshot must fail");
+    assert_eq!(error.code().as_str(), "STALE_SYNC_SESSION");
+    assert!(store.get_task(&task.id).expect("get").is_some());
+}
+
+#[test]
+fn stale_sync_session_cannot_initialize_cloud_data() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    let task = store.create_task(new_task("keep")).expect("task");
+    store
+        .sync_set_session(Some("session-b"))
+        .expect("session b");
+    let error = store
+        .sync_initialize_cloud(CloudInitializeRequest {
+            snapshot: CloudSnapshot {
+                cursor: "9".to_owned(),
+                lists: vec![],
+                tasks: vec![],
+                steps: vec![],
+                day_plans: vec![],
+            },
+            mode: CloudMergeMode::Cloud,
+            account_email: "a@example.com".to_owned(),
+            session_id: Some("session-a".to_owned()),
+        })
+        .expect_err("stale initialize must fail");
     assert_eq!(error.code().as_str(), "STALE_SYNC_SESSION");
     assert!(store.get_task(&task.id).expect("get").is_some());
 }

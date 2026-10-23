@@ -64,6 +64,7 @@ export interface CloudSyncStorage extends TaskRepository {
     snapshot: CloudSnapshot,
     mode: CloudMergeMode,
     accountEmail: string,
+    sessionId?: string,
   ): Promise<CloudInitializeResult>;
   syncReplaceSnapshot(snapshot: CloudSnapshot, sessionId?: string): Promise<void>;
   syncSetEnabled(enabled: boolean): Promise<void>;

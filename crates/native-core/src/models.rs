@@ -475,6 +475,8 @@ pub struct CloudInitializeRequest {
     pub snapshot: CloudSnapshot,
     pub mode: CloudMergeMode,
     pub account_email: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

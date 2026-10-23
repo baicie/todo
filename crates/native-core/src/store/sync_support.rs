@@ -811,6 +811,7 @@ impl TodoStore {
         }
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
+        assert_sync_session(&transaction, request.session_id.as_deref())?;
         let local = local_entities(&transaction)?;
         let remote = &request.snapshot;
         let remote_lists = remote

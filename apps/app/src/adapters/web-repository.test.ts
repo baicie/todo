@@ -286,6 +286,24 @@ describe('DexieTaskRepository', () => {
     expect(await repository.getTask('stale-task')).toBeNull();
   });
 
+  it('rejects a stale cloud initialization after the session changes', async () => {
+    const seeded = await repository.listTasks({ view: 'all', limit: 1000 });
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncInitializeCloud(
+        cloudSnapshot('init-stale', 'init stale', 'must not land'),
+        'cloud',
+        'a@example.com',
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.getTask('init-stale')).toBeNull();
+    expect((await repository.listTasks({ view: 'all', limit: 1000 })).items).toHaveLength(
+      seeded.items.length,
+    );
+  });
+
   it('deletes the session fence before an old apply can run after clearAll', async () => {
     await repository.syncSetEnabled(true);
     const task = await service.createTask({ title: 'old session' });
