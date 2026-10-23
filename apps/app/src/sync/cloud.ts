@@ -68,6 +68,8 @@ export interface CloudController {
   state: Accessor<CloudState>;
   initialize(): Promise<void>;
   dispose(): void;
+  /** Stop timers, listeners and sync writes before a cold account switch. */
+  quiesceForAccountSwitch(): Promise<void>;
   setApiUrl(value: string): void;
   setEmail(value: string): void;
   requestCode(): Promise<void>;
@@ -121,6 +123,10 @@ class RepositorySyncStore {
 function defaultApiUrl(): string {
   const configured = import.meta.env.VITE_API_URL as string | undefined;
   return configured?.replace(/\/$/, '') ?? 'http://127.0.0.1:8787';
+}
+
+function normalizeApiUrl(value: string): string {
+  return value.trim().replace(/\/$/, '').toLowerCase();
 }
 
 function readConfig(): StoredConfig | null {
@@ -577,6 +583,14 @@ export function createCloudController(options: {
     }
   };
 
+  const markAccountVerified = async (): Promise<void> => {
+    try {
+      await platform.markAccountVerified?.();
+    } catch {
+      // A non-pending/mock platform may reject this; the DB binding remains correct.
+    }
+  };
+
   const activateCloud = async (existing?: { generation: number; token: string }) => {
     const session =
       existing && isCurrentGeneration(existing.generation) && sessionToken === existing.token
@@ -632,6 +646,17 @@ export function createCloudController(options: {
   const initialize = async () => {
     const nextDiagnostics = await diagnostics();
     update({ boundAccount: nextDiagnostics.boundAccount });
+    if (
+      nextDiagnostics.boundApiUrl &&
+      normalizeApiUrl(nextDiagnostics.boundApiUrl) !== normalizeApiUrl(state().apiUrl)
+    ) {
+      update({
+        phase: 'expired',
+        syncStatus: 'auth-required',
+        error: '本机数据绑定的 API 服务端与当前配置不一致，请切换账号或清除本机数据。',
+      });
+      return;
+    }
     if (!config?.enabled || !config.email) return;
     const initializeGeneration = sessionGeneration;
     buildClients();
@@ -704,6 +729,14 @@ export function createCloudController(options: {
           `本机数据已绑定 ${nextDiagnostics.boundAccount}。请先在设置中清除本机数据，再登录其他账号。`,
         );
       }
+      if (
+        nextDiagnostics.boundApiUrl &&
+        normalizeApiUrl(nextDiagnostics.boundApiUrl) !== normalizeApiUrl(state().apiUrl)
+      ) {
+        throw new Error(
+          '本机数据库已绑定另一个 API 服务端，不能在同一数据空间登录该服务。请切换账号。',
+        );
+      }
       persist(false);
       const snapshot = await fetchSnapshot();
       const local = visibleCountsFromBundle(await repository.exportData());
@@ -715,8 +748,10 @@ export function createCloudController(options: {
           'cloud',
           state().email.trim().toLowerCase(),
           session.token,
+          state().apiUrl,
         );
         await activateCloud(session);
+        await markAccountVerified();
       } else {
         await prepareMergePreview(snapshot, session);
       }
@@ -766,10 +801,12 @@ export function createCloudController(options: {
         mode,
         state().email.trim().toLowerCase(),
         session.token,
+        state().apiUrl,
       );
       pendingSnapshot = null;
       pendingSession = null;
       await activateCloud(session);
+      await markAccountVerified();
     } catch (error) {
       update({ error: error instanceof Error ? error.message : '合并失败' });
       throw error;
@@ -1038,6 +1075,16 @@ export function createCloudController(options: {
     return auth.sharedRequest<T>(path, init);
   };
 
+  const quiesceForAccountSwitch = async (): Promise<void> => {
+    if (disposed) return;
+    persist();
+    disposed = true;
+    // Stops timers/listeners, increments generation and clears the SQLite
+    // session fence. In-flight HTTP promises are not awaited indefinitely;
+    // their generation checks make late responses no-ops.
+    await invalidateSession();
+  };
+
   const dispose = () => {
     disposed = true;
     void invalidateSession();
@@ -1047,6 +1094,7 @@ export function createCloudController(options: {
     state,
     initialize,
     dispose,
+    quiesceForAccountSwitch,
     setApiUrl(value) {
       update({ apiUrl: value, error: null });
     },

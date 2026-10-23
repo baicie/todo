@@ -186,6 +186,46 @@ describe('cloud sync session lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
+  it('quiescing for an account switch rejects a late old-account response', async () => {
+    const repository = new DexieTaskRepository(`lifecycle-switch-${databaseCounter}`);
+    await repository.initialize();
+    const platform = fakePlatform();
+    (platform as AppPlatform).repository = repository;
+
+    let resolveSync!: (response: Response) => void;
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      syncStarted = resolve;
+    });
+    const delayedSync = new Promise<Response>((resolve) => {
+      resolveSync = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) return tokenResponse();
+      if (url.includes('/api/v1/sync')) {
+        syncStarted();
+        return delayedSync;
+      }
+      return new Response(JSON.stringify({ code: 'UNEXPECTED', message: url }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cloud = createCloudController({ platform, repository });
+    const initializing = cloud.initialize();
+    await started;
+    await cloud.quiesceForAccountSwitch();
+    resolveSync(syncResponse(LATE_TASK));
+    await initializing;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(await repository.getTask(LATE_TASK)).toBeNull();
+    expect(await repository.syncGetPendingCount()).toBe(0);
+    expect(await repository.syncGetCursor()).toBe('0');
+    cloud.dispose();
+    vi.unstubAllGlobals();
+  });
+
   it('refreshes once after a 401 and reaches synced on the retry', async () => {
     const repository = new DexieTaskRepository(`lifecycle-refresh-${databaseCounter}`);
     await repository.initialize();

@@ -316,6 +316,7 @@ export class TauriTaskRepository implements CloudSyncStorage {
     mode: CloudMergeMode,
     accountEmail: string,
     sessionId?: string,
+    accountApiUrl?: string,
   ): Promise<CloudInitializeResult> {
     await this.initialize();
     const result = await call<CloudInitializeResult>('sync_initialize_cloud', {
@@ -323,6 +324,7 @@ export class TauriTaskRepository implements CloudSyncStorage {
       mode,
       accountEmail,
       sessionId,
+      accountApiUrl,
     });
     this.notify(snapshot.tasks.map((task) => task.id));
     return result;

@@ -11,6 +11,7 @@ import {
   activeDatabaseName,
   adoptNativeAccountContext,
   type NativeAccountContext,
+  type NativeSwitchStatus,
 } from '../lib/accounts';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
@@ -22,6 +23,8 @@ export interface AppPlatform {
   secureTokenStore: SecureTokenStore;
   lifecycle: AppLifecycle;
   setBadge(count: number): Promise<void>;
+  markAccountVerified?(): Promise<void>;
+  startupSwitchFailure?: NativeSwitchStatus;
 }
 
 function isTauri(): boolean {
@@ -137,6 +140,13 @@ export async function createAppPlatform(): Promise<AppPlatform> {
     const { invoke } = await import('@tauri-apps/api/core');
     const account = await invoke<NativeAccountContext>('native_account_context');
     adoptNativeAccountContext(account);
+    let startupSwitchFailure: NativeSwitchStatus | undefined;
+    try {
+      const status = await invoke<NativeSwitchStatus>('native_account_switch_status');
+      if (status.phase === 'FAILED') startupSwitchFailure = status;
+    } catch {
+      // The status command is diagnostic; startup must still proceed.
+    }
     const { TauriReminderScheduler } = await import('./tauri-reminder');
     const reminder = new TauriReminderScheduler();
     return {
@@ -145,6 +155,7 @@ export async function createAppPlatform(): Promise<AppPlatform> {
       reminder,
       secureTokenStore: new TauriTokenStore(),
       lifecycle: createLifecycle('tauri'),
+      startupSwitchFailure,
       async setBadge(count) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
@@ -152,6 +163,10 @@ export async function createAppPlatform(): Promise<AppPlatform> {
         } catch {
           // Badge count is an enhancement and may be unavailable.
         }
+      },
+      async markAccountVerified() {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('native_mark_account_verified');
       },
     };
   }

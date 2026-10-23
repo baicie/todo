@@ -11,6 +11,7 @@ describe('native account context adoption', () => {
 
   it('keeps the default account without touching legacy config', () => {
     localStorage.setItem('shishi.cloud.config', '{"email":"a@example.com"}');
+    localStorage.setItem('shishi.active-account.v1', 'stale-target');
     adoptNativeAccountContext({
       accountId: 'default',
       kind: 'anonymous',
@@ -41,6 +42,25 @@ describe('native account context adoption', () => {
     });
     expect(loadAccountProfiles()).toEqual([
       expect.objectContaining({ id, email: 'user@example.com' }),
+    ]);
+  });
+
+  it('adopts the native target account and its per-account cloud config', () => {
+    const id = '01a1673d-1000-7000-8000-000000000012';
+    localStorage.setItem('shishi.active-account.v1', 'default');
+    localStorage.setItem(
+      cloudConfigKey(id),
+      JSON.stringify({ email: 'b@example.com', apiUrl: 'https://b.example', enabled: false }),
+    );
+    adoptNativeAccountContext({
+      accountId: id,
+      kind: 'cloud',
+      email: 'b@example.com',
+      migratedFromLegacy: false,
+    });
+    expect(activeAccountId()).toBe(id);
+    expect(loadAccountProfiles()).toEqual([
+      expect.objectContaining({ id, email: 'b@example.com', apiUrl: 'https://b.example' }),
     ]);
   });
 

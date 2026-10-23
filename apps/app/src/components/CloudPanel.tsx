@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show, createSignal, onMount } from 'solid-js';
 import {
   AlertTriangle,
   Bell,
@@ -23,8 +23,18 @@ import type { CloudController } from '../sync/cloud';
 import {
   activeAccountId,
   createAndSwitchAccount,
+  isNativeRuntime,
   loadAccountProfiles,
+  nativeAbortAccountSwitch,
+  nativeAccountSwitchStatus,
+  nativeCreateAccount,
+  nativeListAccounts,
+  nativePrepareAccountSwitch,
+  nativeRequestAccountSwitch,
+  rememberNativeAccount,
   switchAccount,
+  type NativeAccountSummary,
+  type NativeSwitchStatus,
 } from '../lib/accounts';
 
 interface CloudPanelProps {
@@ -61,6 +71,11 @@ function formatTime(value: string | null): string {
 export function CloudPanel(props: CloudPanelProps) {
   const [code, setCode] = createSignal('');
   const [profiles] = createSignal(loadAccountProfiles());
+  const native = isNativeRuntime();
+  const [nativeAccounts, setNativeAccounts] = createSignal<NativeAccountSummary[]>([]);
+  const [nativeStatus, setNativeStatus] = createSignal<NativeSwitchStatus | null>(null);
+  const [nativeBusy, setNativeBusy] = createSignal<string | null>(null);
+  const [nativeError, setNativeError] = createSignal<string | null>(null);
   const cloud = () => props.cloud.state();
   const busy = (action: string) => cloud().busy === action;
   const connected = () => cloud().phase === 'connected';
@@ -69,9 +84,93 @@ export function CloudPanel(props: CloudPanelProps) {
     if (rows.some((profile) => profile.id === 'default')) return rows;
     return [{ id: 'default', email: cloud().email, apiUrl: '', createdAt: '' }, ...rows];
   };
-  const canSwitchProfiles = () => !('__TAURI_INTERNALS__' in window);
+  const canSwitchProfiles = () => !native;
   const activeProfile = () => activeAccountId();
   const canEnterCode = () => cloud().phase === 'code-sent' || cloud().phase === 'expired';
+
+  const refreshNative = async () => {
+    if (!native) return;
+    try {
+      const [accounts, status] = await Promise.all([
+        nativeListAccounts(),
+        nativeAccountSwitchStatus(),
+      ]);
+      setNativeAccounts(accounts.accounts);
+      setNativeStatus(status);
+    } catch (error) {
+      setNativeError(error instanceof Error ? error.message : '无法读取本机账号');
+    }
+  };
+
+  onMount(() => {
+    void refreshNative();
+  });
+
+  const nativeSwitch = async (target: NativeAccountSummary) => {
+    if (nativeBusy()) return;
+    const mobileNative =
+      native && /android|iphone|ipad|ipod/i.test(navigator.userAgent.toLowerCase());
+    if (mobileNative) {
+      setNativeError('移动端冷重启切换暂未实现，当前账号保持不变');
+      return;
+    }
+    setNativeError(null);
+    setNativeBusy(target.id);
+    let prepared = false;
+    try {
+      const status = await nativePrepareAccountSwitch(target.id);
+      prepared = true;
+      const pending = status.pendingOutbox;
+      const warning =
+        pending > 0
+          ? `当前账号还有 ${pending} 条未同步修改，它们会保留在旧账号数据库中。继续切换？`
+          : '切换账号会停止当前同步与提醒并重启应用，是否继续？';
+      if (!window.confirm(warning)) {
+        try {
+          await nativeAbortAccountSwitch();
+        } catch {
+          // The gate is reset by the command itself when it is reachable; a
+          // transport failure still requires a process restart to clear it.
+        }
+        prepared = false;
+        setNativeBusy(null);
+        return;
+      }
+      // Stop timers, listeners, polling and the SQLite sync-session fence
+      // before the native side closes the write gate and requests restart.
+      await props.cloud.quiesceForAccountSwitch();
+      await nativeRequestAccountSwitch(target.id, status.generation ?? 0);
+      setNativeBusy('restarting');
+    } catch (error) {
+      if (prepared) {
+        await nativeAbortAccountSwitch().catch(() => undefined);
+      }
+      setNativeError(error instanceof Error ? error.message : '账号切换失败');
+      setNativeBusy(null);
+    }
+  };
+
+  const addNativeAccount = async () => {
+    if (nativeBusy()) return;
+    const email = window.prompt('新账号邮箱');
+    if (!email?.trim()) return;
+    const apiUrl = window.prompt('API 服务地址', cloud().apiUrl) ?? cloud().apiUrl;
+    if (!apiUrl?.trim()) return;
+    setNativeError(null);
+    setNativeBusy('add');
+    try {
+      const account = await nativeCreateAccount(email.trim(), apiUrl.trim());
+      rememberNativeAccount(account);
+      await refreshNative();
+      setNativeBusy(null);
+      if (window.confirm('账号已创建为待验证状态，数据库为空。现在切换到该账号并登录验证身份？')) {
+        await nativeSwitch(account);
+      }
+    } catch (error) {
+      setNativeError(error instanceof Error ? error.message : '无法添加账号');
+      setNativeBusy(null);
+    }
+  };
 
   const verify = async () => {
     if (code().trim().length < 6) return;
@@ -412,6 +511,75 @@ export function CloudPanel(props: CloudPanelProps) {
           >
             <Plus size={15} /> 添加账号
           </button>
+        </div>
+      </Show>
+
+      <Show when={native}>
+        <div class="cloud-accounts">
+          <div class="cloud-devices__heading">
+            <h4>本机账号</h4>
+            <span>切换会停止同步、取消提醒并冷重启应用</span>
+          </div>
+          <Show when={nativeError()}>
+            <div class="cloud-banner cloud-banner--error" role="alert">
+              <AlertTriangle size={16} />
+              <span>{nativeError()}</span>
+            </div>
+          </Show>
+          <Show when={nativeStatus()?.phase === 'FAILED'}>
+            <div class="cloud-banner cloud-banner--error" role="status">
+              <AlertTriangle size={16} />
+              <span>上次切换未完成，已恢复原账号：{nativeStatus()?.errorCode ?? '未知错误'}</span>
+            </div>
+          </Show>
+          <Show when={nativeBusy() === 'restarting'}>
+            <div class="cloud-banner" role="status">
+              <LoaderCircle size={16} class="spin-icon" />
+              <span>正在保存切换并重启应用…</span>
+            </div>
+          </Show>
+          <For each={nativeAccounts()}>
+            {(account) => (
+              <div class="cloud-account-row">
+                <UserRound size={15} />
+                <div>
+                  <strong>
+                    {account.email || '匿名数据空间'}
+                    {account.pending ? '（待验证）' : ''}
+                  </strong>
+                  <span>
+                    {account.id === 'default' ? '默认数据空间' : account.apiUrl || '本机账号'}
+                  </span>
+                </div>
+                <Show
+                  when={account.active}
+                  fallback={
+                    <button
+                      type="button"
+                      class="text-button"
+                      disabled={nativeBusy() !== null}
+                      onClick={() => void nativeSwitch(account)}
+                    >
+                      {nativeBusy() === account.id ? '准备中…' : '切换'}
+                    </button>
+                  }
+                >
+                  <span class="cloud-account-active">当前</span>
+                </Show>
+              </div>
+            )}
+          </For>
+          <button
+            type="button"
+            class="secondary-button"
+            disabled={nativeBusy() !== null}
+            onClick={() => void addNativeAccount()}
+          >
+            <Plus size={15} /> 添加账号
+          </button>
+          <p class="cloud-accounts__note">
+            未同步修改保留在旧账号数据库中；切换不会退出或删除旧账号凭据。
+          </p>
         </div>
       </Show>
 
