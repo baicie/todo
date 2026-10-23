@@ -228,6 +228,7 @@ pub fn replace_journal_path(target: &Path) -> PathBuf {
     target.with_file_name(format!("{file_name}.replace-journal"))
 }
 
+#[cfg(windows)]
 fn write_replace_journal(target: &Path, source: &Path, backup: &Path) -> std::io::Result<()> {
     let journal = replace_journal_path(target);
     let body = format!("{}\n{}\n", source.display(), backup.display());
