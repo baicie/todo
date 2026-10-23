@@ -6,4 +6,5 @@ playwright-report
 test-results
 pnpm-lock.yaml
 apps/native/src-tauri/Cargo.lock
+apps/native/plugins/**/permissions/**
 Cargo.lock

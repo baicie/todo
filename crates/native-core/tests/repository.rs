@@ -841,6 +841,79 @@ fn merge_and_snapshot_preserve_task_tags() {
 }
 
 #[test]
+fn reminder_query_returns_only_open_visible_tasks_in_due_order() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    let later = store
+        .create_task(NewTask {
+            title: "later".to_owned(),
+            remind_at: Some("2026-10-24T10:00:00Z".to_owned()),
+            ..NewTask::default()
+        })
+        .expect("later");
+    let sooner = store
+        .create_task(NewTask {
+            title: "sooner".to_owned(),
+            remind_at: Some("2026-10-24T09:00:00Z".to_owned()),
+            ..NewTask::default()
+        })
+        .expect("sooner");
+    let completed = store
+        .create_task(NewTask {
+            title: "completed".to_owned(),
+            remind_at: Some("2026-10-24T08:00:00Z".to_owned()),
+            ..NewTask::default()
+        })
+        .expect("completed");
+    store
+        .commit_completion(&completed.id, "2026-10-23T08:00:00Z", None)
+        .expect("complete");
+    let deleted = store
+        .create_task(NewTask {
+            title: "deleted".to_owned(),
+            remind_at: Some("2026-10-24T07:00:00Z".to_owned()),
+            ..NewTask::default()
+        })
+        .expect("deleted");
+    store.delete_task(&deleted.id).expect("delete");
+
+    let reminders = store.upcoming_reminders().expect("reminders");
+    assert_eq!(
+        reminders
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![sooner.id.as_str(), later.id.as_str()]
+    );
+}
+
+#[test]
+fn reopened_sqlite_database_preserves_offline_tasks_and_outbox() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("restart.sqlite3");
+    {
+        let store = TodoStore::open(&path).expect("open store");
+        store.sync_set_enabled(true).expect("enable sync");
+        for index in 0..100 {
+            store
+                .create_task(NewTask {
+                    title: format!("离线任务 {index}"),
+                    ..NewTask::default()
+                })
+                .expect("create offline task");
+        }
+        assert_eq!(store.export_data().expect("export").tasks.len(), 100);
+    }
+
+    let reopened = TodoStore::open(&path).expect("reopen store");
+    let bundle = reopened.export_data().expect("export after restart");
+    assert_eq!(bundle.tasks.len(), 100);
+    assert!(
+        reopened.pending_mutations(200).expect("pending").len() >= 100,
+        "unacknowledged offline mutations must survive restart"
+    );
+}
+
+#[test]
 fn migrates_legacy_task_table_with_empty_tags() {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("legacy.sqlite3");
