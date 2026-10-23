@@ -245,6 +245,7 @@ fn apply_server_result_updates_ack_cursor_and_shadow() {
                 .expect("change"),
             ],
             next_cursor: "1".to_owned(),
+            session_id: None,
         })
         .expect("apply");
 
@@ -287,6 +288,7 @@ fn apply_server_result_keeps_pending_fields_over_remote_changes() {
                 .expect("change"),
             ],
             next_cursor: "2".to_owned(),
+            session_id: None,
         })
         .expect("apply");
 
@@ -310,6 +312,7 @@ fn apply_server_result_keeps_pending_fields_over_remote_changes() {
                 .expect("change"),
             ],
             next_cursor: "3".to_owned(),
+            session_id: None,
         })
         .expect("apply");
 
@@ -342,6 +345,7 @@ fn apply_server_result_rejected_ack_rolls_back_pending_patch() {
             }],
             changes: vec![],
             next_cursor: "2".to_owned(),
+            session_id: None,
         })
         .expect("apply ack");
 
@@ -386,6 +390,7 @@ fn apply_server_result_applied_ack_uses_updated_shadow() {
                 .expect("change"),
             ],
             next_cursor: "2".to_owned(),
+            session_id: None,
         })
         .expect("apply ack");
 
@@ -655,6 +660,7 @@ fn clear_rejected_reprojects_from_shadow() {
             }],
             changes: vec![],
             next_cursor: "3".to_owned(),
+            session_id: None,
         })
         .expect("reject");
     assert_eq!(store.sync_diagnostics().expect("diagnostics").rejected, 1);
@@ -841,6 +847,84 @@ fn merge_and_snapshot_preserve_task_tags() {
 }
 
 #[test]
+fn stale_sync_session_cannot_commit_server_results() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    store.sync_set_enabled(true).expect("enable sync");
+    store
+        .sync_set_session(Some("session-a"))
+        .expect("session a");
+    store.create_task(new_task("first")).expect("first task");
+    let first = store.pending_mutations(10).expect("pending first");
+    let first_op = first.first().expect("first op");
+    store
+        .apply_server_result(ApplyServerResultRequest {
+            acks: vec![todo_native_core::ServerAck {
+                op_id: first_op.op_id.clone(),
+                server_seq: Some(1),
+                status: "applied".to_owned(),
+                error_code: None,
+            }],
+            changes: vec![],
+            next_cursor: "1".to_owned(),
+            session_id: Some("session-a".to_owned()),
+        })
+        .expect("first apply");
+
+    store.create_task(new_task("second")).expect("second task");
+    let second = store.pending_mutations(10).expect("pending second");
+    let second_op = second.last().expect("second op").clone();
+    store
+        .sync_set_session(Some("session-b"))
+        .expect("session b");
+    let error = store
+        .apply_server_result(ApplyServerResultRequest {
+            acks: vec![todo_native_core::ServerAck {
+                op_id: second_op.op_id.clone(),
+                server_seq: Some(2),
+                status: "applied".to_owned(),
+                error_code: None,
+            }],
+            changes: vec![],
+            next_cursor: "2".to_owned(),
+            session_id: Some("session-a".to_owned()),
+        })
+        .expect_err("stale write must fail");
+
+    assert_eq!(error.code().as_str(), "STALE_SYNC_SESSION");
+    assert_eq!(store.get_sync_cursor().expect("cursor"), "1");
+    assert!(
+        store
+            .pending_mutations(10)
+            .expect("pending after rejection")
+            .iter()
+            .any(|mutation| mutation.op_id == second_op.op_id)
+    );
+}
+
+#[test]
+fn stale_sync_session_cannot_replace_a_snapshot() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    let task = store.create_task(new_task("keep")).expect("task");
+    store
+        .sync_set_session(Some("session-b"))
+        .expect("session b");
+    let error = store
+        .sync_replace_snapshot_fenced(
+            &CloudSnapshot {
+                cursor: "9".to_owned(),
+                lists: vec![],
+                tasks: vec![],
+                steps: vec![],
+                day_plans: vec![],
+            },
+            Some("session-a"),
+        )
+        .expect_err("stale snapshot must fail");
+    assert_eq!(error.code().as_str(), "STALE_SYNC_SESSION");
+    assert!(store.get_task(&task.id).expect("get").is_some());
+}
+
+#[test]
 fn reminder_query_returns_only_open_visible_tasks_in_due_order() {
     let store = TodoStore::open_in_memory().expect("open store");
     let later = store
@@ -884,6 +968,31 @@ fn reminder_query_returns_only_open_visible_tasks_in_due_order() {
             .collect::<Vec<_>>(),
         vec![sooner.id.as_str(), later.id.as_str()]
     );
+}
+
+#[test]
+fn reminder_query_handles_more_than_one_thousand_entries() {
+    let store = TodoStore::open_in_memory().expect("open store");
+    for index in 0..1001 {
+        store
+            .create_task(NewTask {
+                title: format!("reminder {index}"),
+                remind_at: Some(format!(
+                    "2026-10-24T{:02}:{:02}:00Z",
+                    index / 60,
+                    index % 60
+                )),
+                ..NewTask::default()
+            })
+            .expect("create reminder");
+    }
+    let started = std::time::Instant::now();
+    let reminders = store.upcoming_reminders().expect("reminders");
+    println!(
+        "[reminder-query] 1001 native candidates in {:?}",
+        started.elapsed()
+    );
+    assert_eq!(reminders.len(), 1001);
 }
 
 #[test]

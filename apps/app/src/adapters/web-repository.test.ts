@@ -350,8 +350,11 @@ describe('DexieTaskRepository', () => {
       nextTask: null,
     });
 
+    const started = performance.now();
     const candidates = await repository.listReminderCandidates();
+    const elapsed = performance.now() - started;
     expect(candidates).toHaveLength(1001);
+    console.info(`[reminder-query] 1001 candidates in ${elapsed.toFixed(2)}ms`);
     expect(candidates.every((task) => task.status === 'open')).toBe(true);
     expect(candidates[0]!.remindAt! <= candidates[1]!.remindAt!).toBe(true);
   });
