@@ -4,6 +4,10 @@ import { DexieTaskRepository } from '../adapters/web-repository';
 import { createCloudController } from './cloud';
 
 let databaseCounter = 0;
+const LATE_TASK = '01a1673d-1000-7000-8000-000000000001';
+const DISPOSED_TASK = '01a1673d-1000-7000-8000-000000000002';
+const ACCOUNT_A_TASK = '01a1673d-1000-7000-8000-000000000003';
+const BOOTSTRAP_TASK = '01a1673d-1000-7000-8000-000000000004';
 
 function fakePlatform(): AppPlatform {
   return {
@@ -40,7 +44,7 @@ function syncResponse(taskId: string): Response {
       changes: [
         {
           server_seq: 2,
-          op_id: 'server-op',
+          op_id: '01a1673d-2000-7000-8000-000000000001',
           entity: 'task',
           entity_id: taskId,
           kind: 'create',
@@ -67,14 +71,42 @@ function syncResponse(taskId: string): Response {
   );
 }
 
-function emptySyncResponse(): Response {
+function emptySyncResponse(cursor = '0'): Response {
   return new Response(
     JSON.stringify({
       ack: [],
       changes: [],
-      next_cursor: '0',
+      next_cursor: cursor,
       has_more: false,
       server_time: '2026-10-23T00:00:00Z',
+    }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+function bootstrapResponse(taskId: string): Response {
+  const now = new Date().toISOString();
+  return new Response(
+    JSON.stringify({
+      entities: [
+        {
+          entity: 'task',
+          entity_id: taskId,
+          data: {
+            title: 'bootstrap task',
+            note: '',
+            status: 'open',
+            important: false,
+            rank: 'a0',
+            created_at: now,
+            updated_at: now,
+            deleted_at: null,
+          },
+        },
+      ],
+      snapshot_cursor: '9',
+      next_page: null,
+      has_more: false,
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   );
@@ -134,13 +166,13 @@ describe('cloud sync session lifecycle', () => {
     // The sync response is still in flight. Logout must not wait for it and
     // must fence the eventual response at the repository transaction.
     await cloud.signOut(true);
-    resolveSync(syncResponse('late-task'));
+    resolveSync(syncResponse(LATE_TASK));
     await initializing;
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(cloud.state().phase).toBe('disconnected');
     expect(cloud.state().syncStatus).toBe('idle');
-    expect(await repository.getTask('late-task')).toBeNull();
+    expect(await repository.getTask(LATE_TASK)).toBeNull();
     expect(await repository.syncGetPendingCount()).toBe(0);
     expect(await repository.syncGetCursor()).toBe('0');
     cloud.dispose();
@@ -233,11 +265,11 @@ describe('cloud sync session lifecycle', () => {
     const initializing = cloud.initialize();
     await started;
     cloud.dispose();
-    resolveSync(syncResponse('disposed-task'));
+    resolveSync(syncResponse(DISPOSED_TASK));
     await initializing;
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(await repository.getTask('disposed-task')).toBeNull();
+    expect(await repository.getTask(DISPOSED_TASK)).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -274,14 +306,58 @@ describe('cloud sync session lifecycle', () => {
     const accountA = cloud.initialize();
     await started;
     await cloud.initialize();
-    resolveFirst(syncResponse('account-a-late-task'));
+    resolveFirst(syncResponse(ACCOUNT_A_TASK));
     await accountA;
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(cloud.state().phase).toBe('connected');
     expect(cloud.state().syncStatus).toBe('synced');
-    expect(await repository.getTask('account-a-late-task')).toBeNull();
+    expect(await repository.getTask(ACCOUNT_A_TASK)).toBeNull();
     expect((await repository.syncGetDiagnostics()).pending).toBe(0);
+    cloud.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('serializes forceBootstrap with an in-flight sync and keeps the bootstrap cursor', async () => {
+    const repository = new DexieTaskRepository(`lifecycle-force-${databaseCounter}`);
+    await repository.initialize();
+    const platform = fakePlatform();
+    (platform as AppPlatform).repository = repository;
+    let syncCalls = 0;
+    let resolveFirst!: (response: Response) => void;
+    let firstStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const firstSync = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) return tokenResponse();
+      if (url.includes('/sync/bootstrap')) return bootstrapResponse(BOOTSTRAP_TASK);
+      if (url.includes('/api/v1/sync')) {
+        syncCalls += 1;
+        if (syncCalls === 1) {
+          firstStarted();
+          return firstSync;
+        }
+        return emptySyncResponse('9');
+      }
+      if (url.includes('/auth/logout')) return new Response(null, { status: 204 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const cloud = createCloudController({ platform, repository });
+    const initializing = cloud.initialize();
+    await started;
+    const force = cloud.forceBootstrap();
+    resolveFirst(syncResponse(LATE_TASK));
+    await Promise.all([initializing, force]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await repository.getTask(LATE_TASK)).toBeNull();
+    expect(await repository.getTask(BOOTSTRAP_TASK)).not.toBeNull();
+    expect(await repository.syncGetCursor()).toBe('9');
     cloud.dispose();
     vi.unstubAllGlobals();
   });

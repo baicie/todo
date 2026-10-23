@@ -708,6 +708,10 @@ export function createCloudController(options: {
     if (state().phase !== 'connected') return;
     const generation = sessionGeneration;
     const token = sessionToken;
+    // Serialize with an in-flight sync so a late sync response cannot apply an
+    // older cursor after the bootstrap snapshot is installed.
+    if (runInFlight) await runInFlight;
+    if (!isCurrentGeneration(generation) || !token) return;
     update({ busy: 'bootstrap', error: null });
     try {
       const snapshot = await fetchSnapshot();
