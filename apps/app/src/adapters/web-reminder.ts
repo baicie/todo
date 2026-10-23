@@ -1,5 +1,6 @@
 import type {
   ReminderPermission,
+  ReminderReconcileReport,
   ReminderScheduler,
   ReminderScheduleResult,
 } from '@todo/application';
@@ -62,8 +63,18 @@ export class WebReminderScheduler implements ReminderScheduler {
     this.cancelTimer(reminderId);
   }
 
-  async rescheduleUpcoming(): Promise<void> {
+  async rescheduleUpcoming(): Promise<ReminderReconcileReport> {
     for (const id of this.pending.keys()) this.arm(id);
+    return {
+      scheduled: 0,
+      cancelled: 0,
+      unchanged: this.pending.size,
+      skippedPast: 0,
+      outsideWindow: 0,
+      capacityExceeded: 0,
+      permissionDenied: 0,
+      failed: [],
+    };
   }
 
   private arm(reminderId: string): void {

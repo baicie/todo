@@ -98,17 +98,30 @@ pub fn cancel_reminder(
         .map_err(CommandError::reminder)
 }
 
-/// Rebuild the platform queue from open tasks in SQLite. On desktop this arms
-/// fresh timers; on Android/iOS it clears the plugin queue and schedules each
-/// future reminder through the native platform bridge.
+/// Reconcile the platform queue against open SQLite tasks. The queue is the
+/// source of truth for already-armed notifications; only changed or stale
+/// entries are touched.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReminderReconcileReport {
     pub scheduled: u32,
+    pub cancelled: u32,
+    pub unchanged: u32,
     pub skipped_past: u32,
     pub outside_window: u32,
     pub capacity_exceeded: u32,
+    pub permission_denied: u32,
     pub failed: Vec<String>,
+}
+
+fn same_instant(left: &str, right: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(left),
+        chrono::DateTime::parse_from_rfc3339(right),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 #[tauri::command]
@@ -123,30 +136,66 @@ pub async fn reschedule_reminders(
         .map_err(CommandError::from_store)?;
     let active: std::collections::HashSet<&str> =
         tasks.iter().map(|task| task.id.as_str()).collect();
-    let existing = reminders.scheduled_ids().map_err(CommandError::reminder)?;
+    let existing = reminders.scheduled().map_err(CommandError::reminder)?;
     let mut report = ReminderReconcileReport::default();
-    for id in existing {
-        if active.contains(id.as_str()) {
-            continue;
-        }
-        match reminders.cancel(&id) {
-            Ok(()) => {}
-            Err(error) => report.failed.push(format!("{id}: cancel failed: {error}")),
+    let existing_by_id: std::collections::HashMap<String, crate::reminders::ScheduledReminderInfo> =
+        existing
+            .into_iter()
+            .map(|item| (item.reminder_id.clone(), item))
+            .collect();
+
+    for (id, _) in &existing_by_id {
+        if !active.contains(id.as_str()) {
+            match reminders.cancel(id) {
+                Ok(()) => report.cancelled += 1,
+                Err(error) => report.failed.push(format!("{id}: cancel failed: {error}")),
+            }
         }
     }
+
+    if reminders.permission() != "granted" {
+        report.permission_denied = tasks.len() as u32;
+        return Ok(report);
+    }
+
     for task in tasks {
         if let Some(fire_at) = &task.remind_at {
-            match reminders.schedule(&task.id, fire_at, &task.title, &task.note, false) {
+            let body = if task.note.trim().is_empty() {
+                ""
+            } else {
+                task.note.as_str()
+            };
+            if let Some(current) = existing_by_id.get(&task.id)
+                && same_instant(&current.fire_at_utc, fire_at)
+                && current.title == task.title
+                && current.body == body
+            {
+                report.unchanged += 1;
+                continue;
+            }
+            match reminders.schedule(&task.id, fire_at, &task.title, body, false) {
                 Ok(mode) if mode == "scheduled" || mode == "exact" || mode == "inexact" => {
                     report.scheduled += 1;
                 }
-                Ok(mode) if mode == "past" || mode == "skipped-past" => report.skipped_past += 1,
-                Ok(mode) if mode == "outside-window" => report.outside_window += 1,
-                Ok(mode) if mode == "capacity-exceeded" => report.capacity_exceeded += 1,
+                Ok(mode) if mode == "past" || mode == "skipped-past" => {
+                    let _ = reminders.cancel(&task.id);
+                    report.skipped_past += 1;
+                }
+                Ok(mode) if mode == "outside-window" => {
+                    let _ = reminders.cancel(&task.id);
+                    report.outside_window += 1;
+                }
+                Ok(mode) if mode == "capacity-exceeded" => {
+                    let _ = reminders.cancel(&task.id);
+                    report.capacity_exceeded += 1;
+                }
                 Ok(mode) => report
                     .failed
                     .push(format!("{}: unknown mode {mode}", task.id)),
-                Err(error) => report.failed.push(format!("{}: {error}", task.id)),
+                Err(error) => {
+                    let _ = reminders.cancel(&task.id);
+                    report.failed.push(format!("{}: {error}", task.id));
+                }
             }
         }
     }
