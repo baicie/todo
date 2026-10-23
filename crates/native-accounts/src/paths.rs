@@ -55,6 +55,10 @@ pub fn migration_state_file(root: &Path) -> PathBuf {
     root.join("migration-state.json")
 }
 
+pub fn installation_state_file(root: &Path) -> PathBuf {
+    root.join("installation-state.json")
+}
+
 pub fn migration_backups_dir(root: &Path) -> PathBuf {
     root.join("migration-backups")
 }
@@ -213,6 +217,29 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> AccountResult<
     Ok(())
 }
 
+/// Path of the sidecar journal used by the Windows two-step fallback. The
+/// journal identifies the intended temp file and previous registry backup if a
+/// process dies between the two renames.
+pub fn replace_journal_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    target.with_file_name(format!("{file_name}.replace-journal"))
+}
+
+fn write_replace_journal(target: &Path, source: &Path, backup: &Path) -> std::io::Result<()> {
+    let journal = replace_journal_path(target);
+    let body = format!("{}\n{}\n", source.display(), backup.display());
+    fs::write(&journal, body.as_bytes())?;
+    let file = OpenOptions::new().read(true).write(true).open(&journal)?;
+    file.sync_all()?;
+    if let Some(parent) = journal.parent() {
+        sync_dir(parent);
+    }
+    Ok(())
+}
+
 /// Replace a file atomically where the platform supports it. Unix rename
 /// replaces in one step; Windows uses ReplaceFileW, which preserves the old
 /// file during replacement. A missing target on Windows is a first write.
@@ -252,15 +279,25 @@ pub fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
             let replace_error = std::io::Error::last_os_error();
             // Some filesystems/AV filters reject ReplaceFileW. Fall back to a
             // recoverable two-step swap; a failed swap restores the old file.
-            let backup = target.with_extension(format!("old-{}", Uuid::now_v7()));
+            let file_name = target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("state");
+            let backup = target.with_file_name(format!("{file_name}.old-{}", Uuid::now_v7()));
+            let journal = replace_journal_path(target);
+            write_replace_journal(target, source, &backup)?;
             fs::rename(target, &backup)?;
             match fs::rename(source, target) {
                 Ok(()) => {
                     let _ = fs::remove_file(&backup);
+                    let _ = fs::remove_file(&journal);
                     return Ok(());
                 }
                 Err(error) => {
-                    let _ = fs::rename(&backup, target);
+                    let restored = fs::rename(&backup, target).is_ok();
+                    if restored {
+                        let _ = fs::remove_file(&journal);
+                    }
                     return Err(std::io::Error::new(
                         error.kind(),
                         format!("{replace_error}; fallback: {error}"),

@@ -92,6 +92,29 @@ mod tests {
     }
 
     #[test]
+    fn fresh_install_creates_database_before_returning_context() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let (store, account) = open_store_at(directory.path()).expect("fresh install");
+        assert_eq!(account.account_id, DEFAULT_ACCOUNT_ID);
+        assert!(account.database_path.is_file());
+        assert!(!directory.path().join("installation-state.json").exists());
+        assert!(store.list_tasks(TaskQuery {
+            view: TaskView::All,
+            list_id: None,
+            search: None,
+            tags: Vec::new(),
+            local_date: None,
+            due_from: None,
+            due_to: None,
+            include_completed: false,
+            limit: None,
+        }).expect("tasks").items.is_empty());
+
+        let (_, restarted) = open_store_at(directory.path()).expect("fresh restart");
+        assert_eq!(restarted.account_id, DEFAULT_ACCOUNT_ID);
+    }
+
+    #[test]
     fn corrupt_registry_blocks_startup_without_empty_database() {
         let directory = tempfile::tempdir().expect("tempdir");
         std::fs::write(directory.path().join("accounts.json"), b"{bad").expect("registry");

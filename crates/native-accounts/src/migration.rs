@@ -7,20 +7,20 @@ use std::{
 
 use chrono::Utc;
 use rusqlite::{Connection, backup::Backup};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use crate::{
     error::{AccountError, AccountResult},
     paths::{
-        DEFAULT_ACCOUNT_ID, accounts_file, ensure_account_dir, ensure_data_root,
-        legacy_database_path, migration_backups_dir, migration_state_file, sync_directory,
-        sync_file, validate_account_id, validate_database_path, validate_legacy_source,
-        validate_relative_path, write_json_atomic,
+        DEFAULT_ACCOUNT_ID, database_path, ensure_account_dir, ensure_data_root,
+        installation_state_file, legacy_database_path, migration_backups_dir, migration_state_file,
+        replace_journal_path, sync_directory, sync_file, validate_account_id,
+        validate_database_path, validate_legacy_source, validate_relative_path, write_json_atomic,
     },
     registry::{
-        AccountKind, AccountRecord, AccountRegistry, ActiveAccountContext, normalize_email,
-        valid_email,
+        AccountKind, AccountRecord, AccountRegistry, ActiveAccountContext, load_with_recovery,
+        normalize_email, valid_email,
     },
     snapshot::{DataSnapshot, VerificationSummary, kv_get, read_snapshot, table_exists},
 };
@@ -88,26 +88,37 @@ impl MigrationState {
     pub fn load(root: &Path) -> AccountResult<Option<Self>> {
         let path = migration_state_file(root);
         if !path.exists() {
+            if let Some(state) = recover_state_journal::<Self>(root, &path)? {
+                state.validate()?;
+                state.save(root)?;
+                let _ = fs::remove_file(replace_journal_path(&path));
+                return Ok(Some(state));
+            }
             return Ok(None);
         }
         let raw = fs::read(&path)?;
         let state: Self = serde_json::from_slice(&raw).map_err(|error| {
             AccountError::InvalidRegistry(format!("migration state is corrupt: {error}"))
         })?;
-        if state.version != MIGRATION_STATE_VERSION {
+        state.validate()?;
+        Ok(Some(state))
+    }
+
+    fn validate(&self) -> AccountResult<()> {
+        if self.version != MIGRATION_STATE_VERSION {
             return Err(AccountError::InvalidRegistry(format!(
                 "unsupported migration state version {}",
-                state.version
+                self.version
             )));
         }
-        validate_relative_path(&state.source_file)?;
-        if let Some(path) = &state.backup_file {
+        validate_relative_path(&self.source_file)?;
+        if let Some(path) = &self.backup_file {
             validate_relative_path(path)?;
         }
-        if let Some(path) = &state.target_file {
+        if let Some(path) = &self.target_file {
             validate_relative_path(path)?;
         }
-        Ok(Some(state))
+        Ok(())
     }
 
     fn save(&self, root: &Path) -> AccountResult<()> {
@@ -118,6 +129,138 @@ impl MigrationState {
         self.phase = phase;
         self.updated_at = timestamp();
     }
+}
+
+pub const INSTALLATION_STATE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum InstallationPhase {
+    Prepared,
+    DatabaseCreated,
+    RegistryCommitted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationState {
+    pub version: u32,
+    pub phase: InstallationPhase,
+    pub account_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl InstallationState {
+    fn new() -> Self {
+        let now = timestamp();
+        Self {
+            version: INSTALLATION_STATE_VERSION,
+            phase: InstallationPhase::Prepared,
+            account_id: DEFAULT_ACCOUNT_ID.to_owned(),
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    pub fn load(root: &Path) -> AccountResult<Option<Self>> {
+        let path = installation_state_file(root);
+        if !path.exists() {
+            if let Some(state) = recover_state_journal::<Self>(root, &path)? {
+                if state.version != INSTALLATION_STATE_VERSION
+                    || state.account_id != DEFAULT_ACCOUNT_ID
+                {
+                    return Err(AccountError::InvalidRegistry(
+                        "installation state is invalid".to_owned(),
+                    ));
+                }
+                state.save(root)?;
+                let _ = fs::remove_file(replace_journal_path(&path));
+                return Ok(Some(state));
+            }
+            return Ok(None);
+        }
+        let raw = fs::read(&path)?;
+        let state: Self = serde_json::from_slice(&raw).map_err(|error| {
+            AccountError::InvalidRegistry(format!("installation state is corrupt: {error}"))
+        })?;
+        if state.version != INSTALLATION_STATE_VERSION || state.account_id != DEFAULT_ACCOUNT_ID {
+            return Err(AccountError::InvalidRegistry(
+                "installation state is invalid".to_owned(),
+            ));
+        }
+        Ok(Some(state))
+    }
+
+    fn save(&self, root: &Path) -> AccountResult<()> {
+        write_json_atomic(&installation_state_file(root), self)
+    }
+
+    fn touch(&mut self, phase: InstallationPhase) {
+        self.phase = phase;
+        self.updated_at = timestamp();
+    }
+}
+
+/// Recover a JSON state file whose Windows fallback replacement was interrupted
+/// after the target was moved aside. The temp/source is the intended new state;
+/// the old backup is the fallback. Prefer the temp only if it parses.
+fn recover_state_journal<T: DeserializeOwned>(
+    root: &Path,
+    target: &Path,
+) -> AccountResult<Option<T>> {
+    let journal = replace_journal_path(target);
+    if !journal.exists() {
+        return Ok(None);
+    }
+    if fs::symlink_metadata(&journal)?.file_type().is_symlink() {
+        return Err(AccountError::UnsafePath(format!(
+            "state replacement journal is a symlink: {}",
+            journal.display()
+        )));
+    }
+    let raw = fs::read_to_string(&journal).map_err(|error| {
+        AccountError::InvalidRegistry(format!("state replacement journal is unreadable: {error}"))
+    })?;
+    let mut lines = raw.lines();
+    let source = lines
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| AccountError::InvalidRegistry("state journal has no source".to_owned()))?;
+    let backup = lines
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| AccountError::InvalidRegistry("state journal has no backup".to_owned()))?;
+    let root_canonical = root.canonicalize()?;
+    let mut existing = Vec::new();
+    for candidate in [&source, &backup] {
+        if !candidate.is_file() {
+            continue;
+        }
+        let canonical = candidate.canonicalize().map_err(|error| {
+            AccountError::InvalidRegistry(format!(
+                "state journal candidate is unreadable: {} ({error})",
+                candidate.display()
+            ))
+        })?;
+        if !canonical.starts_with(&root_canonical) {
+            return Err(AccountError::UnsafePath(format!(
+                "state journal escapes data root: {}",
+                candidate.display()
+            )));
+        }
+        existing.push(candidate);
+    }
+    for candidate in existing {
+        if let Ok(raw) = fs::read(candidate)
+            && let Ok(state) = serde_json::from_slice::<T>(&raw)
+        {
+            return Ok(Some(state));
+        }
+    }
+    Err(AccountError::InvalidRegistry(
+        "state replacement journal candidates are missing or invalid".to_owned(),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,87 +274,287 @@ pub fn ensure_active_account(root: &Path) -> AccountResult<ActiveAccountContext>
     let root = ensure_data_root(root)?;
     let legacy_source = legacy_database_path(&root);
     validate_legacy_source(&legacy_source)?;
-    let state = MigrationState::load(&root)?;
-    if let Some(state) = &state
-        && state.phase == MigrationPhase::RequiresReview
-    {
-        return Err(AccountError::NeedsReview {
-            reason: state
-                .reason
-                .clone()
-                .unwrap_or_else(|| "legacy ownership is ambiguous".to_owned()),
-            state_path: migration_state_file(&root),
-        });
+    let migration_state = MigrationState::load(&root)?;
+    let installation = InstallationState::load(&root)?;
+    let registry = load_with_recovery(&root)?;
+
+    if let Some(installation) = installation {
+        return resume_fresh_installation(&root, installation, registry);
     }
 
-    if accounts_file(&root).exists() {
-        let mut registry = AccountRegistry::load(&root)?;
-        let active = registry.active().clone();
-        let target_dir = ensure_account_dir(&root, &active.id)?;
-        let target = target_dir.join("shishi.sqlite3");
-        validate_database_path(&target)?;
-        let migrated_from_legacy = state.as_ref().is_some_and(|state| {
-            state.phase == MigrationPhase::Complete
-                && state.target_account_id.as_deref() == Some(active.id.as_str())
-        });
-        if target.is_file() {
-            if let Some(account) = registry.account_mut(&active.id) {
-                account.touch();
+    let Some(mut registry) = registry else {
+        if legacy_source.is_file() {
+            if let Some(state) = migration_state {
+                if state.phase == MigrationPhase::RequiresReview {
+                    return Err(needs_review(&state, &root));
+                }
+                if state.phase == MigrationPhase::Complete {
+                    return Err(AccountError::InvalidRegistry(
+                        "migration is complete but accounts.json is missing".to_owned(),
+                    ));
+                }
+                return resume_migration(&root, state, None);
             }
-            registry.save(&root)?;
-            return ActiveAccountContext::new(&registry, &root, migrated_from_legacy);
+            let ownership = classify_legacy_database(&legacy_source)?;
+            return migrate_legacy_database(&root, ownership);
         }
-        if let Some(state) = state
-            && state.phase != MigrationPhase::Complete
-            && state.phase != MigrationPhase::RequiresReview
-            && state.target_account_id.as_deref() == Some(active.id.as_str())
-            && legacy_database_path(&root).is_file()
-        {
-            return resume_migration(&root, state);
-        }
-        return Err(AccountError::ActiveAccountMissing(active.id));
-    }
 
-    if !legacy_database_path(&root).is_file() {
-        if let Some(state) = state {
+        if let Some(state) = migration_state {
+            if state.phase == MigrationPhase::RequiresReview {
+                return Err(needs_review(&state, &root));
+            }
             if state.phase == MigrationPhase::Complete {
                 return Err(AccountError::InvalidRegistry(
                     "migration is complete but accounts.json is missing".to_owned(),
                 ));
             }
-            return resume_migration(&root, state);
+            return resume_migration(&root, state, None);
         }
-        let registry = AccountRegistry::new_with_default();
-        registry.save(&root)?;
-        ensure_account_dir(&root, DEFAULT_ACCOUNT_ID)?;
-        return ActiveAccountContext::new(&registry, &root, false);
-    }
 
-    if let Some(state) = state {
-        if state.phase == MigrationPhase::Complete {
-            return Err(AccountError::InvalidRegistry(
-                "migration is marked complete but accounts.json is missing".to_owned(),
-            ));
+        // An existing account database is evidence of a previous install
+        // whose registry is missing. Never reinterpret it as a fresh install.
+        let databases = account_database_files(&root)?;
+        if !databases.is_empty() {
+            return Err(AccountError::InvalidRegistry(format!(
+                "accounts.json is missing but account databases exist: {databases:?}"
+            )));
         }
-        return resume_migration(&root, state);
-    }
+        return initialize_fresh(&root);
+    };
 
-    let ownership = classify_legacy_database(&legacy_database_path(&root))?;
-    migrate_legacy_database(&root, ownership)
+    let active = registry.active().clone();
+    let target_dir = ensure_account_dir(&root, &active.id)?;
+    let target = target_dir.join("shishi.sqlite3");
+    validate_database_path(&target)?;
+
+    match migration_state {
+        None => {
+            if !target.is_file() {
+                return Err(AccountError::ActiveAccountMissing(active.id));
+            }
+            if let Some(account) = registry.account_mut(&active.id) {
+                account.touch();
+            }
+            registry.save(&root)?;
+            ActiveAccountContext::new(&registry, &root, false)
+        }
+        Some(state) if state.phase == MigrationPhase::RequiresReview => {
+            Err(needs_review(&state, &root))
+        }
+        Some(state) if state.phase == MigrationPhase::Complete => {
+            verify_complete_migration(&state, &registry, &target)?;
+            if let Some(account) = registry.account_mut(&active.id) {
+                account.touch();
+            }
+            registry.save(&root)?;
+            ActiveAccountContext::new(&registry, &root, true)
+        }
+        Some(state) => {
+            let state_target = state.target_account_id.as_deref().ok_or_else(|| {
+                AccountError::InvalidRegistry(
+                    "non-complete migration state has no target account".to_owned(),
+                )
+            })?;
+            if active.id != DEFAULT_ACCOUNT_ID && active.id != state_target {
+                return Err(AccountError::InvalidRegistry(format!(
+                    "registry active account {} conflicts with migration target {}",
+                    active.id, state_target
+                )));
+            }
+            if !legacy_source.is_file() {
+                return Err(AccountError::ActiveAccountMissing(state_target.to_owned()));
+            }
+            resume_migration(&root, state, Some(registry))
+        }
+    }
 }
 
-fn resume_migration(root: &Path, state: MigrationState) -> AccountResult<ActiveAccountContext> {
+fn needs_review(state: &MigrationState, root: &Path) -> AccountError {
+    AccountError::NeedsReview {
+        reason: state
+            .reason
+            .clone()
+            .unwrap_or_else(|| "legacy ownership is ambiguous".to_owned()),
+        state_path: migration_state_file(root),
+    }
+}
+
+fn verify_complete_migration(
+    state: &MigrationState,
+    registry: &AccountRegistry,
+    target: &Path,
+) -> AccountResult<()> {
+    let target_id = state.target_account_id.as_deref().ok_or_else(|| {
+        AccountError::InvalidRegistry("COMPLETE migration has no target account".to_owned())
+    })?;
+    if registry.active_account_id != target_id {
+        return Err(AccountError::InvalidRegistry(
+            "COMPLETE migration target does not match active account".to_owned(),
+        ));
+    }
+    if !target.is_file() {
+        return Err(AccountError::ActiveAccountMissing(target_id.to_owned()));
+    }
+    // The COMPLETE target is the live database. Its contents legitimately
+    // change as the user works, so the migration-time fingerprint must not be
+    // compared here. Only structural integrity can be checked on the fast
+    // path; migration-time source/backup/target fingerprints are enforced by
+    // non-COMPLETE recovery before this point.
+    crate::snapshot::verify_integrity(target)?;
+    Ok(())
+}
+
+fn initialize_fresh(root: &Path) -> AccountResult<ActiveAccountContext> {
+    let state = InstallationState::new();
+    state.save(root)?;
+    resume_fresh_installation(root, state, None)
+}
+
+fn resume_fresh_installation(
+    root: &Path,
+    mut state: InstallationState,
+    registry: Option<AccountRegistry>,
+) -> AccountResult<ActiveAccountContext> {
+    if MigrationState::load(root)?.is_some() {
+        return Err(AccountError::InvalidRegistry(
+            "installation marker conflicts with migration state".to_owned(),
+        ));
+    }
+    if legacy_database_path(root).exists() {
+        return Err(AccountError::InvalidRegistry(
+            "installation marker conflicts with legacy database".to_owned(),
+        ));
+    }
+    let registry = registry.unwrap_or_else(AccountRegistry::new_with_default);
+    registry.validate()?;
+    if registry.active_account_id != DEFAULT_ACCOUNT_ID {
+        return Err(AccountError::InvalidRegistry(
+            "installation marker requires the default active account".to_owned(),
+        ));
+    }
+    let expected = database_path(root, DEFAULT_ACCOUNT_ID)?;
+    for database in account_database_files(root)? {
+        if database != expected {
+            return Err(AccountError::InvalidRegistry(format!(
+                "installation marker found an unexpected account database: {database:?}"
+            )));
+        }
+    }
+
+    ensure_fresh_database(root)?;
+    if state.phase == InstallationPhase::Prepared {
+        state.touch(InstallationPhase::DatabaseCreated);
+        state.save(root)?;
+    }
+    if state.phase == InstallationPhase::DatabaseCreated {
+        registry.save(root)?;
+        state.touch(InstallationPhase::RegistryCommitted);
+        state.save(root)?;
+    }
+    registry.save(root)?;
+    validate_database_path(&expected)?;
+    if !expected.is_file() {
+        return Err(AccountError::ActiveAccountMissing(
+            DEFAULT_ACCOUNT_ID.to_owned(),
+        ));
+    }
+    // Re-read the registry before removing the marker; the marker must not
+    // outlive an unverified registry/DB pair.
+    let reloaded = AccountRegistry::load(root)?;
+    if reloaded.active_account_id != DEFAULT_ACCOUNT_ID {
+        return Err(AccountError::InvalidRegistry(
+            "fresh registry did not persist the default account".to_owned(),
+        ));
+    }
+    let marker = installation_state_file(root);
+    match fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    sync_directory(root)?;
+    ActiveAccountContext::new(&reloaded, root, false)
+}
+
+fn ensure_fresh_database(root: &Path) -> AccountResult<()> {
+    let directory = ensure_account_dir(root, DEFAULT_ACCOUNT_ID)?;
+    let target = directory.join("shishi.sqlite3");
+    validate_database_path(&target)?;
+    if target.exists() {
+        match read_snapshot(&target) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                let quarantine_dir = migration_backups_dir(root);
+                fs::create_dir_all(&quarantine_dir)?;
+                let quarantine = quarantine_dir
+                    .join(format!("fresh-corrupt-database-{}.sqlite3", Uuid::now_v7()));
+                fs::rename(&target, quarantine)?;
+                sync_directory(&quarantine_dir)?;
+            }
+        }
+    }
+    let connection = Connection::open(&target)?;
+    connection.execute_batch("PRAGMA journal_mode = WAL;")?;
+    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(AccountError::Integrity {
+            path: target.clone(),
+            detail: integrity,
+        });
+    }
+    connection.close().map_err(|(_, error)| error)?;
+    sync_file(&target)?;
+    sync_directory(&directory)?;
+    Ok(())
+}
+
+fn account_database_files(root: &Path) -> AccountResult<Vec<PathBuf>> {
+    let accounts = root.join("accounts");
+    let mut result = Vec::new();
+    if !accounts.is_dir() {
+        return Ok(result);
+    }
+    for entry in fs::read_dir(&accounts)? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(AccountError::UnsafePath(format!(
+                "unexpected account entry: {}",
+                entry.path().display()
+            )));
+        }
+        let database = entry.path().join("shishi.sqlite3");
+        if database.exists() {
+            result.push(database);
+        }
+    }
+    Ok(result)
+}
+
+fn resume_migration(
+    root: &Path,
+    state: MigrationState,
+    registry: Option<AccountRegistry>,
+) -> AccountResult<ActiveAccountContext> {
     let target_id = state.target_account_id.clone().ok_or_else(|| {
         AccountError::InvalidRegistry("migration state has no target account".to_owned())
     })?;
     validate_account_id(&target_id)?;
+    if let Some(registry) = &registry
+        && registry.active_account_id != DEFAULT_ACCOUNT_ID
+        && registry.active_account_id != target_id
+    {
+        return Err(AccountError::InvalidRegistry(format!(
+            "registry active account {} conflicts with migration target {}",
+            registry.active_account_id, target_id
+        )));
+    }
     let ownership = match state.phase {
         MigrationPhase::Failed | MigrationPhase::NotStarted => {
             classify_legacy_database(&legacy_database_path(root))?
         }
         _ if target_id == DEFAULT_ACCOUNT_ID => Ownership::Anonymous,
         _ => {
-            let registry = AccountRegistry::load(root).ok();
             let email = registry
                 .as_ref()
                 .and_then(|registry| registry.account(&target_id))
@@ -288,11 +631,7 @@ fn run_migration_inner(
     state: &mut MigrationState,
 ) -> AccountResult<ActiveAccountContext> {
     let source_snapshot = read_snapshot(source)?;
-    let mut registry = if accounts_file(root).exists() {
-        AccountRegistry::load(root)?
-    } else {
-        AccountRegistry::new_with_default()
-    };
+    let mut registry = load_with_recovery(root)?.unwrap_or_else(AccountRegistry::new_with_default);
 
     if let Ownership::Ambiguous { reason } = &ownership {
         return preserve_ambiguous(root, source, reason.clone(), state);
@@ -301,11 +640,11 @@ fn run_migration_inner(
     let target_id = match &ownership {
         Ownership::Anonymous => DEFAULT_ACCOUNT_ID.to_owned(),
         Ownership::Bound { email } => {
-            if let Some(existing) = registry.find_cloud_by_email(email) {
-                existing.id.clone()
-            } else if let Some(state_id) = &state.target_account_id {
+            if let Some(state_id) = &state.target_account_id {
                 validate_account_id(state_id)?;
                 state_id.clone()
+            } else if let Some(existing) = registry.find_cloud_by_email(email) {
+                existing.id.clone()
             } else {
                 let record = AccountRecord::cloud(email);
                 let id = record.id.clone();

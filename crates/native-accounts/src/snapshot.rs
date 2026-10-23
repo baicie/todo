@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, params, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -11,6 +11,9 @@ use crate::error::{AccountError, AccountResult};
 pub struct VerificationSummary {
     pub integrity: String,
     pub counts: BTreeMap<String, i64>,
+    /// Stable per-table content digest over every column and row.
+    #[serde(default)]
+    pub table_digests: BTreeMap<String, String>,
     pub device_id: Option<String>,
     pub sync_cursor: Option<String>,
     pub client_seq: Option<String>,
@@ -25,6 +28,7 @@ pub struct VerificationSummary {
 pub struct DataSnapshot {
     pub integrity: String,
     pub counts: BTreeMap<String, i64>,
+    pub table_digests: BTreeMap<String, String>,
     pub device_id: Option<String>,
     pub sync_cursor: Option<String>,
     pub client_seq: Option<String>,
@@ -39,6 +43,7 @@ pub struct DataSnapshot {
 struct FingerprintInput<'a> {
     integrity: &'a str,
     counts: &'a BTreeMap<String, i64>,
+    table_digests: &'a BTreeMap<String, String>,
     device_id: &'a Option<String>,
     sync_cursor: &'a Option<String>,
     client_seq: &'a Option<String>,
@@ -53,6 +58,7 @@ impl DataSnapshot {
         VerificationSummary {
             integrity: self.integrity.clone(),
             counts: self.counts.clone(),
+            table_digests: self.table_digests.clone(),
             device_id: self.device_id.clone(),
             sync_cursor: self.sync_cursor.clone(),
             client_seq: self.client_seq.clone(),
@@ -76,15 +82,16 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     let integrity = integrity_check(&connection, path)?;
     let mut counts = BTreeMap::new();
-    for table in [
-        "local_lists",
-        "local_tasks",
-        "local_steps",
-        "local_day_plans",
-        "outbox",
-        "server_shadow",
-        "kv_state",
-        "schema_migrations",
+    let mut table_digests = BTreeMap::new();
+    for (table, order_by) in [
+        ("local_lists", "id"),
+        ("local_tasks", "id"),
+        ("local_steps", "id"),
+        ("local_day_plans", "id"),
+        ("outbox", "op_id"),
+        ("server_shadow", "entity_type, entity_id"),
+        ("kv_state", "key"),
+        ("schema_migrations", "version"),
     ] {
         if table_exists(&connection, table)? {
             let count: i64 =
@@ -92,6 +99,10 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
                     row.get(0)
                 })?;
             counts.insert(table.to_owned(), count);
+            table_digests.insert(
+                table.to_owned(),
+                table_content_digest(&connection, table, order_by)?,
+            );
         }
     }
     let (device_id, sync_cursor, client_seq, bound_account) =
@@ -161,6 +172,7 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
     let mut snapshot = DataSnapshot {
         integrity,
         counts,
+        table_digests,
         device_id,
         sync_cursor,
         client_seq,
@@ -173,6 +185,7 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
     let input = serde_json::to_vec(&FingerprintInput {
         integrity: &snapshot.integrity,
         counts: &snapshot.counts,
+        table_digests: &snapshot.table_digests,
         device_id: &snapshot.device_id,
         sync_cursor: &snapshot.sync_cursor,
         client_seq: &snapshot.client_seq,
@@ -183,6 +196,78 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
     })?;
     snapshot.fingerprint = hex(&Sha256::digest(input));
     Ok(snapshot)
+}
+
+/// Deterministic digest over all columns and rows of a table. Values are
+/// encoded with type tags so NULL, empty text, numeric values and BLOBs cannot
+/// collide. The table is ordered by its stable primary key.
+fn table_content_digest(
+    connection: &Connection,
+    table: &str,
+    order_by: &str,
+) -> AccountResult<String> {
+    let mut info = connection.prepare(&format!("PRAGMA table_info(\"{}\")", quote_ident(table)))?;
+    let columns = info
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if columns.is_empty() {
+        return Ok(hex(&Sha256::digest(format!("{table}:no-columns"))));
+    }
+    let select = columns
+        .iter()
+        .map(|column| format!("\"{}\"", quote_ident(column)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let order = order_by
+        .split(',')
+        .map(|part| format!("\"{}\"", quote_ident(part.trim())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut statement = connection.prepare(&format!(
+        "SELECT {select} FROM \"{}\" ORDER BY {order}",
+        quote_ident(table)
+    ))?;
+    let mut rows = statement.query([])?;
+    let mut hasher = Sha256::new();
+    hasher.update(table.as_bytes());
+    hasher.update([0]);
+    for (index, column) in columns.iter().enumerate() {
+        hasher.update(column.as_bytes());
+        if index + 1 < columns.len() {
+            hasher.update([0x1f]);
+        }
+    }
+    hasher.update([0x1e]);
+    while let Some(row) = rows.next()? {
+        let mut row_values = Vec::with_capacity(columns.len());
+        for index in 0..columns.len() {
+            row_values.push(encode_value(row.get_ref(index)?));
+        }
+        let encoded = serde_json::to_vec(&row_values)?;
+        hasher.update(&encoded);
+        hasher.update([0x1e]);
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
+fn encode_value(value: ValueRef<'_>) -> serde_json::Value {
+    match value {
+        ValueRef::Null => serde_json::Value::Null,
+        ValueRef::Integer(value) => serde_json::Value::Number(value.into()),
+        // Bit-level encoding keeps deterministic behavior for NaN/Infinity and
+        // avoids locale/formatting differences.
+        ValueRef::Real(value) => {
+            serde_json::Value::String(format!("real:{:016x}", value.to_bits()))
+        }
+        ValueRef::Text(value) => {
+            serde_json::Value::String(format!("text:{}", String::from_utf8_lossy(value)))
+        }
+        ValueRef::Blob(value) => serde_json::Value::String(format!("blob:{}", hex(value))),
+    }
+}
+
+fn quote_ident(value: &str) -> String {
+    value.replace('"', "\"\"")
 }
 
 pub fn verify_integrity(path: &Path) -> AccountResult<()> {

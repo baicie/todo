@@ -27,7 +27,10 @@
 ```text
 app_data_dir/
   accounts.json
+  accounts.json.old-<uuid>       # Windows fallback previous registry (crash only)
+  accounts.json.replace-journal  # Windows fallback recovery journal
   migration-state.json
+  installation-state.json       # only while a fresh install is being initialized
   accounts/
     default/
       shishi.sqlite3
@@ -36,6 +39,7 @@ app_data_dir/
   migration-backups/
     <timestamp>-shishi.sqlite3
     quarantine-target-<uuid>.sqlite3
+    fresh-corrupt-database-<uuid>.sqlite3
   shishi.sqlite3                 # 旧库，迁移后保留
   shishi.sqlite3-wal / -shm      # 旧库仍由 SQLite 管理
 ```
@@ -45,6 +49,24 @@ app_data_dir/
 - 数据库文件名固定为 `shishi.sqlite3`，由注册表和原生代码派生，WebView 不能提供路径。
 - `accounts.json` 只保存 `id/kind/email/apiUrl/createdAt/schemaVersion/lastOpenedAt`；不保存 token。
 - `migration-backups/` 保存迁移前一致性副本；异常时原库、备份、目标三者都保留。
+- 全新安装的完成标记 `installation-state.json` 在数据库创建前写入，注册表提交且数据库存在后才删除。
+
+## 2.1 全新安装初始化
+
+```text
+无 registry / 无旧库 / 无账号 DB / 无迁移状态
+  -> 写 installation-state.json (PREPARED)
+  -> 创建并 integrity_check 空 SQLite
+  -> installation-state.json (DATABASE_CREATED)
+  -> 写 accounts.json (default)
+  -> installation-state.json (REGISTRY_COMMITTED)
+  -> 删除 Marker
+```
+
+- 数据库先于注册表出现；不允许出现“registry 已提交但 DB 尚未创建”的稳定窗口。
+- PREPARED/DATABASE_CREATED/REGISTRY_COMMITTED 任一点崩溃，下一次启动按 marker 恢复，不重新写 default。
+- 只要发现任意 `accounts/<id>/shishi.sqlite3`，且没有 marker/registry 解释它，就按数据存在处理并阻断，不创建空 default。
+- `accounts.json` 存在但 active DB 缺失，且没有 installation marker，返回 `ActiveAccountMissing`，不自动补空库。
 
 ## 3. 迁移状态机
 
@@ -59,18 +81,22 @@ REQUIRES_REVIEW           # 归属不明，只写状态和备份，不建账号�
 FAILED                    # 任一步失败；旧库/备份保留，下次启动可重试
 ```
 
-- 状态文件本身用临时文件 + fsync + 原子替换（Unix rename；Windows `ReplaceFileW`，失败时保守两步回退）。
-- 迁移只在启动、Store 打开前执行；不依赖“文件存在”判断成功。
-- 新目标通过 `PRAGMA integrity_check`，并比较：
-  - `local_tasks`、`local_lists`、`local_steps`、`local_day_plans` 数量；
-  - `outbox` 全字段（op_id、device_id、client_seq、kind、patch、状态）；
-  - `server_shadow` 全字段；
-  - `kv_state` 的 `device_id`、`sync_cursor`、`client_seq`、`bound_account`；
-  - `schema_migrations` 版本。
-- 比较使用整库指纹（SHA-256）和逐字段快照；不一致即失败。
+- 状态文件本身用临时文件 + fsync + 原子替换（Unix rename；Windows `ReplaceFileW`，失败时写入可恢复 journal）。
+- 只有 `COMPLETE` 才走正常快速打开路径；任何非 `COMPLETE` 状态都必须重新核对 source / backup / target、归属账户、registry active 与状态一致性，再继续或拒绝，不能仅因 target 文件存在就打开。
+- `COMPLETE` 快速路径只校验 target 存在、SQLite integrity、migration target 与 registry active 一致；不把迁移时的内容指纹与正在使用的实时库比较，否则用户正常写入会被误判。
+- 新目标通过 `PRAGMA integrity_check`，并按表计算逐行内容摘要：
+  - `local_tasks`、`local_lists`、`local_steps`、`local_day_plans` 的全部列（含 nullable、deleted_at、note、remind_at）；
+  - `outbox` 全字段与逐行摘要；
+  - `server_shadow` 全字段与逐行摘要；
+  - `kv_state` 全部行（含 device_id、sync_cursor、client_seq、bound_account）；
+  - `schema_migrations` 全部版本。
+- 摘要按主键稳定排序，对 NULL/整数/浮点/文本/BLOB 做类型标记，再计算 SHA-256；行数相同但任一字段变化都会失败。
+- 内容指纹用于迁移 copy、backup/target 比较，以及所有非 COMPLETE 状态的恢复；COMPLETE 后是实时数据库，不再与迁移时指纹比较。
 - 迁移只读取/复制 SQLite 页，不生成新的 outbox、不改 clientSeq/opId、不触发同步。
-- 重复启动：若注册表 target 已存在且状态 COMPLETE，直接打开；若中断在中间状态，从备份恢复目标并继续，绝不初始化空库。
+- 重复启动：COMPLETE 且 target 指纹一致才直接打开；中断在 BACKUP_CREATED/COPY_VERIFIED/REGISTRY_COMMITTED/FAILED 时从备份核对/重建目标并继续。
+- 目标已存在但内容异常（integrity/指纹不符）时，非 COMPLETE 状态先隔离目标并从备份重建；COMPLETE 状态直接失败关闭，不自动覆盖。
 - 归属不明：保留旧库，创建一致性备份，写 `REQUIRES_REVIEW`，应用启动返回可恢复错误；用户可见的手动确认 UI 属于后续版本。
+- 恢复完成后 `migrated_from_legacy=true`，确保绑定云账号的旧 Refresh Token 迁移条件仍成立。
 
 ## 4. 注册表与原子写入
 
@@ -94,6 +120,11 @@ FAILED                    # 任一步失败；旧库/备份保留，下次启动
 
 - `save()` 前完整校验：版本、ID 唯一、active 存在、anonymous 只能是 default、cloud 必须是规范化合法邮箱且非 default。
 - 写入顺序：同目录 temp -> 文件 fsync -> 原子替换 -> 目录 fsync（Unix）。
+- Windows `ReplaceFileW` 失败的 fallback：先写 `accounts.json.replace-journal`，再 `target -> .old-*`，再 temp -> target；成功后删除 journal。
+- 启动时若 registry 缺失/损坏，扫描 `.old-*`、`.accounts.json.*.tmp` 和 replacement journal：
+  - journal 存在时优先使用完整有效的临时新文件，否则使用旧备份；
+  - 无 journal 且存在多个互不一致的有效候选时阻断，不从默认账号重建；
+  - 只要发现任意已有账号数据库，绝不把缺失 registry 解释为全新安装。
 - 注册表缺失：区分“全新安装”和“迁移完成但注册表丢失”；后者直接报错，不创建空 registry 掩盖。
 - active 缺失：报错。
 - 账号目录：拒绝符号链接、拒绝非目录、`canonicalize` 后必须位于 accounts root 内；数据库文件本身也拒绝符号链接。
