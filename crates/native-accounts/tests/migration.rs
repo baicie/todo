@@ -650,6 +650,34 @@ fn completed_migration_allows_switching_to_another_account_and_back() {
 }
 
 #[test]
+fn missing_active_database_after_switch_is_not_recreated_as_empty() {
+    let (_dir, root) = temp_root();
+    {
+        let store = create_legacy(&root);
+        store
+            .create_task(NewTask {
+                title: "A".to_owned(),
+                ..NewTask::default()
+            })
+            .expect("task");
+    }
+    ensure_active_account(&root).expect("migrate A");
+    let b = create_pending_cloud_account(&root, "b@example.com", "https://b.example")
+        .expect("pending B");
+    let prepared = prepare_account_switch(&root, &b.id).expect("prepare B");
+    request_account_switch(&root, &b.id, prepared.generation.expect("generation"))
+        .expect("request B");
+    recover_pending_switch(&root).expect("recover B");
+    finish_pending_switch(&root).expect("finish B");
+    ensure_active_account(&root).expect("B active");
+    let b_db = account_database_path(&root, &b.id).expect("B path");
+    fs::remove_file(&b_db).expect("remove B");
+    let error = ensure_active_account(&root).expect_err("must not recreate empty B");
+    assert!(matches!(error, AccountError::ActiveAccountMissing(_)));
+    assert!(!b_db.exists());
+}
+
+#[test]
 fn complete_migration_allows_normal_post_migration_writes() {
     let (_dir, root) = temp_root();
     {

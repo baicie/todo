@@ -395,6 +395,10 @@ pub fn ensure_active_account(root: &Path) -> AccountResult<ActiveAccountContext>
                 // historical migration target is no longer active. It must
                 // still exist and be structurally sound, but it must not
                 // constrain which account is active.
+                if !target.is_file() {
+                    return Err(AccountError::ActiveAccountMissing(active.id.clone()));
+                }
+                crate::snapshot::verify_integrity(&target)?;
                 let migration_target_dir = ensure_account_dir(&root, migration_target)?;
                 let migration_target_db = migration_target_dir.join("shishi.sqlite3");
                 validate_database_path(&migration_target_db)?;
