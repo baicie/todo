@@ -42,6 +42,7 @@ import type {
   CloudSyncStorage,
   RejectedMutation,
 } from '../sync/storage';
+import { StaleSyncSessionError } from '../sync/storage';
 import type { CloudSnapshot } from '../sync/snapshot';
 
 interface MetaRow {
@@ -970,6 +971,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
           { key: 'clientSeq', value: '0' },
           { key: 'bootstrapRequired', value: '0' },
         ]);
+        await this.db.meta.delete('syncSession');
       },
     );
     this.notify([]);
@@ -987,6 +989,18 @@ export class DexieTaskRepository implements CloudSyncStorage {
 
   async setMeta(key: string, value: string): Promise<void> {
     await this.db.meta.put({ key, value });
+  }
+
+  async syncSetSession(sessionId: string | null): Promise<void> {
+    await this.initialize();
+    if (sessionId === null) await this.db.meta.delete('syncSession');
+    else await this.db.meta.put({ key: 'syncSession', value: sessionId });
+  }
+
+  private async assertSyncSession(expected?: string): Promise<void> {
+    if (!expected) return;
+    const current = await this.db.meta.get('syncSession');
+    if (current?.value !== expected) throw new StaleSyncSessionError();
   }
 
   async syncGetDeviceId(): Promise<string> {
@@ -1157,11 +1171,14 @@ export class DexieTaskRepository implements CloudSyncStorage {
     );
   }
 
-  async syncApplyResult(result: {
-    acks: Ack[];
-    changes: Change[];
-    nextCursor: string;
-  }): Promise<void> {
+  async syncApplyResult(
+    result: {
+      acks: Ack[];
+      changes: Change[];
+      nextCursor: string;
+    },
+    sessionId?: string,
+  ): Promise<void> {
     await this.initialize();
     const now = new Date().toISOString();
     const affected = new Map<string, { entity: EntityName; entityId: string }>();
@@ -1180,6 +1197,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
         this.db.shadow,
       ],
       async () => {
+        await this.assertSyncSession(sessionId);
         for (const ack of result.acks) {
           const mutation = acknowledged.find((row) => row?.opId === ack.op_id);
           if (!mutation) continue;
@@ -1521,7 +1539,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
     return { preparedOps };
   }
 
-  async syncReplaceSnapshot(snapshot: CloudSnapshot): Promise<void> {
+  async syncReplaceSnapshot(snapshot: CloudSnapshot, sessionId?: string): Promise<void> {
     await this.initialize();
     const now = new Date().toISOString();
     await this.db.transaction(
@@ -1536,6 +1554,7 @@ export class DexieTaskRepository implements CloudSyncStorage {
         this.db.shadow,
       ],
       async () => {
+        await this.assertSyncSession(sessionId);
         const pending = await this.db.mutations.where('status').equals('pending').toArray();
         const local = {
           lists: await this.db.lists.toArray(),

@@ -446,6 +446,10 @@ pub struct ApplyServerResultRequest {
     pub changes: Vec<ServerChange>,
     #[serde(alias = "next_cursor")]
     pub next_cursor: String,
+    /// Session token expected by the database at commit time. Older callers
+    /// may omit it; the production sync path always supplies one.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -500,6 +504,8 @@ pub struct SyncSetEnabledRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SyncReplaceSnapshotRequest {
     pub snapshot: CloudSnapshot,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

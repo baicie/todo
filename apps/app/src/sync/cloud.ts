@@ -12,6 +12,7 @@ import type {
   CloudSyncStorage,
   RejectedMutation,
 } from './storage';
+import { StaleSyncSessionError } from './storage';
 import { resolveCloudSyncOutcome } from './cloud-status';
 import {
   normalizeBootstrap,
@@ -91,20 +92,31 @@ export interface CloudController {
 }
 
 class RepositorySyncStore {
-  constructor(private readonly repository: CloudSyncStorage) {}
+  constructor(
+    private readonly repository: CloudSyncStorage,
+    private readonly sessionId: string,
+    private readonly isCurrent: () => boolean,
+  ) {}
 
   getDeviceId = () => this.repository.syncGetDeviceId();
   getCursor = () => this.repository.syncGetCursor();
   getPendingMutations = (limit: number) => this.repository.syncGetPending(limit);
   getPendingCount = () => this.repository.syncGetPendingCount();
-  applyServerResult = async (result: { acks: Ack[]; changes: Change[]; nextCursor: string }) =>
-    this.repository.syncApplyResult(result);
+  applyServerResult = async (result: { acks: Ack[]; changes: Change[]; nextCursor: string }) => {
+    if (!this.isCurrent()) throw new StaleSyncSessionError();
+    await this.repository.syncApplyResult(result, this.sessionId);
+  };
   replaceFromBootstrap = async (page: BootstrapPage) => {
+    if (!this.isCurrent()) throw new StaleSyncSessionError();
     await this.repository.syncReplaceSnapshot(
       normalizeBootstrap(page.entities, page.snapshot_cursor),
+      this.sessionId,
     );
   };
-  markBootstrapRequired = () => this.repository.syncMarkBootstrapRequired();
+  markBootstrapRequired = () => {
+    if (!this.isCurrent()) return Promise.resolve();
+    return this.repository.syncMarkBootstrapRequired();
+  };
 }
 
 function defaultApiUrl(): string {
@@ -204,11 +216,60 @@ export function createCloudController(options: {
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let refreshInFlight: Promise<string> | null = null;
   let runInFlight: Promise<void> | null = null;
+  let sessionGeneration = 0;
+  let sessionToken: string | null = null;
+  let disposed = false;
   let unsubscribe: (() => void) | null = null;
   let stopOnline: (() => void) | null = null;
   let stopResume: (() => void) | null = null;
 
-  const update = (patch: Partial<CloudState>) => setState((current) => ({ ...current, ...patch }));
+  const update = (patch: Partial<CloudState>) => {
+    if (disposed) return;
+    setState((current) => ({ ...current, ...patch }));
+  };
+
+  const isCurrentGeneration = (generation: number): boolean =>
+    !disposed && generation === sessionGeneration;
+
+  const beginSession = async (): Promise<{ generation: number; token: string }> => {
+    const token = crypto.randomUUID();
+    sessionGeneration += 1;
+    sessionToken = token;
+    runInFlight = null;
+    refreshInFlight = null;
+    if (autoSyncTimer) clearTimeout(autoSyncTimer);
+    autoSyncTimer = undefined;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = undefined;
+    unsubscribe?.();
+    unsubscribe = null;
+    stopOnline?.();
+    stopOnline = null;
+    stopResume?.();
+    stopResume = null;
+    engine = null;
+    await repository.syncSetSession(token);
+    return { generation: sessionGeneration, token };
+  };
+
+  const invalidateSession = (): void => {
+    sessionGeneration += 1;
+    sessionToken = null;
+    engine = null;
+    runInFlight = null;
+    refreshInFlight = null;
+    if (autoSyncTimer) clearTimeout(autoSyncTimer);
+    autoSyncTimer = undefined;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = undefined;
+    unsubscribe?.();
+    unsubscribe = null;
+    stopOnline?.();
+    stopOnline = null;
+    stopResume?.();
+    stopResume = null;
+    void repository.syncSetSession(null).catch(() => {});
+  };
 
   const persist = (enabled = state().phase === 'connected') => {
     const current = state();
@@ -266,19 +327,23 @@ export function createCloudController(options: {
 
   const refreshAccessToken = async (): Promise<string> => {
     if (refreshInFlight) return refreshInFlight;
-    refreshInFlight = (async () => {
+    const generation = sessionGeneration;
+    const pending = (async () => {
       if (!auth) throw new Error('云服务尚未配置');
       let storedRefresh = memoryRefreshToken;
       if (!storedRefresh && platform.kind === 'tauri') {
         storedRefresh = await platform.secureTokenStore.get(REFRESH_KEY).catch(() => null);
       }
       const tokens = await auth.refresh(storedRefresh ?? undefined);
+      if (!isCurrentGeneration(generation)) throw new StaleSyncSessionError();
       await applyTokens(tokens);
       return tokens.access_token;
-    })().finally(() => {
-      refreshInFlight = null;
+    })();
+    const tracked = pending.finally(() => {
+      if (refreshInFlight === tracked) refreshInFlight = null;
     });
-    return refreshInFlight;
+    refreshInFlight = tracked;
+    return tracked;
   };
 
   const ensureAccessToken = async (): Promise<string> => {
@@ -286,18 +351,20 @@ export function createCloudController(options: {
     return refreshAccessToken();
   };
 
-  const diagnostics = async (): Promise<CloudDiagnostics> => {
+  const diagnostics = async (generation?: number): Promise<CloudDiagnostics> => {
     const next = await repository.syncGetDiagnostics();
     const rejections =
       next.rejected > 0 && repository.syncListRejected ? await repository.syncListRejected(50) : [];
-    update({
-      pending: next.pending,
-      rejected: next.rejected,
-      cursor: next.cursor,
-      deviceId: next.deviceId,
-      boundAccount: next.boundAccount,
-      rejections,
-    });
+    if (generation === undefined || isCurrentGeneration(generation)) {
+      update({
+        pending: next.pending,
+        rejected: next.rejected,
+        cursor: next.cursor,
+        deviceId: next.deviceId,
+        boundAccount: next.boundAccount,
+        rejections,
+      });
+    }
     return next;
   };
 
@@ -310,9 +377,16 @@ export function createCloudController(options: {
     });
   };
 
-  const installEngine = () => {
+  const installEngine = (generation: number, token: string) => {
     if (!transport) throw new Error('云服务尚未配置');
-    engine = new SyncEngine(transport, new RepositorySyncStore(repository), onEngineState, 100);
+    engine = new SyncEngine(
+      transport,
+      new RepositorySyncStore(repository, token, () => isCurrentGeneration(generation)),
+      (sync) => {
+        if (isCurrentGeneration(generation)) onEngineState(sync);
+      },
+      100,
+    );
   };
 
   const scheduleSync = () => {
@@ -342,28 +416,33 @@ export function createCloudController(options: {
     });
   };
 
-  const executeSync = async (): Promise<void> => {
-    if (!engine || state().phase !== 'connected') return;
+  const executeSync = async (generation: number): Promise<void> => {
+    if (!isCurrentGeneration(generation) || !engine || state().phase !== 'connected') return;
     update({ busy: 'sync', error: null });
     try {
       let result = await engine.syncNow();
+      if (!isCurrentGeneration(generation)) return;
       if (result.status === 'auth-required') {
         // Retry at most once per run. A second auth-required response means
         // the refresh credential is also invalid; do not loop indefinitely.
         try {
           await refreshAccessToken();
+          if (!isCurrentGeneration(generation)) return;
           result = await engine.syncNow();
+          if (!isCurrentGeneration(generation)) return;
         } catch (error) {
+          if (!isCurrentGeneration(generation)) return;
           await handleSyncError(error);
           return;
         }
       }
       if (result.status === 'auth-required') {
-        await expireSession();
+        if (isCurrentGeneration(generation)) await expireSession();
         return;
       }
 
-      const next = await diagnostics();
+      const next = await diagnostics(generation);
+      if (!isCurrentGeneration(generation)) return;
       const outcome = resolveCloudSyncOutcome(result, next.rejected, state());
       update({
         syncStatus: outcome.syncStatus,
@@ -376,18 +455,21 @@ export function createCloudController(options: {
       if (result.lastSyncedAt) persist(true);
       if (outcome.syncStatus === 'syncing') scheduleSync();
     } catch (error) {
-      await handleSyncError(error);
+      if (isCurrentGeneration(generation)) await handleSyncError(error);
     } finally {
-      update({ busy: null });
+      if (isCurrentGeneration(generation)) update({ busy: null });
     }
   };
 
   const runSync = (): Promise<void> => {
     if (runInFlight) return runInFlight;
-    runInFlight = executeSync().finally(() => {
-      runInFlight = null;
+    const generation = sessionGeneration;
+    const pending = executeSync(generation);
+    const tracked = pending.finally(() => {
+      if (runInFlight === tracked) runInFlight = null;
     });
-    return runInFlight;
+    runInFlight = tracked;
+    return tracked;
   };
 
   const fetchSnapshot = async (): Promise<CloudSnapshot> => {
@@ -409,15 +491,19 @@ export function createCloudController(options: {
     });
   };
 
-  const refreshPush = async () => {
+  const refreshPush = async (generation?: number) => {
     if (!auth || !webPushSupported()) {
-      update({ push: { supported: false, available: false, subscribed: false } });
+      if (generation === undefined || isCurrentGeneration(generation)) {
+        update({ push: { supported: false, available: false, subscribed: false } });
+      }
       return;
     }
     try {
       const config = await auth.pushConfig();
+      if (generation !== undefined && !isCurrentGeneration(generation)) return;
       const registration = await navigator.serviceWorker.getRegistration('/sw.js');
       const subscription = await registration?.pushManager.getSubscription();
+      if (generation !== undefined && !isCurrentGeneration(generation)) return;
       update({
         push: {
           supported: true,
@@ -426,13 +512,18 @@ export function createCloudController(options: {
         },
       });
     } catch {
-      update({ push: { supported: true, available: false, subscribed: false } });
+      if (generation === undefined || isCurrentGeneration(generation)) {
+        update({ push: { supported: true, available: false, subscribed: false } });
+      }
     }
   };
 
   const activateCloud = async () => {
-    installEngine();
-    const next = await diagnostics();
+    const session = await beginSession();
+    const generation = session.generation;
+    installEngine(generation, session.token);
+    const next = await diagnostics(generation);
+    if (!isCurrentGeneration(generation)) return;
     update({
       phase: 'connected',
       syncStatus: 'idle',
@@ -444,23 +535,31 @@ export function createCloudController(options: {
       error: null,
     });
     persist(true);
-    void refreshPush();
+    void refreshPush(generation);
     unsubscribe?.();
     unsubscribe = repository.subscribeChanges(() => {
-      void diagnostics().then((next) => {
-        if (next.pending > 0) scheduleSync();
+      if (!isCurrentGeneration(generation)) return;
+      void diagnostics(generation).then((latest) => {
+        if (latest.pending > 0 && isCurrentGeneration(generation)) scheduleSync();
       });
     });
     stopOnline?.();
-    stopOnline = platform.lifecycle.onOnline(() => scheduleSync());
+    stopOnline = platform.lifecycle.onOnline(() => {
+      if (isCurrentGeneration(generation)) scheduleSync();
+    });
     stopResume?.();
     stopResume = platform.lifecycle.onResume(() => {
+      if (!isCurrentGeneration(generation)) return;
       scheduleSync();
       void refreshDevices().catch(() => {});
     });
     if (!pollTimer) {
       pollTimer = setInterval(() => {
-        if (state().phase === 'connected' && document.visibilityState === 'visible') {
+        if (
+          isCurrentGeneration(generation) &&
+          state().phase === 'connected' &&
+          document.visibilityState === 'visible'
+        ) {
           scheduleSync();
         }
       }, 45_000);
@@ -607,29 +706,38 @@ export function createCloudController(options: {
 
   const forceBootstrap = async () => {
     if (state().phase !== 'connected') return;
+    const generation = sessionGeneration;
+    const token = sessionToken;
     update({ busy: 'bootstrap', error: null });
     try {
       const snapshot = await fetchSnapshot();
-      await repository.syncReplaceSnapshot(snapshot);
-      await diagnostics();
+      if (!isCurrentGeneration(generation) || !token) return;
+      await repository.syncReplaceSnapshot(snapshot, token);
+      if (!isCurrentGeneration(generation)) return;
+      await diagnostics(generation);
       await runSync();
     } catch (error) {
-      await handleSyncError(error);
+      if (isCurrentGeneration(generation)) await handleSyncError(error);
     } finally {
-      update({ busy: null });
+      if (isCurrentGeneration(generation)) update({ busy: null });
     }
   };
 
   const clearRejected = async () => {
+    const generation = sessionGeneration;
     update({ busy: 'clear-rejected' });
     try {
+      if (!isCurrentGeneration(generation)) return;
       await repository.syncClearRejected();
-      await diagnostics();
+      if (!isCurrentGeneration(generation)) return;
+      await diagnostics(generation);
       await runSync();
     } catch (error) {
-      update({ error: error instanceof Error ? error.message : '清除失败操作失败' });
+      if (isCurrentGeneration(generation)) {
+        update({ error: error instanceof Error ? error.message : '清除失败操作失败' });
+      }
     } finally {
-      update({ busy: null });
+      if (isCurrentGeneration(generation)) update({ busy: null });
     }
   };
 
@@ -638,22 +746,28 @@ export function createCloudController(options: {
       update({ error: '当前平台暂不支持单条失败操作回滚，请使用“清除失败操作”。' });
       return;
     }
+    const generation = sessionGeneration;
     update({ busy: 'discard-rejection' });
     try {
+      if (!isCurrentGeneration(generation)) return;
       await repository.syncDiscardRejected(opId);
-      await diagnostics();
+      if (!isCurrentGeneration(generation)) return;
+      await diagnostics(generation);
     } catch (error) {
-      update({ error: error instanceof Error ? error.message : '回滚失败操作失败' });
+      if (isCurrentGeneration(generation)) {
+        update({ error: error instanceof Error ? error.message : '回滚失败操作失败' });
+      }
     } finally {
-      update({ busy: null });
+      if (isCurrentGeneration(generation)) update({ busy: null });
     }
   };
 
   const refreshDevices = async () => {
     if (!auth || state().phase !== 'connected') return;
+    const generation = sessionGeneration;
     try {
       const devices = await auth.devices();
-      update({ devices });
+      if (isCurrentGeneration(generation)) update({ devices });
     } catch {
       // Device listing is diagnostic and not required for sync correctness.
     }
@@ -671,13 +785,19 @@ export function createCloudController(options: {
 
   const signOut = async (clearLocal: boolean) => {
     update({ busy: 'logout' });
+    // Stop all future work and invalidate the DB fence before touching local
+    // data. Any late HTTP response now fails at syncApplyResult time.
+    invalidateSession();
     try {
+      await repository.syncSetSession(null);
       if (auth) {
         try {
-          await ensureAccessToken();
+          // Best-effort server-side revoke. A refresh is deliberately not
+          // attempted after invalidation because it could bind new tokens to
+          // the session being destroyed.
           await auth.logout();
         } catch {
-          // Local sign-out must still work when the refresh credential expired.
+          // Local sign-out must still work when the access token expired.
         }
       }
       await clearTokens();
@@ -686,15 +806,6 @@ export function createCloudController(options: {
         await repository.clearAll();
         await repository.syncClearAccountBinding();
       }
-      engine = null;
-      unsubscribe?.();
-      unsubscribe = null;
-      stopOnline?.();
-      stopOnline = null;
-      stopResume?.();
-      stopResume = null;
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = undefined;
       update({
         phase: 'disconnected',
         syncStatus: 'idle',
@@ -820,11 +931,8 @@ export function createCloudController(options: {
   };
 
   const dispose = () => {
-    if (autoSyncTimer) clearTimeout(autoSyncTimer);
-    if (pollTimer) clearInterval(pollTimer);
-    unsubscribe?.();
-    stopOnline?.();
-    stopResume?.();
+    disposed = true;
+    invalidateSession();
   };
 
   return {

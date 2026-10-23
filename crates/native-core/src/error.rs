@@ -8,6 +8,8 @@ pub enum ErrorCode {
     ValidationFailed,
     NotFound,
     Conflict,
+    #[serde(rename = "STALE_SYNC_SESSION")]
+    StaleSyncSession,
     InvalidDate,
     #[serde(rename = "DATABASE_ERROR")]
     Database,
@@ -21,6 +23,7 @@ impl ErrorCode {
             Self::ValidationFailed => "VALIDATION_FAILED",
             Self::NotFound => "NOT_FOUND",
             Self::Conflict => "CONFLICT",
+            Self::StaleSyncSession => "STALE_SYNC_SESSION",
             Self::InvalidDate => "INVALID_DATE",
             Self::Database => "DATABASE_ERROR",
             Self::Unsupported => "UNSUPPORTED",
@@ -37,6 +40,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("stale sync session")]
+    StaleSyncSession,
     #[error("invalid date: {0}")]
     InvalidDate(String),
     #[error("unsupported: {0}")]
@@ -55,6 +60,7 @@ impl StoreError {
             Self::Validation(_) => ErrorCode::ValidationFailed,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Conflict(_) => ErrorCode::Conflict,
+            Self::StaleSyncSession => ErrorCode::StaleSyncSession,
             Self::InvalidDate(_) => ErrorCode::InvalidDate,
             Self::Unsupported(_) => ErrorCode::Unsupported,
             Self::Database(_) | Self::Json(_) | Self::Internal(_) => ErrorCode::Database,

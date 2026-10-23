@@ -28,6 +28,16 @@ export interface RejectedMutation {
   createdAt: string | null;
 }
 
+/** Thrown inside the local DB transaction when a sync session was superseded. */
+export class StaleSyncSessionError extends Error {
+  readonly code = 'STALE_SYNC_SESSION';
+
+  constructor() {
+    super('同步会话已失效，已丢弃迟到的服务端响应');
+    this.name = 'StaleSyncSessionError';
+  }
+}
+
 /**
  * Storage operations required by the cloud sync controller. The concrete
  * implementation lives beside the local repository so shadow, cursor and
@@ -44,13 +54,18 @@ export interface CloudSyncStorage extends TaskRepository {
   /** Optional on platforms that cannot expand rejected operations yet. */
   syncListRejected?(limit: number): Promise<RejectedMutation[]>;
   syncDiscardRejected?(opId: string): Promise<void>;
-  syncApplyResult(result: { acks: Ack[]; changes: Change[]; nextCursor: string }): Promise<void>;
+  /** Binds subsequent server writes to this local session generation. */
+  syncSetSession(sessionId: string | null): Promise<void>;
+  syncApplyResult(
+    result: { acks: Ack[]; changes: Change[]; nextCursor: string },
+    sessionId?: string,
+  ): Promise<void>;
   syncInitializeCloud(
     snapshot: CloudSnapshot,
     mode: CloudMergeMode,
     accountEmail: string,
   ): Promise<CloudInitializeResult>;
-  syncReplaceSnapshot(snapshot: CloudSnapshot): Promise<void>;
+  syncReplaceSnapshot(snapshot: CloudSnapshot, sessionId?: string): Promise<void>;
   syncSetEnabled(enabled: boolean): Promise<void>;
   syncClearRejected(): Promise<void>;
   syncMarkBootstrapRequired(): Promise<void>;

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskService } from '@todo/application';
 import type { CloudSnapshot } from '../sync/snapshot';
+import { StaleSyncSessionError } from '../sync/storage';
 import { DexieTaskRepository } from './web-repository';
 
 let repository: DexieTaskRepository;
@@ -234,6 +235,75 @@ describe('DexieTaskRepository', () => {
     expect(await repository.syncGetPendingCount()).toBe(0);
     expect((await repository.syncGetDiagnostics()).enabled).toBe(false);
     expect((await repository.getTask('task-remote'))?.title).toBe('offline edit');
+  });
+
+  it('rejects stale server results at the DB transaction boundary', async () => {
+    await repository.syncSetEnabled(true);
+    const first = await service.createTask({ title: 'session a task' });
+    const firstPending = await repository.syncGetPending(10);
+    const firstOp = firstPending[0]!;
+    await repository.syncSetSession('session-a');
+    await repository.syncApplyResult(
+      {
+        acks: [{ op_id: firstOp.opId, status: 'applied', server_seq: 1 }],
+        changes: [],
+        nextCursor: '1',
+      },
+      'session-a',
+    );
+
+    const second = await service.createTask({ title: 'session b task' });
+    const secondPending = await repository.syncGetPending(10);
+    const secondOp = secondPending.find((item) => item.entityId === second.id)!;
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [{ op_id: secondOp.opId, status: 'applied', server_seq: 2 }],
+          changes: [],
+          nextCursor: '2',
+        },
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+
+    expect(await repository.syncGetCursor()).toBe('1');
+    expect((await repository.syncGetPending(10)).some((item) => item.opId === secondOp.opId)).toBe(
+      true,
+    );
+    expect((await repository.getTask(first.id))?.title).toBe('session a task');
+  });
+
+  it('rejects a stale bootstrap snapshot after the session changes', async () => {
+    await repository.syncSetSession('session-a');
+    await repository.syncSetSession('session-b');
+    await expect(
+      repository.syncReplaceSnapshot(
+        cloudSnapshot('stale-task', 'stale snapshot', 'must not land'),
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.getTask('stale-task')).toBeNull();
+  });
+
+  it('deletes the session fence before an old apply can run after clearAll', async () => {
+    await repository.syncSetEnabled(true);
+    const task = await service.createTask({ title: 'old session' });
+    const pending = await repository.syncGetPending(10);
+    const op = pending.find((item) => item.entityId === task.id)!;
+    await repository.syncSetSession('session-a');
+    await repository.clearAll();
+    await expect(
+      repository.syncApplyResult(
+        {
+          acks: [{ op_id: op.opId, status: 'applied', server_seq: 1 }],
+          changes: [],
+          nextCursor: '1',
+        },
+        'session-a',
+      ),
+    ).rejects.toBeInstanceOf(StaleSyncSessionError);
+    expect(await repository.listTasks({ view: 'all' })).toMatchObject({ items: [] });
   });
 
   it('keeps the previous database intact when an import is rejected', async () => {

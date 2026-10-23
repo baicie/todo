@@ -13,6 +13,18 @@ struct OutboxRow {
     patch: Value,
 }
 
+pub(super) fn assert_sync_session(
+    connection: &Connection,
+    expected: Option<&str>,
+) -> StoreResult<()> {
+    if let Some(expected) = expected
+        && kv_string(connection, "sync_session").as_deref() != Some(expected)
+    {
+        return Err(StoreError::StaleSyncSession);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct PreparedOp {
     entity: &'static str,
@@ -29,6 +41,26 @@ struct LocalEntities {
 }
 
 impl TodoStore {
+    /// Bind or clear the local sync session token. Server responses carry the
+    /// token they were requested under; a mismatch is rejected inside the same
+    /// transaction as the shadow/outbox mutation.
+    pub fn sync_set_session(&self, session_id: Option<&str>) -> StoreResult<()> {
+        let connection = self.lock()?;
+        match session_id {
+            Some(value) => {
+                connection.execute(
+                    "INSERT INTO kv_state (key, value) VALUES ('sync_session', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [value],
+                )?;
+            }
+            None => {
+                connection.execute("DELETE FROM kv_state WHERE key = 'sync_session'", [])?;
+            }
+        }
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Device and sync identity
     // ------------------------------------------------------------------
@@ -1061,8 +1093,17 @@ impl TodoStore {
     }
 
     pub fn sync_replace_snapshot(&self, snapshot: &CloudSnapshot) -> StoreResult<()> {
+        self.sync_replace_snapshot_fenced(snapshot, None)
+    }
+
+    pub fn sync_replace_snapshot_fenced(
+        &self,
+        snapshot: &CloudSnapshot,
+        session_id: Option<&str>,
+    ) -> StoreResult<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
+        assert_sync_session(&transaction, session_id)?;
         let local = local_entities(&transaction)?;
         let local_index = local_data_index(&local)?;
         let shadow_index = remote_data_index(snapshot)?;
