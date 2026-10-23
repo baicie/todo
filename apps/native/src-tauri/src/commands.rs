@@ -143,7 +143,9 @@ pub async fn reschedule_reminders(
                 Ok(mode) if mode == "past" || mode == "skipped-past" => report.skipped_past += 1,
                 Ok(mode) if mode == "outside-window" => report.outside_window += 1,
                 Ok(mode) if mode == "capacity-exceeded" => report.capacity_exceeded += 1,
-                Ok(mode) => report.failed.push(format!("{}: unknown mode {mode}", task.id)),
+                Ok(mode) => report
+                    .failed
+                    .push(format!("{}: unknown mode {mode}", task.id)),
                 Err(error) => report.failed.push(format!("{}: {error}", task.id)),
             }
         }
