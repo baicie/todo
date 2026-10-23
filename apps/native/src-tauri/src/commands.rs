@@ -124,19 +124,27 @@ fn same_instant(left: &str, right: &str) -> bool {
     }
 }
 
-#[tauri::command]
-pub async fn reschedule_reminders(
-    state: State<'_, AppState>,
-) -> Result<ReminderReconcileReport, CommandError> {
-    let store = Arc::clone(&state.store);
-    let reminders: Arc<dyn ReminderAdapter> = Arc::clone(&state.reminders);
-    let tasks = tauri::async_runtime::spawn_blocking(move || store.upcoming_reminders())
-        .await
-        .map_err(|error| CommandError::new("INTERNAL", format!("提醒查询异常: {error}")))?
-        .map_err(CommandError::from_store)?;
+const DEFAULT_REMINDER_BODY: &str = "该完成这项任务了";
+
+/// iOS may report its display fallback from older pending requests. Treat the
+/// fallback as the empty raw body so legacy entries are not rebuilt forever.
+fn body_matches(current_body: &str, raw_body: &str) -> bool {
+    if raw_body.is_empty() {
+        current_body.is_empty() || current_body == DEFAULT_REMINDER_BODY
+    } else {
+        current_body == raw_body
+    }
+}
+
+/// Reconcile the system queue without any Tauri state. Keeping this pure makes
+/// the repeated-reconcile/idempotency contract directly testable.
+fn reconcile_reminder_queue(
+    reminders: &dyn ReminderAdapter,
+    tasks: &[todo_native_core::Task],
+) -> Result<ReminderReconcileReport, String> {
     let active: std::collections::HashSet<&str> =
         tasks.iter().map(|task| task.id.as_str()).collect();
-    let existing = reminders.scheduled().map_err(CommandError::reminder)?;
+    let existing = reminders.scheduled()?;
     let mut report = ReminderReconcileReport::default();
     let existing_by_id: std::collections::HashMap<String, crate::reminders::ScheduledReminderInfo> =
         existing
@@ -154,12 +162,15 @@ pub async fn reschedule_reminders(
     }
 
     if reminders.permission() != "granted" {
-        report.permission_denied = tasks.len() as u32;
+        report.permission_denied =
+            tasks.iter().filter(|task| task.remind_at.is_some()).count() as u32;
         return Ok(report);
     }
 
     for task in tasks {
         if let Some(fire_at) = &task.remind_at {
+            // The raw note is the fingerprint body. Empty notes must stay
+            // empty here even when a platform shows a localized fallback.
             let body = if task.note.trim().is_empty() {
                 ""
             } else {
@@ -168,7 +179,7 @@ pub async fn reschedule_reminders(
             if let Some(current) = existing_by_id.get(&task.id)
                 && same_instant(&current.fire_at_utc, fire_at)
                 && current.title == task.title
-                && current.body == body
+                && body_matches(&current.body, body)
             {
                 report.unchanged += 1;
                 continue;
@@ -200,6 +211,19 @@ pub async fn reschedule_reminders(
         }
     }
     Ok(report)
+}
+
+#[tauri::command]
+pub async fn reschedule_reminders(
+    state: State<'_, AppState>,
+) -> Result<ReminderReconcileReport, CommandError> {
+    let store = Arc::clone(&state.store);
+    let reminders: Arc<dyn ReminderAdapter> = Arc::clone(&state.reminders);
+    let tasks = tauri::async_runtime::spawn_blocking(move || store.upcoming_reminders())
+        .await
+        .map_err(|error| CommandError::new("INTERNAL", format!("提醒查询异常: {error}")))?
+        .map_err(CommandError::from_store)?;
+    reconcile_reminder_queue(reminders.as_ref(), &tasks).map_err(CommandError::reminder)
 }
 
 #[tauri::command]
@@ -293,5 +317,175 @@ fn ensure_reminder_permission(state: &State<'_, AppState>) -> Result<(), Command
             "REMINDER_PERMISSION_DENIED",
             "系统通知权限未授予，无法预约提醒",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reminders::ScheduledReminderInfo;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use todo_native_core::{Task, TaskStatus};
+
+    #[derive(Default)]
+    struct FakeReminderAdapter {
+        entries: Mutex<Vec<ScheduledReminderInfo>>,
+        schedule_calls: AtomicUsize,
+        permission: String,
+    }
+
+    impl FakeReminderAdapter {
+        fn granted() -> Self {
+            Self {
+                entries: Mutex::new(Vec::new()),
+                schedule_calls: AtomicUsize::new(0),
+                permission: "granted".to_owned(),
+            }
+        }
+    }
+
+    impl ReminderAdapter for FakeReminderAdapter {
+        fn schedule(
+            &self,
+            reminder_id: &str,
+            fire_at_utc: &str,
+            title: &str,
+            body: &str,
+            _exact: bool,
+        ) -> Result<String, String> {
+            self.schedule_calls.fetch_add(1, Ordering::SeqCst);
+            let mut entries = self.entries.lock().expect("entries");
+            entries.retain(|entry| entry.reminder_id != reminder_id);
+            entries.push(ScheduledReminderInfo {
+                reminder_id: reminder_id.to_owned(),
+                fire_at_utc: fire_at_utc.to_owned(),
+                title: title.to_owned(),
+                body: body.to_owned(),
+            });
+            Ok("scheduled".to_owned())
+        }
+
+        fn cancel(&self, reminder_id: &str) -> Result<(), String> {
+            self.entries
+                .lock()
+                .expect("entries")
+                .retain(|entry| entry.reminder_id != reminder_id);
+            Ok(())
+        }
+
+        fn scheduled(&self) -> Result<Vec<ScheduledReminderInfo>, String> {
+            Ok(self.entries.lock().expect("entries").clone())
+        }
+
+        fn permission(&self) -> String {
+            self.permission.clone()
+        }
+
+        fn request_permission(&self) -> Result<String, String> {
+            Ok(self.permission.clone())
+        }
+    }
+
+    fn reminder_task(id: &str, note: &str) -> Task {
+        Task {
+            id: id.to_owned(),
+            list_id: None,
+            title: format!("task {id}"),
+            note: note.to_owned(),
+            tags: Vec::new(),
+            status: TaskStatus::Open,
+            important: false,
+            due_on: None,
+            remind_at: Some("2026-10-24T09:00:00Z".to_owned()),
+            remind_timezone: None,
+            rank: "a0".to_owned(),
+            series_id: None,
+            occurrence_key: None,
+            recurrence: None,
+            completed_at: None,
+            created_at: "2026-10-23T00:00:00Z".to_owned(),
+            updated_at: "2026-10-23T00:00:00Z".to_owned(),
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn repeated_reconcile_does_not_reschedule_unchanged_empty_body_reminders() {
+        assert!(same_instant(
+            "2026-10-24T09:00:00Z",
+            "2026-10-24T09:00:00+00:00"
+        ));
+        let adapter = FakeReminderAdapter::granted();
+        let tasks = vec![reminder_task("a", ""), reminder_task("b", "note")];
+
+        let first = reconcile_reminder_queue(&adapter, &tasks).expect("first reconcile");
+        assert_eq!(first.scheduled, 2);
+        assert_eq!(first.unchanged, 0);
+        assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
+
+        let second = reconcile_reminder_queue(&adapter, &tasks).expect("second reconcile");
+        assert_eq!(second.scheduled, 0);
+        assert_eq!(second.unchanged, 2);
+        assert!(second.failed.is_empty());
+        assert_eq!(
+            adapter.schedule_calls.load(Ordering::SeqCst),
+            2,
+            "unchanged notifications must not be cancelled/recreated"
+        );
+        let entries = adapter.scheduled().expect("entries");
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.reminder_id == "a" && entry.body.is_empty())
+        );
+    }
+
+    #[test]
+    fn ios_default_body_is_treated_as_empty_raw_body() {
+        let adapter = FakeReminderAdapter::granted();
+        adapter
+            .entries
+            .lock()
+            .expect("entries")
+            .push(ScheduledReminderInfo {
+                reminder_id: "a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "task a".to_owned(),
+                body: DEFAULT_REMINDER_BODY.to_owned(),
+            });
+        let report = reconcile_reminder_queue(&adapter, &[reminder_task("a", "")])
+            .expect("legacy iOS entry");
+        assert_eq!(report.scheduled, 0);
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn changed_raw_body_is_the_only_body_fingerprint_change() {
+        let adapter = FakeReminderAdapter::granted();
+        let task = reminder_task("a", "note");
+        reconcile_reminder_queue(&adapter, std::slice::from_ref(&task)).expect("first");
+        let mut changed = task.clone();
+        changed.note = "changed".to_owned();
+        let report =
+            reconcile_reminder_queue(&adapter, std::slice::from_ref(&changed)).expect("second");
+        assert_eq!(report.scheduled, 1);
+        assert_eq!(report.unchanged, 0);
+        assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn permission_denied_is_reported_and_does_not_claim_scheduled() {
+        let adapter = FakeReminderAdapter {
+            permission: "denied".to_owned(),
+            ..FakeReminderAdapter::granted()
+        };
+        let report = reconcile_reminder_queue(&adapter, &[reminder_task("a", "")]).expect("report");
+        assert_eq!(report.permission_denied, 1);
+        assert_eq!(report.scheduled, 0);
+        assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 0);
     }
 }
