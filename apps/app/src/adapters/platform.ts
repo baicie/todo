@@ -7,7 +7,11 @@ import type {
 import { DexieTaskRepository } from './web-repository';
 import { WebReminderScheduler } from './web-reminder';
 import { TauriTaskRepository } from './tauri-repository';
-import { activeDatabaseName } from '../lib/accounts';
+import {
+  activeDatabaseName,
+  adoptNativeAccountContext,
+  type NativeAccountContext,
+} from '../lib/accounts';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -130,6 +134,9 @@ export async function createAppPlatform(): Promise<AppPlatform> {
   if (isTauri()) {
     const repository = new TauriTaskRepository();
     await repository.initialize();
+    const { invoke } = await import('@tauri-apps/api/core');
+    const account = await invoke<NativeAccountContext>('native_account_context');
+    adoptNativeAccountContext(account);
     const { TauriReminderScheduler } = await import('./tauri-reminder');
     const reminder = new TauriReminderScheduler();
     return {

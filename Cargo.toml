@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["apps/api", "crates/native-core"]
+members = ["apps/api", "crates/native-accounts", "crates/native-core"]
 # The Tauri shell is its own workspace so desktop/mobile toolchains and the
 # server workspace can be resolved independently.
 exclude = ["apps/native/src-tauri"]
