@@ -33,12 +33,20 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let store = db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
+            let (store, account) =
+                db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
+            if account.migrated_from_legacy
+                && account.kind == todo_native_accounts::AccountKind::Cloud
+                && let Err(error) =
+                    secure_tokens::migrate_legacy_refresh_token(app.handle(), &account.account_id)
+            {
+                eprintln!("shishi: legacy refresh token migration failed: {error}");
+            }
             let reminders = reminders::create_adapter(app.handle().clone());
             let lifecycle =
                 lifecycle::LifecycleState::load(app.handle()).map_err(std::io::Error::other)?;
             app.manage(lifecycle);
-            app.manage(db::AppState::new(store, reminders));
+            app.manage(db::AppState::new(store, reminders, account));
 
             #[cfg(desktop)]
             {
@@ -89,6 +97,7 @@ pub fn run() {
             commands::get_desktop_settings,
             commands::set_close_to_tray,
             commands::set_autostart,
+            commands::native_account_context,
             commands::secure_token_get,
             commands::secure_token_set,
             commands::secure_token_remove,

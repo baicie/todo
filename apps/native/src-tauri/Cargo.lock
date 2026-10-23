@@ -4289,7 +4289,23 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-shishi-reminder",
  "tauri-plugin-single-instance",
+ "tempfile",
+ "todo-native-accounts",
  "todo-native-core",
+]
+
+[[package]]
+name = "todo-native-accounts"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

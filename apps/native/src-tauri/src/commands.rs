@@ -47,6 +47,25 @@ impl CommandError {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAccountContextDto {
+    pub account_id: String,
+    pub kind: String,
+    pub email: Option<String>,
+    pub migrated_from_legacy: bool,
+}
+
+#[tauri::command]
+pub fn native_account_context(state: State<'_, AppState>) -> NativeAccountContextDto {
+    NativeAccountContextDto {
+        account_id: state.account.account_id.clone(),
+        kind: state.account.kind.as_str().to_owned(),
+        email: state.account.email.clone(),
+        migrated_from_legacy: state.account.migrated_from_legacy,
+    }
+}
+
 /// The single storage IPC entry point. It runs on Tauri's blocking pool so a
 /// slow SQLite query never parks the async runtime or the WebView thread.
 #[tauri::command]
