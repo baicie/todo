@@ -348,15 +348,18 @@ pub fn valid_email(email: &str) -> bool {
 
 pub fn normalize_api_url(api_url: &str) -> AccountResult<String> {
     let trimmed = api_url.trim().trim_end_matches('/');
-    if trimmed.is_empty()
-        || !(trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        || trimmed.chars().any(char::is_whitespace)
-    {
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
         return Err(AccountError::InvalidRegistry(
             "api url must be an absolute http(s) URL".to_owned(),
         ));
     }
-    Ok(trimmed.to_ascii_lowercase())
+    let canonical = trimmed.to_ascii_lowercase();
+    if !(canonical.starts_with("http://") || canonical.starts_with("https://")) {
+        return Err(AccountError::InvalidRegistry(
+            "api url must be an absolute http(s) URL".to_owned(),
+        ));
+    }
+    Ok(canonical)
 }
 
 pub fn timestamp() -> String {

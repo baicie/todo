@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use todo_native_accounts::{
-    AccountList, AccountSummary, SwitchStatus, create_pending_cloud_account, list_accounts,
-    mark_account_verified, prepare_account_switch, request_account_switch, rollback_pending_switch,
-    switch_status,
+    AbortSwitchOutcome, AccountList, AccountSummary, SwitchStatus, abort_prepared_switch,
+    create_pending_cloud_account, list_accounts, mark_account_verified, normalize_api_url,
+    normalize_email, prepare_account_switch, request_account_switch, rollback_pending_switch,
+    switch_status, verify_cloud_identity,
 };
-use todo_native_core::StoreError;
+use todo_native_core::{CloudInitializeRequest, StoreError, TodoStore};
 
 use crate::{
-    db::AppState,
+    db::{AppState, GateError},
     lifecycle::{self, DesktopSettings, LifecycleState},
     reminders::ReminderAdapter,
     secure_tokens, security,
@@ -60,6 +61,40 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
     app.path()
         .app_data_dir()
         .map_err(|error| CommandError::account_switch(format!("无法定位应用数据目录: {error}")))
+}
+
+fn identity_error(error: todo_native_accounts::AccountError) -> CommandError {
+    let code = match error {
+        todo_native_accounts::AccountError::VerificationMismatch(_) => "ACCOUNT_IDENTITY_MISMATCH",
+        _ => "ACCOUNT_IDENTITY_ERROR",
+    };
+    CommandError::new(code, error.to_string())
+}
+
+fn gate_error(error: GateError) -> CommandError {
+    match error {
+        GateError::SwitchInProgress => CommandError::new(
+            "ACCOUNT_SWITCH_IN_PROGRESS",
+            "账号切换进行中，当前账号已停止接受写入",
+        ),
+        GateError::DrainTimeout => CommandError::new(
+            "ACCOUNT_SWITCH_DRAIN_TIMEOUT",
+            "旧账号仍有未结束的本地写事务，已取消本次切换",
+        ),
+        GateError::NotPrepared => CommandError::new(
+            "ACCOUNT_SWITCH_NOT_PREPARED",
+            "账号切换不处于可请求的已准备状态",
+        ),
+        GateError::NotAbortable => CommandError::new(
+            "ACCOUNT_SWITCH_ABORT_FORBIDDEN",
+            "账号切换已进入不可回退阶段，需冷重启恢复",
+        ),
+        GateError::Poisoned => CommandError::new("INTERNAL", "账号切换状态机锁异常"),
+    }
+}
+
+fn recovery_required(message: impl Into<String>) -> CommandError {
+    CommandError::new("ACCOUNT_RECOVERY_REQUIRED", message)
 }
 
 fn ensure_runtime_active(state: &State<'_, AppState>) -> Result<(), CommandError> {
@@ -119,24 +154,66 @@ pub fn native_create_account(
         .map_err(|error| CommandError::account_switch(error.to_string()))
 }
 
+fn abort_account_switch_inner(
+    root: &std::path::Path,
+    state: &State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let guard = state.runtime.begin_abort().map_err(gate_error)?;
+    let outcome = abort_prepared_switch(root)
+        .map_err(|error| CommandError::account_switch(error.to_string()))?;
+    match outcome {
+        AbortSwitchOutcome::Aborted | AbortSwitchOutcome::NoPreparedSwitch => {
+            guard.activate_after_abort();
+            Ok(())
+        }
+        AbortSwitchOutcome::NotPrepared(phase) => {
+            guard.fail_closed();
+            Err(CommandError::new(
+                "ACCOUNT_SWITCH_ABORT_FORBIDDEN",
+                format!("账号切换 journal 已推进到 {phase:?}，不能原地 abort"),
+            ))
+        }
+    }
+}
+
 #[tauri::command]
 pub fn native_prepare_account_switch(
     app: AppHandle,
     state: State<'_, AppState>,
     target_account_id: String,
 ) -> Result<SwitchStatus, CommandError> {
+    ensure_restart_supported()?;
     ensure_runtime_active(&state)?;
-    let status = prepare_account_switch(&data_dir(&app)?, &target_account_id)
-        .map_err(|error| CommandError::account_switch(error.to_string()))?;
-    if !state.runtime.begin_switch() {
-        // Do not delete the journal here: a concurrent switch may have created
-        // or already closed the same prepared journal. Leaving it intact keeps
-        // the first switch recoverable; the caller can abort explicitly.
-        return Err(CommandError::new(
-            "ACCOUNT_SWITCH_IN_PROGRESS",
-            "账号切换已经开始",
-        ));
+    let root = data_dir(&app)?;
+    // Close and drain before writing PREPARED. A concurrent prepare therefore
+    // fails without creating another journal to abort.
+    if let Err(error) = state.runtime.begin_switch() {
+        if error == GateError::DrainTimeout
+            && let Err(abort_error) = abort_account_switch_inner(&root, &state)
+        {
+            return Err(recovery_required(format!(
+                "账号切换排空超时且无法回滚: {}",
+                abort_error.message
+            )));
+        }
+        return Err(gate_error(error));
     }
+    let status = match prepare_account_switch(&root, &target_account_id) {
+        Ok(status) => status,
+        Err(error) => {
+            // Preflight failed after the gate closed. There is no requestable
+            // journal yet; reopen only if the journal is still absent/PREPARED.
+            state.runtime.prepare_failed();
+            if let Err(abort_error) = abort_account_switch_inner(&root, &state) {
+                return Err(recovery_required(format!(
+                    "目标校验失败且无法恢复写门: {}",
+                    abort_error.message
+                )));
+            }
+            return Err(CommandError::account_switch(error.to_string()));
+        }
+    };
+    state.runtime.prepare_committed();
     Ok(status)
 }
 
@@ -147,32 +224,28 @@ pub fn native_request_account_switch(
     target_account_id: String,
     generation: u64,
 ) -> Result<SwitchStatus, CommandError> {
-    // `native_prepare_account_switch` closed the gate already. A direct request
-    // (e.g. retry after a UI crash) may still need to close it here.
-    if state.runtime.accepts_storage() && !state.runtime.begin_switch() {
-        return Err(CommandError::new(
-            "ACCOUNT_SWITCH_IN_PROGRESS",
-            "账号切换已经开始",
-        ));
-    }
+    // A direct mobile/unsupported restart request must fail before reminders are
+    // cancelled or the journal advances.
+    ensure_restart_supported()?;
+    let root = data_dir(&app)?;
+    let mut request = state.runtime.begin_request().map_err(gate_error)?;
     // Cancel the old account's system notifications before the process exits.
-    // A failure leaves the prepared journal in place and aborts the restart.
-    if let Err(error) = cancel_current_account_reminders(&state) {
-        state.runtime.reset_after_failure();
-        return Err(error);
-    }
-    let status = match request_account_switch(&data_dir(&app)?, &target_account_id, generation) {
-        Ok(status) => status,
-        Err(error) => {
-            state.runtime.reset_after_failure();
-            return Err(CommandError::account_switch(error.to_string()));
-        }
-    };
+    // Failure keeps the gate closed at PREPARED; the frontend must cold-restart.
+    cancel_current_account_reminders(&state)?;
+    let status = request_account_switch(&root, &target_account_id, generation)
+        .map_err(|error| CommandError::account_switch(error.to_string()))?;
     if let Err(error) = restart_after_switch(&app) {
-        state.runtime.reset_after_failure();
-        let _ = rollback_pending_switch(&data_dir(&app)?, "RESTART_UNAVAILABLE");
-        return Err(error);
+        let rollback = rollback_pending_switch(&root, "RESTART_UNAVAILABLE");
+        request.mark_failed();
+        return Err(recovery_required(match rollback {
+            Ok(_) => format!("无法自动重启，账号切换已回滚: {}", error.message),
+            Err(rollback) => format!(
+                "无法自动重启且回滚失败，需人工冷启动恢复: {}; {rollback}",
+                error.message
+            ),
+        }));
     }
+    request.mark_restart_required();
     Ok(status)
 }
 
@@ -181,15 +254,35 @@ pub fn native_abort_account_switch(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let result = todo_native_accounts::abort_prepared_switch(&data_dir(&app)?)
-        .map_err(|error| CommandError::account_switch(error.to_string()));
-    state.runtime.reset_after_failure();
-    result
+    let root = data_dir(&app)?;
+    abort_account_switch_inner(&root, &state)
+}
+
+#[tauri::command]
+pub fn native_restart_account_recovery(
+    app: AppHandle,
+    _state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    // No gate reset here: the replacement process performs startup recovery and
+    // rebuilds CloudController/listeners from a fresh WebView.
+    ensure_restart_supported()?;
+    restart_after_switch(&app)
 }
 
 #[tauri::command]
 pub fn native_account_switch_status(app: AppHandle) -> Result<SwitchStatus, CommandError> {
     switch_status(&data_dir(&app)?).map_err(|error| CommandError::account_switch(error.to_string()))
+}
+
+#[tauri::command]
+pub fn native_verify_cloud_identity(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    email: String,
+    api_url: String,
+) -> Result<(), CommandError> {
+    ensure_runtime_active(&state)?;
+    verify_cloud_identity(&data_dir(&app)?, &email, &api_url).map_err(identity_error)
 }
 
 #[tauri::command]
@@ -207,8 +300,20 @@ pub fn native_mark_account_verified(
         .runtime
         .enter_storage()
         .ok_or_else(|| CommandError::new("ACCOUNT_SWITCH_IN_PROGRESS", "账号切换进行中"))?;
-    mark_account_verified(&data_dir(&app)?)
-        .map_err(|error| CommandError::account_switch(error.to_string()))
+    mark_account_verified(&data_dir(&app)?).map_err(identity_error)
+}
+
+#[cfg(desktop)]
+fn ensure_restart_supported() -> Result<(), CommandError> {
+    Ok(())
+}
+
+#[cfg(mobile)]
+fn ensure_restart_supported() -> Result<(), CommandError> {
+    Err(CommandError::new(
+        "RESTART_UNSUPPORTED",
+        "当前移动端运行时无法冷重启应用，账号切换未开始",
+    ))
 }
 
 #[cfg(desktop)]
@@ -233,17 +338,16 @@ fn restart_after_switch(_app: &AppHandle) -> Result<(), CommandError> {
     ))
 }
 
-#[cfg(desktop)]
-fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), CommandError> {
-    let prefix = format!("account:{}:", state.account.account_id);
-    let entries = state
-        .reminders
-        .scheduled()
-        .map_err(CommandError::reminder)?;
+fn cancel_reminders_for_account(
+    reminders: &dyn ReminderAdapter,
+    account_id: &str,
+) -> Result<(), CommandError> {
+    let prefix = format!("account:{account_id}:");
+    let entries = reminders.scheduled().map_err(CommandError::reminder)?;
     let mut failures = Vec::new();
     for entry in entries {
         if entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:") {
-            if let Err(error) = state.reminders.cancel(&entry.reminder_id) {
+            if let Err(error) = reminders.cancel(&entry.reminder_id) {
                 failures.push(format!("{}: {error}", entry.reminder_id));
             }
         }
@@ -254,43 +358,7 @@ fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), C
             failures.join("; ")
         )));
     }
-    let remaining = state
-        .reminders
-        .scheduled()
-        .map_err(CommandError::reminder)?;
-    let leftover = remaining
-        .into_iter()
-        .filter(|entry| {
-            entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:")
-        })
-        .count();
-    if leftover > 0 {
-        return Err(CommandError::reminder(
-            "旧账号系统通知仍有残留，已中止切换".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(mobile)]
-fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), CommandError> {
-    let prefix = format!("account:{}:", state.account.account_id);
-    let entries = state
-        .reminders
-        .scheduled()
-        .map_err(CommandError::reminder)?;
-    for entry in entries {
-        if entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:") {
-            state
-                .reminders
-                .cancel(&entry.reminder_id)
-                .map_err(CommandError::reminder)?;
-        }
-    }
-    let remaining = state
-        .reminders
-        .scheduled()
-        .map_err(CommandError::reminder)?;
+    let remaining = reminders.scheduled().map_err(CommandError::reminder)?;
     if remaining.iter().any(|entry| {
         entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:")
     }) {
@@ -301,10 +369,61 @@ fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), C
     Ok(())
 }
 
+fn cancel_current_account_reminders(state: &State<'_, AppState>) -> Result<(), CommandError> {
+    cancel_reminders_for_account(state.reminders.as_ref(), &state.account.account_id)
+}
+
+fn dispatch_scoped_storage(
+    root: &std::path::Path,
+    store: &TodoStore,
+    action: &str,
+    payload: Value,
+) -> Result<Value, CommandError> {
+    if action == "sync_initialize_cloud" {
+        // Revalidate against the registry's active account immediately before
+        // dispatch. Never trust a mutable WebView account id, and do this before
+        // any snapshot/shadow/outbox/cursor transaction can begin.
+        let initialize: CloudInitializeRequest =
+            serde_json::from_value(payload.clone()).map_err(|error| {
+                CommandError::new(
+                    "VALIDATION_FAILED",
+                    format!("cloud initialize payload is invalid: {error}"),
+                )
+            })?;
+        let api_url = initialize.account_api_url.as_deref().ok_or_else(|| {
+            CommandError::new(
+                "ACCOUNT_IDENTITY_MISMATCH",
+                "cloud initialization must include an API server identity",
+            )
+        })?;
+        verify_cloud_identity(root, &initialize.account_email, api_url).map_err(identity_error)?;
+        let canonical_api_url = normalize_api_url(api_url).map_err(identity_error)?;
+        let diagnostics = store.sync_diagnostics().map_err(CommandError::from_store)?;
+        if let Some(bound_email) = diagnostics.bound_account.as_deref()
+            && normalize_email(bound_email) != normalize_email(&initialize.account_email)
+        {
+            return Err(CommandError::new(
+                "ACCOUNT_IDENTITY_MISMATCH",
+                "本机数据库已绑定其他登录邮箱，拒绝写入该云端快照",
+            ));
+        }
+        if let Some(bound_api_url) = diagnostics.bound_api_url.as_deref()
+            && normalize_api_url(bound_api_url).map_err(identity_error)? != canonical_api_url
+        {
+            return Err(CommandError::new(
+                "ACCOUNT_IDENTITY_MISMATCH",
+                "本机数据库已绑定其他 API 服务端，拒绝写入该云端快照",
+            ));
+        }
+    }
+    todo_native_core::dispatch(store, action, payload).map_err(CommandError::from_store)
+}
+
 /// The single storage IPC entry point. It runs on Tauri's blocking pool so a
 /// slow SQLite query never parks the async runtime or the WebView thread.
 #[tauri::command]
 pub async fn todo_storage(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: StorageRequest,
 ) -> Result<Value, CommandError> {
@@ -323,12 +442,12 @@ pub async fn todo_storage(
         })?)
     };
     let store = Arc::clone(&state.store);
+    let root = data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        todo_native_core::dispatch(&store, &request.action, request.payload)
+        dispatch_scoped_storage(&root, &store, &request.action, request.payload)
     })
     .await
     .map_err(|error| CommandError::new("INTERNAL", format!("数据库任务异常: {error}")))?
-    .map_err(CommandError::from_store)
 }
 
 #[tauri::command]
@@ -853,6 +972,164 @@ mod tests {
         assert!(!is_refresh_key_for(a, "refresh_token:v1"));
     }
 
+    fn activate_pending_account(
+        root: &std::path::Path,
+        email: &str,
+        api_url: &str,
+    ) -> (todo_native_accounts::AccountSummary, std::path::PathBuf) {
+        todo_native_accounts::ensure_active_account(root).expect("default");
+        let account = todo_native_accounts::create_pending_cloud_account(root, email, api_url)
+            .expect("pending account");
+        let prepared = todo_native_accounts::prepare_account_switch(root, &account.id)
+            .expect("prepare account");
+        todo_native_accounts::request_account_switch(
+            root,
+            &account.id,
+            prepared.generation.expect("generation"),
+        )
+        .expect("request account");
+        todo_native_accounts::recover_pending_switch(root).expect("recover account");
+        todo_native_accounts::finish_pending_switch(root).expect("finish account");
+        let active = todo_native_accounts::ensure_active_account(root).expect("active account");
+        assert_eq!(active.account_id, account.id);
+        (account, active.database_path)
+    }
+
+    fn cloud_initialize(
+        email: &str,
+        api_url: &str,
+        mode: todo_native_core::CloudMergeMode,
+    ) -> Value {
+        serde_json::to_value(CloudInitializeRequest {
+            snapshot: todo_native_core::CloudSnapshot {
+                cursor: "99".to_owned(),
+                lists: Vec::new(),
+                tasks: vec![reminder_task("cloud-c", "cloud C")],
+                steps: Vec::new(),
+                day_plans: Vec::new(),
+            },
+            mode,
+            account_email: email.to_owned(),
+            account_api_url: Some(api_url.to_owned()),
+            session_id: None,
+        })
+        .expect("cloud payload")
+    }
+
+    fn assert_identity_rejected_without_db_change(
+        root: &std::path::Path,
+        db: &std::path::Path,
+        payload: Value,
+    ) {
+        let store = TodoStore::open(db).expect("store");
+        store.sync_set_enabled(true).expect("enable outbox");
+        store
+            .create_task(todo_native_core::NewTask {
+                title: "pending local task".to_owned(),
+                ..Default::default()
+            })
+            .expect("local task");
+        let before = todo_native_accounts::read_snapshot(db).expect("before");
+        let error = dispatch_scoped_storage(root, &store, "sync_initialize_cloud", payload)
+            .expect_err("identity mismatch must fail before SQLite");
+        assert_eq!(error.code, "ACCOUNT_IDENTITY_MISMATCH");
+        let after = todo_native_accounts::read_snapshot(db).expect("after");
+        assert_eq!(after, before, "cloud identity failure changed SQLite state");
+    }
+
+    #[test]
+    fn pending_cloud_identity_is_checked_before_cloud_and_merge_writes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let (_account, db) =
+            activate_pending_account(directory.path(), "b@example.com", "https://b.example");
+        for mode in [
+            todo_native_core::CloudMergeMode::Cloud,
+            todo_native_core::CloudMergeMode::Merge,
+        ] {
+            assert_identity_rejected_without_db_change(
+                directory.path(),
+                &db,
+                cloud_initialize("c@example.com", "https://b.example", mode),
+            );
+            assert_identity_rejected_without_db_change(
+                directory.path(),
+                &db,
+                cloud_initialize("b@example.com", "https://c.example", mode),
+            );
+        }
+    }
+
+    #[test]
+    fn pending_cloud_identity_accepts_only_the_registered_email_and_server() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let (_account, db) =
+            activate_pending_account(directory.path(), "b@example.com", "https://b.example");
+        let store = TodoStore::open(&db).expect("store");
+        let payload = cloud_initialize(
+            "B@example.com",
+            "HTTPS://B.EXAMPLE///",
+            todo_native_core::CloudMergeMode::Cloud,
+        );
+        dispatch_scoped_storage(directory.path(), &store, "sync_initialize_cloud", payload)
+            .expect("matching identity");
+        let diagnostics = store.sync_diagnostics().expect("diagnostics");
+        assert_eq!(diagnostics.bound_account.as_deref(), Some("b@example.com"));
+        assert_eq!(
+            diagnostics.bound_api_url.as_deref(),
+            Some("https://b.example")
+        );
+    }
+
+    #[test]
+    fn cloud_identity_check_also_enforces_the_database_binding() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let active =
+            todo_native_accounts::ensure_active_account(directory.path()).expect("default");
+        let store = TodoStore::open(&active.database_path).expect("store");
+        dispatch_scoped_storage(
+            directory.path(),
+            &store,
+            "sync_initialize_cloud",
+            cloud_initialize(
+                "bound@example.com",
+                "https://bound.example",
+                todo_native_core::CloudMergeMode::Cloud,
+            ),
+        )
+        .expect("initial binding");
+        let before = todo_native_accounts::read_snapshot(&active.database_path).expect("before");
+
+        let email_error = dispatch_scoped_storage(
+            directory.path(),
+            &store,
+            "sync_initialize_cloud",
+            cloud_initialize(
+                "other@example.com",
+                "https://bound.example",
+                todo_native_core::CloudMergeMode::Merge,
+            ),
+        )
+        .expect_err("bound email mismatch");
+        assert_eq!(email_error.code, "ACCOUNT_IDENTITY_MISMATCH");
+        let api_error = dispatch_scoped_storage(
+            directory.path(),
+            &store,
+            "sync_initialize_cloud",
+            cloud_initialize(
+                "bound@example.com",
+                "https://other.example",
+                todo_native_core::CloudMergeMode::Merge,
+            ),
+        )
+        .expect_err("bound API mismatch");
+        assert_eq!(api_error.code, "ACCOUNT_IDENTITY_MISMATCH");
+        let after = todo_native_accounts::read_snapshot(&active.database_path).expect("after");
+        assert_eq!(
+            after, before,
+            "database binding failure changed SQLite state"
+        );
+    }
+
     #[test]
     fn foreign_account_and_legacy_reminders_are_cancelled_before_scheduling() {
         let adapter = FakeReminderAdapter::granted();
@@ -912,6 +1189,45 @@ mod tests {
         let entries = adapter.scheduled().expect("entries");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].reminder_id, "account:b:task-b");
+    }
+
+    #[test]
+    fn switch_reminder_cancellation_failure_stops_the_switch() {
+        let adapter = FakeReminderAdapter::granted();
+        adapter.entries.lock().expect("entries").extend([
+            ScheduledReminderInfo {
+                reminder_id: "account:default:task-a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "A".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "legacy-raw".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "legacy".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "account:other:task-c".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "other".to_owned(),
+                body: String::new(),
+            },
+        ]);
+        adapter
+            .cancel_failures
+            .lock()
+            .expect("failures")
+            .insert("account:default:task-a".to_owned());
+        let error = cancel_reminders_for_account(&adapter, "default").expect_err("cancel failure");
+        assert_eq!(error.code, "REMINDER_ERROR");
+        assert!(error.message.contains("无法取消旧账号系统通知"));
+
+        adapter.cancel_failures.lock().expect("failures").clear();
+        cancel_reminders_for_account(&adapter, "default").expect("retry cancel");
+        let remaining = adapter.entries.lock().expect("entries").clone();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].reminder_id, "account:other:task-c");
     }
 
     #[test]

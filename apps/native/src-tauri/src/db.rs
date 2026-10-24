@@ -1,10 +1,10 @@
 use std::{
     fs,
     sync::{
-        Arc,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tauri::{AppHandle, Manager};
@@ -19,9 +19,36 @@ use crate::reminders::ReminderAdapter;
 /// Once a switch is requested the old account's IPC surface must stop accepting
 /// writes. The process is restarted shortly afterwards; this flag closes the
 /// window between the request and process exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchRuntimePhase {
+    Active,
+    Draining,
+    Preparing,
+    Prepared,
+    DrainFailed,
+    RequestInProgress,
+    RestartRequired,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateError {
+    SwitchInProgress,
+    DrainTimeout,
+    NotPrepared,
+    NotAbortable,
+    Poisoned,
+}
+
+struct RuntimeControl {
+    phase: SwitchRuntimePhase,
+}
+
 pub struct RuntimeGate {
     accepting: AtomicBool,
     in_flight: AtomicUsize,
+    control: Mutex<RuntimeControl>,
+    drained: Condvar,
 }
 
 pub struct StorageLease {
@@ -31,6 +58,56 @@ pub struct StorageLease {
 impl Drop for StorageLease {
     fn drop(&mut self) {
         self.gate.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.gate.drained.notify_all();
+    }
+}
+
+/// Held across request-side reminder cancellation and journal advancement.
+/// Unless explicitly committed, a failed request fails the gate closed: the
+/// process must cold-restart to rebuild Cloud state and reminders.
+pub struct SwitchRequestGuard<'a> {
+    control: MutexGuard<'a, RuntimeControl>,
+    completed: bool,
+}
+
+impl SwitchRequestGuard<'_> {
+    pub fn mark_restart_required(&mut self) {
+        self.control.phase = SwitchRuntimePhase::RestartRequired;
+        self.completed = true;
+    }
+
+    pub fn mark_failed(&mut self) {
+        self.control.phase = SwitchRuntimePhase::Failed;
+        self.completed = true;
+    }
+}
+
+impl Drop for SwitchRequestGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed && self.control.phase == SwitchRuntimePhase::RequestInProgress {
+            // Once quiesce + request has begun, an in-place abort could leave a
+            // disposed Cloud Controller with an open gate. Fail closed and let
+            // the frontend cold-restart the process instead.
+            self.control.phase = SwitchRuntimePhase::Failed;
+        }
+    }
+}
+
+/// Held while the journal is inspected/removed. Gate is reopened only through
+/// `activate_after_abort`; dropping after an error keeps it closed.
+pub struct SwitchAbortGuard<'a> {
+    gate: &'a RuntimeGate,
+    control: MutexGuard<'a, RuntimeControl>,
+}
+
+impl SwitchAbortGuard<'_> {
+    pub fn activate_after_abort(mut self) {
+        self.control.phase = SwitchRuntimePhase::Active;
+        self.gate.accepting.store(true, Ordering::SeqCst);
+    }
+
+    pub fn fail_closed(mut self) {
+        self.control.phase = SwitchRuntimePhase::Failed;
     }
 }
 
@@ -39,11 +116,23 @@ impl RuntimeGate {
         Self {
             accepting: AtomicBool::new(true),
             in_flight: AtomicUsize::new(0),
+            control: Mutex::new(RuntimeControl {
+                phase: SwitchRuntimePhase::Active,
+            }),
+            drained: Condvar::new(),
         }
     }
 
     pub fn accepts_storage(&self) -> bool {
         self.accepting.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub fn phase(&self) -> SwitchRuntimePhase {
+        self.control
+            .lock()
+            .map(|control| control.phase)
+            .unwrap_or(SwitchRuntimePhase::Failed)
     }
 
     pub fn enter_storage(self: &Arc<Self>) -> Option<StorageLease> {
@@ -53,6 +142,7 @@ impl RuntimeGate {
         self.in_flight.fetch_add(1, Ordering::SeqCst);
         if !self.accepts_storage() {
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            self.drained.notify_all();
             return None;
         }
         Some(StorageLease {
@@ -60,26 +150,93 @@ impl RuntimeGate {
         })
     }
 
-    /// Returns false if another switch already closed the gate. In-flight
-    /// storage operations get a bounded drain window before restart; a
-    /// genuinely hung operation cannot block the user indefinitely.
-    pub fn begin_switch(&self) -> bool {
-        if self
-            .accepting
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return false;
+    /// Close the gate and wait for all entered local writes to leave. A timeout
+    /// is a hard failure: it never advances the journal and never permits a
+    /// restart. The caller must abort the prepared journal and call
+    /// `activate_after_abort`, or cold-restart the application.
+    pub fn begin_switch(&self) -> Result<(), GateError> {
+        let mut control = self.control.lock().map_err(|_| GateError::Poisoned)?;
+        if control.phase != SwitchRuntimePhase::Active {
+            return Err(GateError::SwitchInProgress);
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while self.in_flight.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
+        self.accepting.store(false, Ordering::SeqCst);
+        control.phase = SwitchRuntimePhase::Draining;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.in_flight.load(Ordering::SeqCst) > 0 {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                control.phase = SwitchRuntimePhase::DrainFailed;
+                return Err(GateError::DrainTimeout);
+            };
+            let (next, wait) = self
+                .drained
+                .wait_timeout(control, remaining)
+                .map_err(|_| GateError::Poisoned)?;
+            control = next;
+            if wait.timed_out() && self.in_flight.load(Ordering::SeqCst) > 0 {
+                control.phase = SwitchRuntimePhase::DrainFailed;
+                return Err(GateError::DrainTimeout);
+            }
         }
-        true
+        control.phase = SwitchRuntimePhase::Preparing;
+        Ok(())
     }
 
-    pub fn reset_after_failure(&self) {
-        self.accepting.store(true, Ordering::SeqCst);
+    pub fn prepare_committed(&self) {
+        if let Ok(mut control) = self.control.lock()
+            && control.phase == SwitchRuntimePhase::Preparing
+        {
+            control.phase = SwitchRuntimePhase::Prepared;
+        }
+    }
+
+    pub fn prepare_failed(&self) {
+        if let Ok(mut control) = self.control.lock()
+            && control.phase == SwitchRuntimePhase::Preparing
+        {
+            control.phase = SwitchRuntimePhase::DrainFailed;
+        }
+    }
+
+    /// A request is only legal after the drain succeeded. The lock is held over
+    /// notification cancellation and journal write, so abort cannot interleave.
+    pub fn begin_request(&self) -> Result<SwitchRequestGuard<'_>, GateError> {
+        let mut control = self.control.lock().map_err(|_| GateError::Poisoned)?;
+        if control.phase != SwitchRuntimePhase::Prepared {
+            return Err(match control.phase {
+                SwitchRuntimePhase::Draining
+                | SwitchRuntimePhase::Preparing
+                | SwitchRuntimePhase::RequestInProgress => GateError::SwitchInProgress,
+                _ => GateError::NotPrepared,
+            });
+        }
+        control.phase = SwitchRuntimePhase::RequestInProgress;
+        Ok(SwitchRequestGuard {
+            control,
+            completed: false,
+        })
+    }
+
+    /// Only an active or still-prepared gate is abortable. In particular a
+    /// RestartRequired/Failed journal can never be reopened in-place.
+    pub fn begin_abort(&self) -> Result<SwitchAbortGuard<'_>, GateError> {
+        let control = self.control.lock().map_err(|_| GateError::Poisoned)?;
+        match control.phase {
+            SwitchRuntimePhase::Active
+            | SwitchRuntimePhase::Prepared
+            | SwitchRuntimePhase::DrainFailed => {}
+            switch_phase => {
+                return Err(match switch_phase {
+                    SwitchRuntimePhase::Draining
+                    | SwitchRuntimePhase::Preparing
+                    | SwitchRuntimePhase::RequestInProgress => GateError::SwitchInProgress,
+                    _ => GateError::NotAbortable,
+                });
+            }
+        };
+        Ok(SwitchAbortGuard {
+            gate: self,
+            control,
+        })
     }
 }
 
@@ -256,6 +413,38 @@ mod tests {
     }
 
     #[test]
+    fn startup_after_unrequested_switch_restores_source_with_outbox() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let default = ensure_active_account(directory.path()).expect("default");
+        let source = TodoStore::open(&default.database_path).expect("source store");
+        source.sync_set_enabled(true).expect("outbox");
+        source
+            .create_task(NewTask {
+                title: "unsynced source".to_owned(),
+                ..NewTask::default()
+            })
+            .expect("source task");
+        drop(source);
+        let before = todo_native_accounts::read_snapshot(&default.database_path).expect("before");
+        let target =
+            create_pending_cloud_account(directory.path(), "b@example.com", "https://b.example")
+                .expect("pending");
+        prepare_account_switch(directory.path(), &target.id).expect("prepared journal only");
+
+        // This models the process restart after a request/journal failure that
+        // quiesced Cloud but never reached RESTART_REQUIRED.
+        let opened = open_store_at(directory.path()).expect("restart source");
+        assert_eq!(opened.account.account_id, DEFAULT_ACCOUNT_ID);
+        let after = todo_native_accounts::read_snapshot(&default.database_path).expect("after");
+        assert_eq!(after, before, "source DB/outbox must be unchanged");
+        assert_eq!(
+            after.counts.get("outbox").copied(),
+            Some(1),
+            "unsynced outbox must survive recovery"
+        );
+    }
+
+    #[test]
     fn startup_rolls_back_bad_target_and_keeps_source_usable() {
         let directory = tempfile::tempdir().expect("tempdir");
         ensure_active_account(directory.path()).expect("default");
@@ -287,32 +476,172 @@ mod tests {
     }
 
     #[test]
-    fn runtime_gate_closes_once_and_can_be_reset_only_for_recovery() {
+    fn runtime_gate_closes_once_and_aborts_only_from_prepared() {
         let gate = super::RuntimeGate::active();
         assert!(gate.accepts_storage());
-        assert!(gate.begin_switch());
+        assert!(gate.begin_switch().is_ok());
         assert!(!gate.accepts_storage());
-        assert!(!gate.begin_switch());
-        gate.reset_after_failure();
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::Preparing);
+        assert!(gate.begin_switch().is_err());
+        gate.prepare_committed();
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::Prepared);
+        let abort = gate.begin_abort().expect("abortable prepared gate");
+        abort.activate_after_abort();
         assert!(gate.accepts_storage());
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::Active);
     }
 
     #[test]
     fn runtime_gate_waits_for_bounded_storage_leases() {
         let gate = std::sync::Arc::new(super::RuntimeGate::active());
         let lease = gate.enter_storage().expect("storage lease");
-        let gate_for_thread = std::sync::Arc::clone(&gate);
         let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let released_for_thread = std::sync::Arc::clone(&released);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(40));
             released_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
             drop(lease);
-            let _ = gate_for_thread;
         });
-        assert!(gate.begin_switch());
+        assert!(gate.begin_switch().is_ok());
         assert!(!gate.accepts_storage());
         assert!(released.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn runtime_gate_drain_timeout_fails_closed_and_never_advances() {
+        let gate = std::sync::Arc::new(super::RuntimeGate::active());
+        let lease = gate.enter_storage().expect("blocking storage lease");
+        let started = std::time::Instant::now();
+        let error = gate.begin_switch().expect_err("drain must fail");
+        assert_eq!(error, super::GateError::DrainTimeout);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(1_900));
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::DrainFailed);
+        assert!(!gate.accepts_storage());
+        assert!(
+            gate.enter_storage().is_none(),
+            "new writes must be rejected immediately"
+        );
+        assert!(
+            gate.begin_request().is_err(),
+            "timeout must not become requestable"
+        );
+        // The old write is still valid inside the source account. Let it finish
+        // and only then abort the prepared switch explicitly.
+        drop(lease);
+        let abort = gate.begin_abort().expect("drain failure is recoverable");
+        abort.activate_after_abort();
+        assert!(gate.accepts_storage());
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::Active);
+    }
+
+    #[test]
+    fn runtime_gate_timeout_keeps_source_transaction_and_outbox_consistent() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let db = directory.path().join("source.sqlite3");
+        let store = std::sync::Arc::new(TodoStore::open(&db).expect("source store"));
+        store.sync_set_enabled(true).expect("outbox");
+        let gate = std::sync::Arc::new(super::RuntimeGate::active());
+        let lease = gate.enter_storage().expect("lease");
+        let store_for_writer = std::sync::Arc::clone(&store);
+
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2_100));
+            store_for_writer
+                .create_task(NewTask {
+                    title: "slow source write".to_owned(),
+                    ..NewTask::default()
+                })
+                .expect("source write");
+            drop(lease);
+        });
+
+        let error = gate.begin_switch().expect_err("drain must time out");
+        assert_eq!(error, super::GateError::DrainTimeout);
+        writer.join().expect("writer");
+        assert_eq!(
+            store
+                .list_tasks(TaskQuery {
+                    view: TaskView::All,
+                    list_id: None,
+                    search: None,
+                    tags: Vec::new(),
+                    local_date: None,
+                    due_from: None,
+                    due_to: None,
+                    include_completed: false,
+                    limit: None,
+                })
+                .expect("tasks")
+                .items
+                .len(),
+            1
+        );
+        let snapshot = todo_native_accounts::read_snapshot(&db).expect("snapshot");
+        assert_eq!(snapshot.counts.get("outbox").copied(), Some(1));
+        assert!(!gate.accepts_storage());
+        assert!(
+            gate.begin_request().is_err(),
+            "no switch may proceed after timeout"
+        );
+        let abort = gate.begin_abort().expect("explicit abort only");
+        abort.activate_after_abort();
+        assert!(gate.accepts_storage());
+    }
+
+    #[test]
+    fn request_failure_fails_closed_and_requires_cold_recovery() {
+        let gate = super::RuntimeGate::active();
+        gate.begin_switch().expect("drain");
+        gate.prepare_committed();
+        {
+            let _request = gate.begin_request().expect("request guard");
+            // Simulate reminder cancellation or journal write failure before
+            // RESTART_REQUIRED. The request has already begun after quiesce, so
+            // there is no safe in-place abort/rebind path.
+        }
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::Failed);
+        assert!(!gate.accepts_storage());
+        assert!(
+            gate.begin_abort().is_err(),
+            "failed request must not reopen the gate"
+        );
+    }
+
+    #[test]
+    fn request_and_abort_serialize_with_one_legal_winner() {
+        let gate = std::sync::Arc::new(super::RuntimeGate::active());
+        gate.begin_switch().expect("drain");
+        gate.prepare_committed();
+        let (request_ready_tx, request_ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let gate_for_request = std::sync::Arc::clone(&gate);
+        let request_thread = std::thread::spawn(move || {
+            let mut request = gate_for_request.begin_request().expect("request guard");
+            request_ready_tx.send(()).expect("ready");
+            release_rx.recv().expect("release");
+            request.mark_restart_required();
+        });
+        request_ready_rx.recv().expect("request started");
+
+        let gate_for_abort = std::sync::Arc::clone(&gate);
+        let (abort_tx, abort_rx) = std::sync::mpsc::channel();
+        let abort_thread = std::thread::spawn(move || {
+            let result = gate_for_abort.begin_abort().map(|_| ());
+            abort_tx.send(result).expect("abort result");
+        });
+        release_tx.send(()).expect("release request");
+        request_thread.join().expect("request thread");
+        let abort_error = abort_rx
+            .recv()
+            .expect("abort result")
+            .expect_err("abort must lose");
+        assert_eq!(abort_error, super::GateError::NotAbortable);
+        abort_thread.join().expect("abort thread");
+        assert_eq!(gate.phase(), super::SwitchRuntimePhase::RestartRequired);
+        assert!(
+            !gate.accepts_storage(),
+            "abort must not reopen after request"
+        );
     }
 
     #[test]

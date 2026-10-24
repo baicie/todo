@@ -240,13 +240,27 @@ pub fn request_account_switch(
     status_from_journal(root, Some(journal))
 }
 
-pub fn abort_prepared_switch(root: &Path) -> AccountResult<()> {
-    if let Some(journal) = PendingAccountSwitch::load(root)?
-        && journal.phase == SwitchPhase::Prepared
-    {
-        remove_journal(root)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AbortSwitchOutcome {
+    Aborted,
+    NoPreparedSwitch,
+    NotPrepared(SwitchPhase),
+}
+
+/// Only a journal that is still PREPARED may be aborted. A request that already
+/// advanced the journal must go through startup recovery or a dedicated
+/// rollback; returning Ok for those phases would let IPC reopen the write gate
+/// after the switch became irrevocable.
+pub fn abort_prepared_switch(root: &Path) -> AccountResult<AbortSwitchOutcome> {
+    match PendingAccountSwitch::load(root)? {
+        None => Ok(AbortSwitchOutcome::NoPreparedSwitch),
+        Some(journal) if journal.phase == SwitchPhase::Prepared => {
+            remove_journal(root)?;
+            Ok(AbortSwitchOutcome::Aborted)
+        }
+        Some(journal) => Ok(AbortSwitchOutcome::NotPrepared(journal.phase)),
     }
-    Ok(())
 }
 
 pub fn finish_pending_switch(root: &Path) -> AccountResult<()> {
@@ -511,10 +525,46 @@ pub fn create_pending_cloud_account(
 
 /// Mark the current pending account verified after the cloud server accepted
 /// its identity. The database must already be bound to the same email/API URL.
+/// Validate a cloud identity against the registry's current active account.
+/// This is intentionally independent of any account id supplied by a WebView.
+/// Pending cloud accounts must match both their registered email and canonical
+/// API server; anonymous/default accounts may still log in for the first time.
+pub fn verify_cloud_identity(root: &Path, email: &str, api_url: &str) -> AccountResult<()> {
+    let registry = AccountRegistry::load(root)?;
+    let active = registry.active();
+    if active.kind != AccountKind::Cloud {
+        // The anonymous/default data space has no registry identity to check;
+        // its database binding is validated by sync_initialize_cloud itself.
+        return Ok(());
+    }
+    let expected_email = active.email.as_deref().ok_or_else(|| {
+        AccountError::VerificationMismatch("cloud account has no registered email".to_owned())
+    })?;
+    if normalize_email(email) != normalize_email(expected_email) {
+        return Err(AccountError::VerificationMismatch(
+            "login email does not match the active account".to_owned(),
+        ));
+    }
+    if let Some(expected_api_url) = active.api_url.as_deref()
+        && normalize_api_url(api_url)? != expected_api_url
+    {
+        return Err(AccountError::VerificationMismatch(
+            "login API server does not match the active account".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn mark_account_verified(root: &Path) -> AccountResult<AccountSummary> {
     let mut registry = AccountRegistry::load(root)?;
     let active_id = registry.active_account_id.clone();
     let active = registry.active().clone();
+    if !active.pending {
+        // Verification is idempotent for legacy/already-bound accounts. Only a
+        // pending account has an identity that must be promoted after cloud
+        // initialization; do not hide a genuine mismatch in that flow.
+        return Ok(summary_from_record(&active, &registry.active_account_id));
+    }
     if active.kind != AccountKind::Cloud {
         return Err(AccountError::InvalidRegistry(
             "anonymous account cannot be marked verified".to_owned(),

@@ -22,8 +22,9 @@ pub use registry::{
 };
 pub use snapshot::{DataSnapshot, VerificationSummary, read_snapshot, verify_integrity};
 pub use switch::{
-    AccountList, AccountSummary, PendingAccountSwitch, SwitchFailure, SwitchPhase, SwitchRecovery,
-    SwitchStatus, abort_prepared_switch, create_pending_cloud_account, finish_pending_switch,
-    list_accounts, mark_account_verified, prepare_account_switch, recover_pending_switch,
-    request_account_switch, rollback_pending_switch, switch_status,
+    AbortSwitchOutcome, AccountList, AccountSummary, PendingAccountSwitch, SwitchFailure,
+    SwitchPhase, SwitchRecovery, SwitchStatus, abort_prepared_switch, create_pending_cloud_account,
+    finish_pending_switch, list_accounts, mark_account_verified, prepare_account_switch,
+    recover_pending_switch, request_account_switch, rollback_pending_switch, switch_status,
+    verify_cloud_identity,
 };

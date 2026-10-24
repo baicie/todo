@@ -469,7 +469,7 @@ pub enum CloudMergeMode {
     Cloud,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudInitializeRequest {
     pub snapshot: CloudSnapshot,

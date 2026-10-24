@@ -825,7 +825,7 @@ impl TodoStore {
         &self,
         request: CloudInitializeRequest,
     ) -> StoreResult<CloudInitializeResult> {
-        let account_email = request.account_email.trim().to_owned();
+        let account_email = request.account_email.trim().to_ascii_lowercase();
         if account_email.is_empty() {
             return Err(StoreError::Validation("accountEmail 不能为空".to_owned()));
         }

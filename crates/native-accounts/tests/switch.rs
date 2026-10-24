@@ -2,10 +2,11 @@ use std::fs;
 
 use tempfile::TempDir;
 use todo_native_accounts::{
-    AccountRegistry, DEFAULT_ACCOUNT_ID, PendingAccountSwitch, SwitchPhase,
-    create_pending_cloud_account, ensure_active_account, finish_pending_switch, list_accounts,
-    mark_account_verified, prepare_account_switch, read_snapshot, recover_pending_switch,
-    request_account_switch, switch_status,
+    AbortSwitchOutcome, AccountRegistry, DEFAULT_ACCOUNT_ID, PendingAccountSwitch, SwitchPhase,
+    abort_prepared_switch, create_pending_cloud_account, ensure_active_account,
+    finish_pending_switch, list_accounts, mark_account_verified, prepare_account_switch,
+    read_snapshot, recover_pending_switch, request_account_switch, switch_status,
+    verify_cloud_identity,
 };
 use todo_native_core::{CloudInitializeRequest, CloudMergeMode, CloudSnapshot, NewTask, TodoStore};
 
@@ -349,6 +350,81 @@ fn cloud_server_identity_is_required_before_account_is_marked_verified() {
     assert!(!account.pending);
     let registry = AccountRegistry::load(&root).expect("registry");
     assert!(!registry.active().pending);
+    assert!(verify_cloud_identity(&root, "verify@example.com", "https://verify.example").is_ok());
+    assert!(verify_cloud_identity(&root, "other@example.com", "https://verify.example").is_err());
+    assert!(verify_cloud_identity(&root, "verify@example.com", "https://other.example").is_err());
+}
+
+#[test]
+fn abort_only_accepts_prepared_and_is_idempotent_after_success() {
+    let (_dir, root, target_id) = create_two_accounts();
+    prepare_account_switch(&root, &target_id).expect("prepare");
+    assert_eq!(
+        abort_prepared_switch(&root).expect("abort"),
+        AbortSwitchOutcome::Aborted
+    );
+    assert_eq!(
+        abort_prepared_switch(&root).expect("repeat abort"),
+        AbortSwitchOutcome::NoPreparedSwitch
+    );
+    assert!(switch_status(&root).expect("status").active);
+
+    let prepared = prepare_account_switch(&root, &target_id).expect("prepare 2");
+    request_account_switch(&root, &target_id, prepared.generation.expect("generation"))
+        .expect("request");
+    assert_eq!(
+        abort_prepared_switch(&root).expect("requested journal"),
+        AbortSwitchOutcome::NotPrepared(SwitchPhase::RestartRequired)
+    );
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::RestartRequired),
+        "abort must not remove an advanced journal"
+    );
+}
+
+#[test]
+fn mark_verified_is_idempotent_for_non_pending_accounts() {
+    let (_dir, root) = temp_root();
+    ensure_active_account(&root).expect("default");
+    let before = AccountRegistry::load(&root).expect("registry");
+    let summary = mark_account_verified(&root).expect("no-op for anonymous/default");
+    assert_eq!(summary.id, DEFAULT_ACCOUNT_ID);
+    assert!(!summary.pending);
+    let after = AccountRegistry::load(&root).expect("registry");
+    assert_eq!(after.active_account_id, before.active_account_id);
+    assert_eq!(after.active().pending, before.active().pending);
+}
+
+#[test]
+fn pending_identity_validation_is_registry_authoritative() {
+    let (_dir, root) = temp_root();
+    ensure_active_account(&root).expect("default");
+    assert!(verify_cloud_identity(&root, "any@example.com", "https://any.example").is_ok());
+
+    let target =
+        create_pending_cloud_account(&root, "b@example.com", "https://b.example").expect("pending");
+    let prepared = prepare_account_switch(&root, &target.id).expect("prepare");
+    request_account_switch(&root, &target.id, prepared.generation.expect("generation"))
+        .expect("request");
+    recover_pending_switch(&root).expect("recover");
+    finish_pending_switch(&root).expect("finish");
+    ensure_active_account(&root).expect("B active");
+
+    assert!(verify_cloud_identity(&root, "b@example.com", "https://b.example").is_ok());
+    assert!(verify_cloud_identity(&root, "c@example.com", "https://b.example").is_err());
+    assert!(verify_cloud_identity(&root, "b@example.com", "https://c.example").is_err());
+    let error = mark_account_verified(&root).expect_err("unbound DB cannot be verified");
+    assert!(matches!(
+        error,
+        todo_native_accounts::AccountError::VerificationMismatch(_)
+    ));
+    assert!(
+        AccountRegistry::load(&root)
+            .expect("registry")
+            .active()
+            .pending
+    );
 }
 
 #[test]
