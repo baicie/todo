@@ -18,6 +18,8 @@ pub struct VerificationSummary {
     pub sync_cursor: Option<String>,
     pub client_seq: Option<String>,
     pub bound_account: Option<String>,
+    #[serde(default)]
+    pub bound_api_url: Option<String>,
     pub outbox_count: usize,
     pub shadow_count: usize,
     pub schema_versions: Vec<i64>,
@@ -33,6 +35,8 @@ pub struct DataSnapshot {
     pub sync_cursor: Option<String>,
     pub client_seq: Option<String>,
     pub bound_account: Option<String>,
+    #[serde(default)]
+    pub bound_api_url: Option<String>,
     pub outbox_rows: Vec<String>,
     pub shadow_rows: Vec<String>,
     pub schema_versions: Vec<i64>,
@@ -48,6 +52,7 @@ struct FingerprintInput<'a> {
     sync_cursor: &'a Option<String>,
     client_seq: &'a Option<String>,
     bound_account: &'a Option<String>,
+    bound_api_url: &'a Option<String>,
     outbox_rows: &'a [String],
     shadow_rows: &'a [String],
     schema_versions: &'a [i64],
@@ -63,6 +68,7 @@ impl DataSnapshot {
             sync_cursor: self.sync_cursor.clone(),
             client_seq: self.client_seq.clone(),
             bound_account: self.bound_account.clone(),
+            bound_api_url: self.bound_api_url.clone(),
             outbox_count: self.outbox_rows.len(),
             shadow_count: self.shadow_rows.len(),
             schema_versions: self.schema_versions.clone(),
@@ -105,16 +111,17 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
             );
         }
     }
-    let (device_id, sync_cursor, client_seq, bound_account) =
+    let (device_id, sync_cursor, client_seq, bound_account, bound_api_url) =
         if table_exists(&connection, "kv_state")? {
             (
                 kv_get(&connection, "device_id")?,
                 kv_get(&connection, "sync_cursor")?,
                 kv_get(&connection, "client_seq")?,
                 kv_get(&connection, "bound_account")?,
+                kv_get(&connection, "bound_api_url")?,
             )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
     let outbox_rows = if table_exists(&connection, "outbox")? {
         let mut statement = connection.prepare(
@@ -177,6 +184,7 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
         sync_cursor,
         client_seq,
         bound_account,
+        bound_api_url,
         outbox_rows,
         shadow_rows,
         schema_versions,
@@ -190,6 +198,7 @@ pub fn read_snapshot(path: &Path) -> AccountResult<DataSnapshot> {
         sync_cursor: &snapshot.sync_cursor,
         client_seq: &snapshot.client_seq,
         bound_account: &snapshot.bound_account,
+        bound_api_url: &snapshot.bound_api_url,
         outbox_rows: &snapshot.outbox_rows,
         shadow_rows: &snapshot.shadow_rows,
         schema_versions: &snapshot.schema_versions,

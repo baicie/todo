@@ -469,12 +469,14 @@ pub enum CloudMergeMode {
     Cloud,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudInitializeRequest {
     pub snapshot: CloudSnapshot,
     pub mode: CloudMergeMode,
     pub account_email: String,
+    #[serde(default)]
+    pub account_api_url: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -494,6 +496,7 @@ pub struct SyncDiagnostics {
     pub pending: i64,
     pub rejected: i64,
     pub bound_account: Option<String>,
+    pub bound_api_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

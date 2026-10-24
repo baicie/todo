@@ -59,6 +59,10 @@ pub fn installation_state_file(root: &Path) -> PathBuf {
     root.join("installation-state.json")
 }
 
+pub fn pending_account_switch_file(root: &Path) -> PathBuf {
+    root.join("pending-account-switch.json")
+}
+
 pub fn migration_backups_dir(root: &Path) -> PathBuf {
     root.join("migration-backups")
 }

@@ -489,6 +489,15 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     window.addEventListener('keydown', onKeydown);
     void refreshReminders();
     void cloud.initialize();
+    if (props.platform.startupSwitchFailure) {
+      showToast('上次账号切换未完成，已恢复原账号', {
+        tone: 'danger',
+        actionLabel: '查看',
+        action: async () => {
+          setSettingsOpen(true);
+        },
+      });
+    }
     if (props.platform.kind === 'web' && 'serviceWorker' in navigator && import.meta.env.PROD) {
       void navigator.serviceWorker.register('/sw.js').catch(() => {});
     }

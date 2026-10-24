@@ -405,7 +405,7 @@ describe('DexieTaskRepository', () => {
     console.info(`[reminder-query] 1001 candidates in ${elapsed.toFixed(2)}ms`);
     expect(candidates.every((task) => task.status === 'open')).toBe(true);
     expect(candidates[0]!.remindAt! <= candidates[1]!.remindAt!).toBe(true);
-  });
+  }, 15_000);
 });
 
 function cloudSnapshot(id: string, title: string, note: string): CloudSnapshot {

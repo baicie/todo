@@ -118,6 +118,8 @@ impl TodoStore {
         let cursor = kv_string(&connection, "sync_cursor").unwrap_or_else(|| "0".to_owned());
         let bound_account =
             kv_string(&connection, "bound_account").filter(|value| !value.is_empty());
+        let bound_api_url =
+            kv_string(&connection, "bound_api_url").filter(|value| !value.is_empty());
         let pending: i64 = connection.query_row(
             "SELECT COUNT(*) FROM outbox WHERE sync_status = 'pending'",
             [],
@@ -135,6 +137,7 @@ impl TodoStore {
             pending,
             rejected,
             bound_account,
+            bound_api_url,
         })
     }
 
@@ -166,6 +169,7 @@ impl TodoStore {
         let transaction = connection.transaction()?;
         transaction.execute("DELETE FROM outbox", [])?;
         kv_delete(&transaction, "bound_account")?;
+        kv_delete(&transaction, "bound_api_url")?;
         kv_set(&transaction, "sync_enabled", "false")?;
         kv_set(&transaction, "sync_cursor", "0")?;
         kv_set(&transaction, "client_seq", "0")?;
@@ -821,10 +825,16 @@ impl TodoStore {
         &self,
         request: CloudInitializeRequest,
     ) -> StoreResult<CloudInitializeResult> {
-        let account_email = request.account_email.trim().to_owned();
+        let account_email = request.account_email.trim().to_ascii_lowercase();
         if account_email.is_empty() {
             return Err(StoreError::Validation("accountEmail 不能为空".to_owned()));
         }
+        let account_api_url = request
+            .account_api_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('/').to_ascii_lowercase());
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
         assert_sync_session(&transaction, request.session_id.as_deref())?;
@@ -1102,6 +1112,11 @@ impl TodoStore {
         }
         kv_set(&transaction, "sync_cursor", &remote.cursor)?;
         kv_set(&transaction, "bound_account", &account_email)?;
+        if let Some(api_url) = &account_api_url {
+            kv_set(&transaction, "bound_api_url", api_url)?;
+        } else {
+            kv_delete(&transaction, "bound_api_url")?;
+        }
         kv_set(&transaction, "bootstrap_required", "0")?;
         transaction.commit()?;
         Ok(CloudInitializeResult {

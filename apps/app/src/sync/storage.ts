@@ -12,6 +12,7 @@ export interface CloudDiagnostics {
   pending: number;
   rejected: number;
   boundAccount: string | null;
+  boundApiUrl?: string | null;
 }
 
 export interface CloudInitializeResult {
@@ -66,6 +67,7 @@ export interface CloudSyncStorage extends TaskRepository {
     mode: CloudMergeMode,
     accountEmail: string,
     sessionId?: string,
+    accountApiUrl?: string,
   ): Promise<CloudInitializeResult>;
   syncReplaceSnapshot(snapshot: CloudSnapshot, sessionId?: string): Promise<void>;
   syncSetEnabled(enabled: boolean): Promise<void>;

@@ -270,6 +270,49 @@ enum Ownership {
     Ambiguous { reason: String },
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyReviewReport {
+    pub reason: Option<String>,
+    pub source_file: String,
+    pub backup_file: Option<String>,
+    pub source_fingerprint: Option<String>,
+    pub backup_fingerprint: Option<String>,
+    pub requires_manual_identity_verification: bool,
+}
+
+/// Read-only diagnosis for a legacy database blocked as REQUIRES_REVIEW.
+/// This never writes registry/DB state and never offers a force-bind shortcut.
+pub fn legacy_review_report(root: &Path) -> AccountResult<Option<LegacyReviewReport>> {
+    let Some(state) = MigrationState::load(root)? else {
+        return Ok(None);
+    };
+    if state.phase != MigrationPhase::RequiresReview {
+        return Ok(None);
+    }
+    let source = legacy_database_path(root);
+    let source_fingerprint = source
+        .is_file()
+        .then(|| read_snapshot(&source).map(|snapshot| snapshot.fingerprint))
+        .transpose()?;
+    let backup_fingerprint = state
+        .backup_file
+        .as_deref()
+        .map(|relative| {
+            let path = root.join(relative);
+            read_snapshot(&path).map(|snapshot| snapshot.fingerprint)
+        })
+        .transpose()?;
+    Ok(Some(LegacyReviewReport {
+        reason: state.reason,
+        source_file: state.source_file,
+        backup_file: state.backup_file,
+        source_fingerprint,
+        backup_fingerprint,
+        requires_manual_identity_verification: true,
+    }))
+}
+
 pub fn ensure_active_account(root: &Path) -> AccountResult<ActiveAccountContext> {
     let root = ensure_data_root(root)?;
     let legacy_source = legacy_database_path(&root);
@@ -342,12 +385,36 @@ pub fn ensure_active_account(root: &Path) -> AccountResult<ActiveAccountContext>
             Err(needs_review(&state, &root))
         }
         Some(state) if state.phase == MigrationPhase::Complete => {
-            verify_complete_migration(&state, &registry, &target)?;
+            let migration_target = state.target_account_id.as_deref().ok_or_else(|| {
+                AccountError::InvalidRegistry("COMPLETE migration has no target account".to_owned())
+            })?;
+            if active.id == migration_target {
+                verify_complete_migration(&state, &registry, &target)?;
+            } else {
+                // RC2-B: after the user switches to another account, the
+                // historical migration target is no longer active. It must
+                // still exist and be structurally sound, but it must not
+                // constrain which account is active.
+                if !target.is_file() {
+                    return Err(AccountError::ActiveAccountMissing(active.id.clone()));
+                }
+                crate::snapshot::verify_integrity(&target)?;
+                let migration_target_dir = ensure_account_dir(&root, migration_target)?;
+                let migration_target_db = migration_target_dir.join("shishi.sqlite3");
+                validate_database_path(&migration_target_db)?;
+                if !migration_target_db.is_file() {
+                    return Err(AccountError::ActiveAccountMissing(
+                        migration_target.to_owned(),
+                    ));
+                }
+                crate::snapshot::verify_integrity(&migration_target_db)?;
+            }
+            let migrated = active.id == migration_target;
             if let Some(account) = registry.account_mut(&active.id) {
                 account.touch();
             }
             registry.save(&root)?;
-            ActiveAccountContext::new(&registry, &root, true)
+            ActiveAccountContext::new(&registry, &root, migrated)
         }
         Some(state) => {
             let state_target = state.target_account_id.as_deref().ok_or_else(|| {

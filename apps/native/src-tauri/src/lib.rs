@@ -33,8 +33,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let (store, account) =
-                db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
+            let opened = db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
+            let account = opened.account;
             if account.migrated_from_legacy
                 && account.kind == todo_native_accounts::AccountKind::Cloud
                 && let Err(error) =
@@ -43,10 +43,15 @@ pub fn run() {
                 eprintln!("shishi: legacy refresh token migration failed: {error}");
             }
             let reminders = reminders::create_adapter(app.handle().clone());
+            if let Err(error) =
+                reminders::cleanup_foreign_queue(reminders.as_ref(), &account.account_id)
+            {
+                eprintln!("shishi: stale reminder cleanup failed: {error}");
+            }
             let lifecycle =
                 lifecycle::LifecycleState::load(app.handle()).map_err(std::io::Error::other)?;
             app.manage(lifecycle);
-            app.manage(db::AppState::new(store, reminders, account));
+            app.manage(db::AppState::new(opened.store, reminders, account));
 
             #[cfg(desktop)]
             {
@@ -98,6 +103,15 @@ pub fn run() {
             commands::set_close_to_tray,
             commands::set_autostart,
             commands::native_account_context,
+            commands::native_list_accounts,
+            commands::native_create_account,
+            commands::native_prepare_account_switch,
+            commands::native_request_account_switch,
+            commands::native_abort_account_switch,
+            commands::native_restart_account_recovery,
+            commands::native_account_switch_status,
+            commands::native_verify_cloud_identity,
+            commands::native_mark_account_verified,
             commands::secure_token_get,
             commands::secure_token_set,
             commands::secure_token_remove,

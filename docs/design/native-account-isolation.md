@@ -1,6 +1,6 @@
-# Native 多账号隔离设计（RC2-A 实现版）
+# Native 多账号隔离设计（RC2-A/RC2-B 实现版）
 
-> 状态：RC2-A 底座已实现；仍不开放多账号 UI、热切换和 RC2-B 写入路由。  
+> 状态：RC2-A 存储底座已合并；RC2-B 实现冷切换、切换 journal、运行时写门、账号级 Token/提醒隔离与 Native UI。
 > 约束：旧用户升级不能丢失任务、outbox、shadow、cursor 或设备身份；任何异常都不能把旧数据误归属给云账号。
 
 ## 1. 对旧设计的修正
@@ -152,9 +152,154 @@ FAILED                    # 任一步失败；旧库/备份保留，下次启动
 - 完成后任何异常：不删除旧库、不删除 backup。
 - 旧版本降级：RC2-A 保留根目录旧库，但迁移后的新写入只进入账号目录；发布说明必须注明降级会看不到新写入。
 
-## 7. RC2-B 契约（未实现）
+## 7. RC2-B 冷切换实现
 
-- 真正的账号切换 UI、热切换、提醒取消/重建、WebView 重建。
-- 各账号的云配置读写完全以 active account 为根。
-- 账号删除需要 pending-deletion marker 和重试；不得半删除。
-- 双窗口、真实 Provider、断电级持久性仍需人工验收。
+### 7.1 实际生命周期调用图
+
+```text
+Tauri setup
+  -> db::open_app_store
+     -> recover_pending_switch(root)
+        -> 验证 target DB / identity，必要时原子切换 registry active
+     -> ensure_active_account(root)
+     -> TodoStore::open(active DB)
+     -> 成功打开 target 后 finish_pending_switch
+     -> 失败则 rollback_pending_switch 恢复 source 并打开 source
+  -> secure token legacy migration（仅迁移并已验证的旧库）
+  -> reminders::create_adapter
+  -> cleanup_foreign_queue(active account)
+  -> AppState { Arc<TodoStore>, reminders, account, RuntimeGate }
+
+WebView
+  -> native_account_context
+  -> adoptNativeAccountContext (localStorage active/config only)
+  -> 动态加载 App/cloud.ts
+  -> cloud controller 初始化 account-scoped config/token
+
+切换
+  -> native_prepare_account_switch(target)
+     -> 检查桌面 restart 能力/active gate
+     -> 关闭 RuntimeGate（拒绝旧账号新写入）
+     -> 等待最多 2s 让 in-flight 本地写完成；超时 fail-closed 并 abort
+     -> 校验 target registry/DB/integrity/email+api server identity
+     -> 写 pending-account-switch.json (PREPARED)
+     -> gate Preparing -> Prepared
+  -> WebView cloud.quiesceForAccountSwitch()
+     -> 停止 timer/poll/生命周期订阅
+     -> 失效 sync generation + 清理 SQLite sync_session fence（唯一允许的 gate 例外）
+     -> 保留 token/config/outbox，不 logout
+  -> native_request_account_switch(target,generation)
+     -> 取消当前账号系统提醒并核对残留
+     -> journal RESTART_REQUIRED
+     -> desktop: tauri::process::restart；mobile: 返回 RESTART_UNSUPPORTED
+  -> 新进程启动协议同上
+```
+
+### 7.2 切换状态机
+
+```text
+ACTIVE
+  -> PREPARED             # 目标预检通过，journal 已持久化，写门关闭
+  -> RESTART_REQUIRED     # 请求已确认，提醒已取消，进程即将重启
+  -> VERIFYING_TARGET     # 新进程已验证 target，registry 将/已指向 target
+  -> ACTIVE               # target Store 打开成功，删除 journal
+  -> FAILED               # target 校验/打开失败，registry 恢复 source
+```
+
+- `PREPARED` 在重启前从未被 request 时，新进程会丢弃它，不自动切换。
+- `RESTART_REQUIRED` / `VERIFYING_TARGET` 在 SIGKILL 后由新进程继续。
+- 目标缺失、损坏、email/API 身份不符或无法打开时，写 `FAILED` 并恢复 source；不创建空目标库。
+- 重复相同 prepare/request 幂等；`generation` 必须匹配。
+- 旧账号 token、cloud config、outbox、DB 均不删除；切换不是登出。
+
+### 7.3 Runtime write gate 与旧连接
+
+- `RuntimeGate` 只允许一个切换关闭 gate；状态为 Active → Draining → Preparing → Prepared → RequestInProgress → RestartRequired，失败进入 DrainFailed 或 Failed。
+- 新 `todo_storage` 请求通过 lease 计数；`begin_switch` 关闭 gate 后最多等待 2 秒 in-flight 本地写。超时返回 `DrainTimeout`，不写 journal、不进入 RESTART_REQUIRED、不重启；命令显式 abort 后重开 gate，旧事务可在 source 正常结束。
+- gate 关闭后：普通 SQLite 写、提醒调度、Token 读写均拒绝；仅 `sync_clear_session` 允许用于 quiesce fence。
+- `Arc<TodoStore>` 从不热替换；进程完整重启释放旧 SQLite 连接。任何切换后继续写入旧账号的路径必须在 gate 处被拒绝。
+- 旧进程迟到 HTTP 响应由既有 generation/session fence 丢弃，不等待无限期请求。
+
+### 7.4 凭据与云配置隔离
+
+- Native 安全命令只允许当前 active account 的 `cloud-refresh:<account-id>`；其他 key 返回 `CROSS_ACCOUNT_TOKEN`。
+- cloud config 仍使用 `shishi.cloud.config[.<account-id>]`；启动时 `adoptNativeAccountContext` 将 target account id 写入 localStorage，再动态加载 cloud 模块。
+- 切换前 `cloud.quiesceForAccountSwitch()` 只清 sync session fence，不删除 Refresh Token、不 revoke 服务端登录、不清 outbox。
+- 账号记录包含 `api_url`；数据库 `kv_state.bound_api_url` 记录已绑定服务端。同邮箱不同 API 服务端创建不同 opaque account，切换时校验 DB 绑定服务端。
+- 未验证的新账号为 `pending=true`，其 DB 为空；不得把 anonymous/default 数据复制给它。登录并写入 bound account/API 后 `mark_account_verified` 清除 pending。
+- RC2-A 旧库只有 bound_account 时，服务端身份未知，不允许用它新建同邮箱其他服务端账号。
+- RC2-A 的 `COMPLETE` 迁移目标在切换后不再是 active。`ensure_active_account` 只对 active == migration target 校验 complete 目标；active 为其他账号时仍校验历史 target 存在/结构，但 `migrated_from_legacy=false`，避免把旧 legacy token 迁移给新账号。
+
+### 7.5 系统提醒隔离
+
+- 原生队列 ID = `account:<account-id>:<task-id>`；桌面 in-memory queue 和移动端持久队列都使用该 ID。
+- 切换 request 先取消当前账号前缀通知及旧版无前缀通知，并再次读取队列核对残留；取消失败返回 `REMINDER_ERROR`，不虚报成功。
+- 新进程 setup 调用 `cleanup_foreign_queue`，仅保留当前账号前缀；随后 WebView reconcile 重新调度当前账号提醒。
+- 旧通知点击不包含任务打开路由；当前代码不会把旧 account 的 task id 解释为 B 的任务。移动端点击路由/开机重排仍是 NOT_RUN 的人工验收项。
+- 平台能力不足/取消失败会向命令调用方返回错误，不宣称成功。
+
+### 7.6 UI 与账号身份
+
+- Native Tauri 下显示 registry 账号列表、当前账号、最近打开时间、pending 标记。
+- 切换确认显示旧账号 pending outbox 数量；确认后先 quiesce，再请求冷重启。
+- 添加账号要求邮箱 + API 地址，创建 pending 独立空 DB；登录成功并绑定身份后标为 verified。
+- 移动端目前拒绝冷切换并明确提示未实现，不伪造成功。
+- Web 端原有 localStorage 切账号仅保留给 Web 模式；Native 端 `switchAccount`/`createAndSwitchAccount` 会拒绝直接修改 localStorage。
+- 不提供破坏性账号目录删除。
+
+### 7.7 REQUIRES_REVIEW 诊断
+
+`legacy_review_report(root)` 是只读诊断：返回 reason、source/backup 路径与指纹、`requires_manual_identity_verification=true`。它不写 registry、不打开空库、不提供 force-bind。恢复流程必须由独立工具在服务端身份校验后执行；不能在 UI 中简化为“强制绑定”按钮。
+
+## 8. RC2-B.1 Review Closure
+
+复审的四个 P0 都在原有冷切换架构内关闭，没有扩展账号删除、热切换或移动端重启。
+
+### 8.1 Pending 身份写前校验
+
+- 新增 `verify_cloud_identity(root, email, api_url)`：直接读取 registry 当前 active 账号；Cloud 账号要求规范化邮箱一致，登记了 `api_url` 时还要求规范化服务端一致。WebView 不提交 account id，Native 不依赖 localStorage。
+- `todo_storage` 在 `sync_initialize_cloud` 进入任何 SQLite 事务前，再次检查 registry 身份和当前 DB 的 `bound_account/bound_api_url`；失败返回 `ACCOUNT_IDENTITY_MISMATCH`，不调用 dispatch。
+- 前端在 `requestCode`、`verifyCode`（device rotation 之前）、Merge 初始化和 `syncInitializeCloud` 之前调用 Native 预检。Native 的末尾校验仍是最终权威，防绕过/迟到响应。
+- `markAccountVerified` 不再吞错；先验证/标记 pending，再 `activateCloud`，因此失败不会显示 connected/synced。非 pending/legacy 账号的标记为幂等 no-op。
+- `sync_initialize_cloud` 的 bound email 统一小写，API URL 统一 scheme/host 大小写和尾斜杠规范化。
+
+### 8.2 RuntimeGate 事务排空
+
+`RuntimeGate` 状态：
+
+```text
+Active -> Draining -> Preparing -> Prepared
+                      |              |
+                      v              v
+                  DrainFailed     RequestInProgress -> RestartRequired
+                                                      |
+                                                      v
+                                                    Failed
+```
+
+- 新写入在 `Draining` 起点立即拒绝；`Draining` 用 Condvar 等待 in-flight lease 清零。超过 2 秒返回 `DrainTimeout`，设置 `DrainFailed`，**不创建 journal、不请求重启、不进入 RESTART_REQUIRED**。
+- `native_prepare` 在 drain 成功后写 journal；只有 journal 成功才进入 `Prepared`。drain 超时由命令显式 abort 并重开 gate。
+- 成功路径只允许 in-flight 写正常完成；不会在仍有 lease 时退出进程。超时路径由旧事务自然结束后保持 source DB/outbox 一致。
+- request 失败一律 `Failed`，不再回到可写或可 abort 状态；只能冷启动恢复。
+
+### 8.3 失败后的完整恢复
+
+- request 前失败（target 校验、drain timeout、用户取消且 abort 成功）：Native gate 恢复 Active；Cloud Controller 从未 quiesce，可继续使用。
+- quiesce 后任何失败（提醒取消、journal 写入、restart spawn 失败）或 abort 本身失败：Native gate 保持关闭/`Failed`，Cloud Controller 保持 disposed；前端调用 `native_restart_account_recovery` 冷启动进程。新进程从 source DB 重建 CloudController、session fence、timer/listener，并由 App 重新 reconcile 提醒。
+- 不允许在已 disposed 的 CloudController 上原地 `initialize`；也不允许 Native 打开 gate 与 disposed controller 并存。
+- 切换器不删除 outbox、token、cloud config 或旧 DB；失败时 source 数据保持原值。
+
+### 8.4 Abort / Request 原子性
+
+- `abort_prepared_switch` 返回 `Aborted`、`NoPreparedSwitch` 或 `NotPrepared(phase)`；只有 PREPARED 可被删除，其他 phase 不删除 journal。
+- request 和 abort 共享同一 gate 控制锁：request 从一开始持有 `RequestInProgress`，abort 无法插入；request 提交 `RestartRequired` 后 abort 返回 `NotAbortable`，gate 保持关闭。
+- 重复 abort：已成功 abort 后 gate Active/无 journal 返回幂等成功；journal 已推进则返回错误并 fail-closed，不会重新开放写门。
+- 只有显式 abort 成功才执行 `activate_after_abort`；没有无条件 `reset_after_failure`。
+
+### 8.5 恢复命令
+
+新增 Tauri command `native_restart_account_recovery`：仅调度整进程重启用于失败恢复，不 reset gate、不复用 WebView session。UI 在无法自动重启时显示“完全退出并重新打开应用”，不会宣称已恢复。
+
+### 8.6 未覆盖
+
+真实 `tauri::process::restart` 安装包环境、移动端、keyring、通知点击/开机重排、断电级 SIGKILL、双设备/100k 仍为 NOT_RUN；这些属于平台验收，不用来替代已由代码/自动测试关闭的四个 P0。

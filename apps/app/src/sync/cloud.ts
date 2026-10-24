@@ -68,6 +68,8 @@ export interface CloudController {
   state: Accessor<CloudState>;
   initialize(): Promise<void>;
   dispose(): void;
+  /** Stop timers, listeners and sync writes before a cold account switch. */
+  quiesceForAccountSwitch(): Promise<void>;
   setApiUrl(value: string): void;
   setEmail(value: string): void;
   requestCode(): Promise<void>;
@@ -121,6 +123,20 @@ class RepositorySyncStore {
 function defaultApiUrl(): string {
   const configured = import.meta.env.VITE_API_URL as string | undefined;
   return configured?.replace(/\/$/, '') ?? 'http://127.0.0.1:8787';
+}
+
+function normalizeApiUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'string' && error.trim()) return error;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
 }
 
 function readConfig(): StoredConfig | null {
@@ -577,6 +593,24 @@ export function createCloudController(options: {
     }
   };
 
+  const verifyCloudIdentity = async (): Promise<{ email: string; apiUrl: string }> => {
+    const identity = {
+      email: state().email.trim().toLowerCase(),
+      apiUrl: normalizeApiUrl(state().apiUrl),
+    };
+    // Native validates the registry's active account, not an account id from
+    // localStorage. The Native todo_storage dispatcher repeats this check
+    // immediately before the SQLite cloud-initialization transaction.
+    await platform.verifyCloudIdentity?.(identity.email, identity.apiUrl);
+    return identity;
+  };
+
+  const markAccountVerified = async (): Promise<void> => {
+    // Do not swallow identity errors: activation must not advance to connected
+    // or synced until Native has accepted the registry/DB identity binding.
+    await platform.markAccountVerified?.();
+  };
+
   const activateCloud = async (existing?: { generation: number; token: string }) => {
     const session =
       existing && isCurrentGeneration(existing.generation) && sessionToken === existing.token
@@ -632,6 +666,17 @@ export function createCloudController(options: {
   const initialize = async () => {
     const nextDiagnostics = await diagnostics();
     update({ boundAccount: nextDiagnostics.boundAccount });
+    if (
+      nextDiagnostics.boundApiUrl &&
+      normalizeApiUrl(nextDiagnostics.boundApiUrl) !== normalizeApiUrl(state().apiUrl)
+    ) {
+      update({
+        phase: 'expired',
+        syncStatus: 'auth-required',
+        error: '本机数据绑定的 API 服务端与当前配置不一致，请切换账号或清除本机数据。',
+      });
+      return;
+    }
     if (!config?.enabled || !config.email) return;
     const initializeGeneration = sessionGeneration;
     buildClients();
@@ -665,12 +710,14 @@ export function createCloudController(options: {
     }
     update({ apiUrl, email, busy: 'code', error: null });
     try {
+      const identity = await verifyCloudIdentity();
+      update({ apiUrl: identity.apiUrl, email: identity.email });
       buildClients();
-      await auth!.requestCode(email);
+      await auth!.requestCode(identity.email);
       update({ phase: 'code-sent' });
       persist(false);
     } catch (error) {
-      update({ error: error instanceof Error ? error.message : '验证码发送失败' });
+      update({ error: errorMessage(error, '验证码发送失败') });
     } finally {
       update({ busy: null });
     }
@@ -680,16 +727,20 @@ export function createCloudController(options: {
     if (!auth) buildClients();
     update({ busy: 'verify', error: null });
     try {
+      // Validate before device rotation, token writes, snapshot fetches or any
+      // cloud-data transaction. Native repeats this at the storage boundary.
+      const identity = await verifyCloudIdentity();
+      update({ apiUrl: identity.apiUrl, email: identity.email });
       const deviceId = await repository.syncRotateDevice();
       const tokens = await auth!.verifyCode({
-        email: state().email.trim().toLowerCase(),
+        email: identity.email,
         code: code.trim(),
         deviceId,
         deviceName: deviceName(platform.lifecycle.platform),
         platform: platform.lifecycle.platform,
       });
       await applyTokens(tokens);
-      updateActiveAccountEmail(state().email.trim().toLowerCase());
+      updateActiveAccountEmail(identity.email);
       await repository.syncSetEnabled(false);
       const nextDiagnostics = await repository.syncGetDiagnostics();
       update({
@@ -698,10 +749,18 @@ export function createCloudController(options: {
       });
       if (
         nextDiagnostics.boundAccount &&
-        nextDiagnostics.boundAccount.toLowerCase() !== state().email.trim().toLowerCase()
+        nextDiagnostics.boundAccount.toLowerCase() !== identity.email
       ) {
         throw new Error(
           `本机数据已绑定 ${nextDiagnostics.boundAccount}。请先在设置中清除本机数据，再登录其他账号。`,
+        );
+      }
+      if (
+        nextDiagnostics.boundApiUrl &&
+        normalizeApiUrl(nextDiagnostics.boundApiUrl) !== identity.apiUrl
+      ) {
+        throw new Error(
+          '本机数据库已绑定另一个 API 服务端，不能在同一数据空间登录该服务。请切换账号。',
         );
       }
       persist(false);
@@ -710,12 +769,18 @@ export function createCloudController(options: {
       const remote = snapshotCounts(snapshot);
       const session = await beginSession();
       if (local.tasks === 0 && local.lists === 0) {
+        // Recheck the same immutable identity immediately before the Native
+        // write and before verification/activation. Late snapshots cannot use
+        // a different account or API server.
+        await platform.verifyCloudIdentity?.(identity.email, identity.apiUrl);
         await repository.syncInitializeCloud(
           snapshot,
           'cloud',
-          state().email.trim().toLowerCase(),
+          identity.email,
           session.token,
+          identity.apiUrl,
         );
+        await markAccountVerified();
         await activateCloud(session);
       } else {
         await prepareMergePreview(snapshot, session);
@@ -732,8 +797,11 @@ export function createCloudController(options: {
       }
       await clearTokens();
       update({
+        phase: 'disconnected',
+        syncStatus: 'idle',
+        mergePreview: null,
         busy: null,
-        error: error instanceof Error ? error.message : '登录失败',
+        error: errorMessage(error, '登录失败'),
       });
       throw error;
     }
@@ -760,18 +828,26 @@ export function createCloudController(options: {
     }
     update({ busy: 'merge', error: null });
     try {
+      const identity = await verifyCloudIdentity();
       const session = pendingSession ?? (await beginSession());
+      await platform.verifyCloudIdentity?.(identity.email, identity.apiUrl);
       await repository.syncInitializeCloud(
         pendingSnapshot,
         mode,
-        state().email.trim().toLowerCase(),
+        identity.email,
         session.token,
+        identity.apiUrl,
       );
+      await markAccountVerified();
       pendingSnapshot = null;
       pendingSession = null;
       await activateCloud(session);
     } catch (error) {
-      update({ error: error instanceof Error ? error.message : '合并失败' });
+      update({
+        phase: 'disconnected',
+        syncStatus: 'idle',
+        error: errorMessage(error, '合并失败'),
+      });
       throw error;
     } finally {
       update({ busy: null });
@@ -1038,6 +1114,16 @@ export function createCloudController(options: {
     return auth.sharedRequest<T>(path, init);
   };
 
+  const quiesceForAccountSwitch = async (): Promise<void> => {
+    if (disposed) return;
+    persist();
+    disposed = true;
+    // Stops timers/listeners, increments generation and clears the SQLite
+    // session fence. In-flight HTTP promises are not awaited indefinitely;
+    // their generation checks make late responses no-ops.
+    await invalidateSession();
+  };
+
   const dispose = () => {
     disposed = true;
     void invalidateSession();
@@ -1047,6 +1133,7 @@ export function createCloudController(options: {
     state,
     initialize,
     dispose,
+    quiesceForAccountSwitch,
     setApiUrl(value) {
       update({ apiUrl: value, error: null });
     },
