@@ -245,6 +245,12 @@ export async function nativeAbortAccountSwitch(): Promise<void> {
   await invokeNative('native_abort_account_switch');
 }
 
+/** Cold-restart the process after a failed switch. Never reuses the disposed
+ * Cloud Controller or an in-memory WebView session. */
+export async function nativeRestartAccountRecovery(): Promise<void> {
+  await invokeNative('native_restart_account_recovery');
+}
+
 export async function nativeAccountSwitchStatus(): Promise<NativeSwitchStatus> {
   return invokeNative<NativeSwitchStatus>('native_account_switch_status');
 }

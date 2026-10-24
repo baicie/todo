@@ -186,11 +186,166 @@ describe('cloud sync session lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
+  it('rejects a native pending identity before rotating the device or fetching cloud data', async () => {
+    const repository = new DexieTaskRepository(`lifecycle-identity-preflight-${databaseCounter}`);
+    await repository.initialize();
+    await repository.createTask({ title: 'local pending task', listId: null });
+    const beforeTasks = await repository.listTasks({ view: 'all', limit: 1000 });
+    const beforeDiagnostics = await repository.syncGetDiagnostics();
+    const platform = fakePlatform();
+    (platform as AppPlatform).repository = repository;
+    platform.verifyCloudIdentity = vi.fn(async () => {
+      throw Object.assign(new Error('pending account identity mismatch'), {
+        code: 'ACCOUNT_IDENTITY_MISMATCH',
+      });
+    });
+    platform.markAccountVerified = vi.fn(async () => {});
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes('/auth/logout')) return new Response(null, { status: 204 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cloud = createCloudController({ platform, repository });
+    cloud.setApiUrl('https://c.example');
+    cloud.setEmail('c@example.com');
+    await expect(cloud.verifyCode('123456')).rejects.toThrow('pending account identity mismatch');
+
+    expect(platform.verifyCloudIdentity).toHaveBeenCalledWith('c@example.com', 'https://c.example');
+    expect(requestedUrls.some((url) => url.includes('/auth/verify'))).toBe(false);
+    expect(requestedUrls.some((url) => url.includes('/sync/bootstrap'))).toBe(false);
+    expect(requestedUrls.some((url) => url.includes('/api/v1/sync'))).toBe(false);
+    expect(await repository.listTasks({ view: 'all', limit: 1000 })).toEqual(beforeTasks);
+    expect(await repository.syncGetDiagnostics()).toEqual(beforeDiagnostics);
+    expect(cloud.state().phase).not.toBe('connected');
+    expect(cloud.state().syncStatus).not.toBe('synced');
+    cloud.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects a late identity change immediately before cloud initialization', async () => {
+    const repository = new DexieTaskRepository(`lifecycle-identity-delayed-${databaseCounter}`);
+    await repository.initialize();
+    vi.spyOn(repository, 'exportData').mockResolvedValue({
+      format: 'todo-export',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appVersion: '1.0.0',
+      tasks: [],
+      lists: [],
+      steps: [],
+      dayPlans: [],
+    });
+    const initializeSpy = vi.spyOn(repository, 'syncInitializeCloud');
+    const platform = fakePlatform();
+    (platform as AppPlatform).repository = repository;
+    const verify = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce({
+      code: 'ACCOUNT_IDENTITY_MISMATCH',
+      message: 'identity changed before cloud write',
+    });
+    platform.verifyCloudIdentity = verify;
+    platform.markAccountVerified = vi.fn(async () => {});
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/code/verify')) return tokenResponse();
+      if (url.includes('/api/v1/sync/bootstrap')) {
+        return new Response(
+          JSON.stringify({
+            entities: [],
+            snapshot_cursor: '0',
+            next_page: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/auth/logout')) return new Response(null, { status: 204 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cloud = createCloudController({ platform, repository });
+    cloud.setApiUrl('https://b.example');
+    cloud.setEmail('c@example.com');
+    await expect(cloud.verifyCode('123456')).rejects.toMatchObject({
+      message: 'identity changed before cloud write',
+    });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(initializeSpy).not.toHaveBeenCalled();
+    expect(platform.markAccountVerified).not.toHaveBeenCalled();
+    expect(cloud.state().phase).not.toBe('connected');
+    expect(cloud.state().syncStatus).not.toBe('synced');
+    cloud.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not advance to connected when native account verification fails', async () => {
+    const repository = new DexieTaskRepository(`lifecycle-identity-mark-${databaseCounter}`);
+    await repository.initialize();
+    vi.spyOn(repository, 'exportData').mockResolvedValue({
+      format: 'todo-export',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appVersion: '1.0.0',
+      tasks: [],
+      lists: [],
+      steps: [],
+      dayPlans: [],
+    });
+    const platform = fakePlatform();
+    (platform as AppPlatform).repository = repository;
+    platform.verifyCloudIdentity = vi.fn(async () => {});
+    platform.markAccountVerified = vi.fn(async () => {
+      throw {
+        code: 'ACCOUNT_IDENTITY_MISMATCH',
+        message: 'native account verification was rejected',
+      };
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/code/verify')) return tokenResponse();
+      if (url.includes('/api/v1/sync/bootstrap')) {
+        return new Response(
+          JSON.stringify({
+            entities: [],
+            snapshot_cursor: '0',
+            next_page: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/auth/logout')) return new Response(null, { status: 204 });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cloud = createCloudController({ platform, repository });
+    cloud.setApiUrl('https://b.example');
+    cloud.setEmail('b@example.com');
+    await expect(cloud.verifyCode('123456')).rejects.toMatchObject({
+      message: 'native account verification was rejected',
+    });
+
+    expect(platform.markAccountVerified).toHaveBeenCalledTimes(1);
+    expect(cloud.state().phase).not.toBe('connected');
+    expect(cloud.state().syncStatus).not.toBe('synced');
+    expect(cloud.state().error).toContain('native account verification was rejected');
+    cloud.dispose();
+    vi.unstubAllGlobals();
+  });
+
   it('quiescing for an account switch rejects a late old-account response', async () => {
     const repository = new DexieTaskRepository(`lifecycle-switch-${databaseCounter}`);
     await repository.initialize();
     const platform = fakePlatform();
     (platform as AppPlatform).repository = repository;
+    const removeToken = vi.fn(async () => {});
+    platform.secureTokenStore.remove = removeToken;
 
     let resolveSync!: (response: Response) => void;
     let syncStarted!: () => void;
@@ -222,6 +377,7 @@ describe('cloud sync session lifecycle', () => {
     expect(await repository.getTask(LATE_TASK)).toBeNull();
     expect(await repository.syncGetPendingCount()).toBe(0);
     expect(await repository.syncGetCursor()).toBe('0');
+    expect(removeToken).not.toHaveBeenCalled();
     cloud.dispose();
     vi.unstubAllGlobals();
   });

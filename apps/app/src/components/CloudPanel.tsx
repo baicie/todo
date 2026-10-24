@@ -31,6 +31,7 @@ import {
   nativeListAccounts,
   nativePrepareAccountSwitch,
   nativeRequestAccountSwitch,
+  nativeRestartAccountRecovery,
   rememberNativeAccount,
   switchAccount,
   type NativeAccountSummary,
@@ -49,6 +50,22 @@ const STATUS_LABEL: Record<string, string> = {
   error: '同步异常',
   'auth-required': '登录过期',
 };
+
+function commandErrorCode(error: unknown): string | null {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : null;
+  }
+  return null;
+}
+
+function commandErrorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return error instanceof Error ? error.message : '账号切换失败';
+}
 
 function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
@@ -117,6 +134,25 @@ export function CloudPanel(props: CloudPanelProps) {
     setNativeError(null);
     setNativeBusy(target.id);
     let prepared = false;
+    let coldRecoveryRequired = false;
+
+    const recoverOldAccount = async (cause: unknown) => {
+      const detail = commandErrorMessage(cause);
+      setNativeError(`切换未完成，正在冷重启并恢复旧账号：${detail}`);
+      setNativeBusy('recovering');
+      try {
+        await nativeRestartAccountRecovery();
+        setNativeBusy('restarting');
+      } catch (restartError) {
+        setNativeBusy('recovery-required');
+        setNativeError(
+          `旧账号切换未完成且无法自动重启。请完全退出并重新打开应用：${commandErrorMessage(
+            restartError,
+          )}`,
+        );
+      }
+    };
+
     try {
       const status = await nativePrepareAccountSwitch(target.id);
       prepared = true;
@@ -128,24 +164,36 @@ export function CloudPanel(props: CloudPanelProps) {
       if (!window.confirm(warning)) {
         try {
           await nativeAbortAccountSwitch();
-        } catch {
-          // The gate is reset by the command itself when it is reachable; a
-          // transport failure still requires a process restart to clear it.
+        } catch (abortError) {
+          await recoverOldAccount(abortError);
+          return;
         }
         prepared = false;
         setNativeBusy(null);
         return;
       }
-      // Stop timers, listeners, polling and the SQLite sync-session fence
-      // before the native side closes the write gate and requests restart.
+      // From here the old Cloud Controller must never be reused in-place.
+      // Stop timers/listeners/fence, then request the native restart. Any
+      // failure cold-restarts this process to rebuild Cloud and reminders.
+      coldRecoveryRequired = true;
       await props.cloud.quiesceForAccountSwitch();
       await nativeRequestAccountSwitch(target.id, status.generation ?? 0);
       setNativeBusy('restarting');
     } catch (error) {
-      if (prepared) {
-        await nativeAbortAccountSwitch().catch(() => undefined);
+      const code = commandErrorCode(error);
+      if (coldRecoveryRequired || code === 'ACCOUNT_RECOVERY_REQUIRED') {
+        await recoverOldAccount(error);
+        return;
       }
-      setNativeError(error instanceof Error ? error.message : '账号切换失败');
+      if (prepared) {
+        try {
+          await nativeAbortAccountSwitch();
+        } catch (abortError) {
+          await recoverOldAccount(abortError);
+          return;
+        }
+      }
+      setNativeError(commandErrorMessage(error));
       setNativeBusy(null);
     }
   };

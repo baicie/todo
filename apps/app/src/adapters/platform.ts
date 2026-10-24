@@ -23,6 +23,7 @@ export interface AppPlatform {
   secureTokenStore: SecureTokenStore;
   lifecycle: AppLifecycle;
   setBadge(count: number): Promise<void>;
+  verifyCloudIdentity?(email: string, apiUrl: string): Promise<void>;
   markAccountVerified?(): Promise<void>;
   startupSwitchFailure?: NativeSwitchStatus;
 }
@@ -163,6 +164,10 @@ export async function createAppPlatform(): Promise<AppPlatform> {
         } catch {
           // Badge count is an enhancement and may be unavailable.
         }
+      },
+      async verifyCloudIdentity(email, apiUrl) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('native_verify_cloud_identity', { email, apiUrl });
       },
       async markAccountVerified() {
         const { invoke } = await import('@tauri-apps/api/core');
