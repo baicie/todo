@@ -178,10 +178,12 @@ WebView
 
 切换
   -> native_prepare_account_switch(target)
+     -> 检查桌面 restart 能力/active gate
+     -> 关闭 RuntimeGate（拒绝旧账号新写入）
+     -> 等待最多 2s 让 in-flight 本地写完成；超时 fail-closed 并 abort
      -> 校验 target registry/DB/integrity/email+api server identity
      -> 写 pending-account-switch.json (PREPARED)
-     -> 关闭 RuntimeGate（拒绝旧账号新写入）
-     -> 等待最多 2s 让 in-flight 本地写完成
+     -> gate Preparing -> Prepared
   -> WebView cloud.quiesceForAccountSwitch()
      -> 停止 timer/poll/生命周期订阅
      -> 失效 sync generation + 清理 SQLite sync_session fence（唯一允许的 gate 例外）
@@ -212,8 +214,8 @@ ACTIVE
 
 ### 7.3 Runtime write gate 与旧连接
 
-- `RuntimeGate` 只允许一个切换关闭 gate。
-- 新 `todo_storage` 请求通过 lease 计数；`begin_switch` 关闭 gate 后最多等待 2 秒 in-flight 本地写，然后进程重启。
+- `RuntimeGate` 只允许一个切换关闭 gate；状态为 Active → Draining → Preparing → Prepared → RequestInProgress → RestartRequired，失败进入 DrainFailed 或 Failed。
+- 新 `todo_storage` 请求通过 lease 计数；`begin_switch` 关闭 gate 后最多等待 2 秒 in-flight 本地写。超时返回 `DrainTimeout`，不写 journal、不进入 RESTART_REQUIRED、不重启；命令显式 abort 后重开 gate，旧事务可在 source 正常结束。
 - gate 关闭后：普通 SQLite 写、提醒调度、Token 读写均拒绝；仅 `sync_clear_session` 允许用于 quiesce fence。
 - `Arc<TodoStore>` 从不热替换；进程完整重启释放旧 SQLite 连接。任何切换后继续写入旧账号的路径必须在 gate 处被拒绝。
 - 旧进程迟到 HTTP 响应由既有 generation/session fence 丢弃，不等待无限期请求。
@@ -248,3 +250,56 @@ ACTIVE
 ### 7.7 REQUIRES_REVIEW 诊断
 
 `legacy_review_report(root)` 是只读诊断：返回 reason、source/backup 路径与指纹、`requires_manual_identity_verification=true`。它不写 registry、不打开空库、不提供 force-bind。恢复流程必须由独立工具在服务端身份校验后执行；不能在 UI 中简化为“强制绑定”按钮。
+
+## 8. RC2-B.1 Review Closure
+
+复审的四个 P0 都在原有冷切换架构内关闭，没有扩展账号删除、热切换或移动端重启。
+
+### 8.1 Pending 身份写前校验
+
+- 新增 `verify_cloud_identity(root, email, api_url)`：直接读取 registry 当前 active 账号；Cloud 账号要求规范化邮箱一致，登记了 `api_url` 时还要求规范化服务端一致。WebView 不提交 account id，Native 不依赖 localStorage。
+- `todo_storage` 在 `sync_initialize_cloud` 进入任何 SQLite 事务前，再次检查 registry 身份和当前 DB 的 `bound_account/bound_api_url`；失败返回 `ACCOUNT_IDENTITY_MISMATCH`，不调用 dispatch。
+- 前端在 `requestCode`、`verifyCode`（device rotation 之前）、Merge 初始化和 `syncInitializeCloud` 之前调用 Native 预检。Native 的末尾校验仍是最终权威，防绕过/迟到响应。
+- `markAccountVerified` 不再吞错；先验证/标记 pending，再 `activateCloud`，因此失败不会显示 connected/synced。非 pending/legacy 账号的标记为幂等 no-op。
+- `sync_initialize_cloud` 的 bound email 统一小写，API URL 统一 scheme/host 大小写和尾斜杠规范化。
+
+### 8.2 RuntimeGate 事务排空
+
+`RuntimeGate` 状态：
+
+```text
+Active -> Draining -> Preparing -> Prepared
+                      |              |
+                      v              v
+                  DrainFailed     RequestInProgress -> RestartRequired
+                                                      |
+                                                      v
+                                                    Failed
+```
+
+- 新写入在 `Draining` 起点立即拒绝；`Draining` 用 Condvar 等待 in-flight lease 清零。超过 2 秒返回 `DrainTimeout`，设置 `DrainFailed`，**不创建 journal、不请求重启、不进入 RESTART_REQUIRED**。
+- `native_prepare` 在 drain 成功后写 journal；只有 journal 成功才进入 `Prepared`。drain 超时由命令显式 abort 并重开 gate。
+- 成功路径只允许 in-flight 写正常完成；不会在仍有 lease 时退出进程。超时路径由旧事务自然结束后保持 source DB/outbox 一致。
+- request 失败一律 `Failed`，不再回到可写或可 abort 状态；只能冷启动恢复。
+
+### 8.3 失败后的完整恢复
+
+- request 前失败（target 校验、drain timeout、用户取消且 abort 成功）：Native gate 恢复 Active；Cloud Controller 从未 quiesce，可继续使用。
+- quiesce 后任何失败（提醒取消、journal 写入、restart spawn 失败）或 abort 本身失败：Native gate 保持关闭/`Failed`，Cloud Controller 保持 disposed；前端调用 `native_restart_account_recovery` 冷启动进程。新进程从 source DB 重建 CloudController、session fence、timer/listener，并由 App 重新 reconcile 提醒。
+- 不允许在已 disposed 的 CloudController 上原地 `initialize`；也不允许 Native 打开 gate 与 disposed controller 并存。
+- 切换器不删除 outbox、token、cloud config 或旧 DB；失败时 source 数据保持原值。
+
+### 8.4 Abort / Request 原子性
+
+- `abort_prepared_switch` 返回 `Aborted`、`NoPreparedSwitch` 或 `NotPrepared(phase)`；只有 PREPARED 可被删除，其他 phase 不删除 journal。
+- request 和 abort 共享同一 gate 控制锁：request 从一开始持有 `RequestInProgress`，abort 无法插入；request 提交 `RestartRequired` 后 abort 返回 `NotAbortable`，gate 保持关闭。
+- 重复 abort：已成功 abort 后 gate Active/无 journal 返回幂等成功；journal 已推进则返回错误并 fail-closed，不会重新开放写门。
+- 只有显式 abort 成功才执行 `activate_after_abort`；没有无条件 `reset_after_failure`。
+
+### 8.5 恢复命令
+
+新增 Tauri command `native_restart_account_recovery`：仅调度整进程重启用于失败恢复，不 reset gate、不复用 WebView session。UI 在无法自动重启时显示“完全退出并重新打开应用”，不会宣称已恢复。
+
+### 8.6 未覆盖
+
+真实 `tauri::process::restart` 安装包环境、移动端、keyring、通知点击/开机重排、断电级 SIGKILL、双设备/100k 仍为 NOT_RUN；这些属于平台验收，不用来替代已由代码/自动测试关闭的四个 P0。
