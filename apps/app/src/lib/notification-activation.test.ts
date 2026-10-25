@@ -247,7 +247,93 @@ describe('notification rejection queue drain', () => {
     await vi.waitFor(() => expect(options.notify).toHaveBeenCalledTimes(1));
     await Promise.resolve();
     expect(options.notify).toHaveBeenCalledTimes(1);
+    expect(commandCalls('native_take_notification_rejection')).toBeLessThan(5);
     stop();
+  });
+
+  it('handles the eighth and ninth rejection at the bounded drain boundary', async () => {
+    for (let index = 0; index < 9; index += 1) {
+      rejectionQueue.push(rejection(`r${index}`));
+    }
+    rejectionQueue.push(null);
+    const options = defaultOptions();
+    const stop = await startNotificationActivationBridge(options);
+
+    expect(options.notify).toHaveBeenCalledTimes(8);
+    expect(options.notify.mock.calls.map(([message]) => message)).toEqual([
+      'r0',
+      'r1',
+      'r2',
+      'r3',
+      'r4',
+      'r5',
+      'r6',
+      'r7',
+    ]);
+
+    handlers.get('native-notification-rejected')?.({ payload: {} });
+    await vi.waitFor(() => expect(options.notify).toHaveBeenCalledTimes(9));
+    expect(options.notify).toHaveBeenLastCalledWith('r8', 'danger');
+    stop();
+  });
+
+  it('drains activation and rejection queues without consuming each other', async () => {
+    activationQueue.push(activation('a1'), null);
+    rejectionQueue.push(rejection('r1'), null);
+    const options = defaultOptions();
+
+    const stop = await startNotificationActivationBridge(options);
+
+    expect(options.openTask.mock.calls).toEqual([['task-a1']]);
+    expect(options.notify.mock.calls).toEqual([['r1', 'danger']]);
+    stop();
+  });
+
+  it('continues activation delivery when the rejection drain fails', async () => {
+    activationQueue.push(activation('a1'), null);
+    failRejections = true;
+    const options = defaultOptions();
+
+    const stop = await startNotificationActivationBridge(options);
+
+    expect(options.openTask).toHaveBeenCalledWith('task-a1');
+    expect(options.notify).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('allows a later wake to retry after a rejection Native failure', async () => {
+    failRejections = true;
+    const options = defaultOptions();
+    const stop = await startNotificationActivationBridge(options);
+    expect(options.notify).not.toHaveBeenCalled();
+
+    failRejections = false;
+    rejectionQueue.push(rejection('retry'), null);
+    handlers.get('native-notification-rejected')?.({ payload: {} });
+
+    await vi.waitFor(() => expect(options.notify).toHaveBeenCalledWith('retry', 'danger'));
+    expect(options.notify).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('does not show a rejection when cleanup happens during its invoke', async () => {
+    const take = deferred<RejectedNotificationActivation | null>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'native_take_notification_activation') return null;
+      return take.promise;
+    });
+    const controller = new AbortController();
+    const options = defaultOptions();
+
+    const start = startNotificationActivationBridge(options, controller.signal);
+    await vi.waitFor(() => expect(commandCalls('native_take_notification_rejection')).toBe(1));
+    controller.abort();
+    take.resolve(rejection('late'));
+
+    await expect(start).rejects.toMatchObject({ name: 'AbortError' });
+    expect(options.notify).not.toHaveBeenCalled();
+    expect(unlistenOpen).toHaveBeenCalledTimes(1);
+    expect(unlistenRejected).toHaveBeenCalledTimes(1);
   });
 
   it('stops after a rejection Native invocation failure', async () => {
