@@ -169,6 +169,30 @@ impl std::fmt::Debug for TodoStore {
     }
 }
 
+/// Reject duplicate entity IDs before opening a write transaction. IDs are
+/// unique per entity type; a task ID and a list ID may legitimately be equal.
+fn validate_unique_import_ids(bundle: &ExportBundle) -> StoreResult<()> {
+    fn check<'a>(kind: &str, ids: impl Iterator<Item = &'a str>) -> StoreResult<()> {
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            if !seen.insert(id) {
+                return Err(StoreError::Validation(format!(
+                    "导入 bundle 的 {kind} ID 重复: {id}"
+                )));
+            }
+        }
+        Ok(())
+    }
+    check("list", bundle.lists.iter().map(|item| item.id.as_str()))?;
+    check("task", bundle.tasks.iter().map(|item| item.id.as_str()))?;
+    check("step", bundle.steps.iter().map(|item| item.id.as_str()))?;
+    check(
+        "day_plan",
+        bundle.day_plans.iter().map(|item| item.id.as_str()),
+    )?;
+    Ok(())
+}
+
 impl TodoStore {
     pub fn open(path: impl AsRef<Path>) -> StoreResult<Self> {
         let connection = Connection::open(path)?;
@@ -2049,6 +2073,7 @@ impl TodoStore {
         for task in &request.bundle.tasks {
             clean_title(&task.title)?;
         }
+        validate_unique_import_ids(&request.bundle)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
         let replacing = matches!(request.mode, ImportMode::Replace);
@@ -2062,17 +2087,11 @@ impl TodoStore {
         }
 
         for list in request.bundle.lists {
-            // Replace already deleted every list in this transaction; a
-            // per-row existence probe would add 100k lookups on large imports.
-            let exists: bool = if replacing {
-                false
-            } else {
-                transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM local_lists WHERE id = ?1)",
-                    [&list.id],
-                    |row| row.get(0),
-                )?
-            };
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_lists WHERE id = ?1)",
+                [&list.id],
+                |row| row.get(0),
+            )?;
             transaction.execute(
                 "INSERT INTO local_lists
                    (id, name, color, icon, rank, created_at, updated_at, deleted_at)
@@ -2102,15 +2121,11 @@ impl TodoStore {
         }
         for mut task in request.bundle.tasks {
             task.tags = normalize_tags(task.tags)?;
-            let exists: bool = if replacing {
-                false
-            } else {
-                transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM local_tasks WHERE id = ?1)",
-                    [&task.id],
-                    |row| row.get(0),
-                )?
-            };
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_tasks WHERE id = ?1)",
+                [&task.id],
+                |row| row.get(0),
+            )?;
             transaction.execute(
                 "INSERT INTO local_tasks
                    (id, list_id, title, note, status, important, due_on, remind_at,
@@ -2160,15 +2175,11 @@ impl TodoStore {
             )?;
         }
         for step in request.bundle.steps {
-            let exists: bool = if replacing {
-                false
-            } else {
-                transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM local_steps WHERE id = ?1)",
-                    [&step.id],
-                    |row| row.get(0),
-                )?
-            };
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_steps WHERE id = ?1)",
+                [&step.id],
+                |row| row.get(0),
+            )?;
             transaction.execute(
                 "INSERT INTO local_steps
                    (id, task_id, title, is_completed, rank, created_at, updated_at, deleted_at)
@@ -2198,15 +2209,11 @@ impl TodoStore {
             )?;
         }
         for plan in request.bundle.day_plans {
-            let exists: bool = if replacing {
-                false
-            } else {
-                transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM local_day_plans WHERE id = ?1)",
-                    [&plan.id],
-                    |row| row.get(0),
-                )?
-            };
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_day_plans WHERE id = ?1)",
+                [&plan.id],
+                |row| row.get(0),
+            )?;
             transaction.execute(
                 "INSERT INTO local_day_plans
                    (id, task_id, local_date, rank, created_at, updated_at, deleted_at)
