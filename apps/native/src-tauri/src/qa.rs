@@ -157,7 +157,12 @@ pub fn initialize(app: &AppHandle) -> Result<(), String> {
         ));
     }
     let raw = fs::read(&config_path).map_err(|error| error.to_string())?;
-    let config: FaultConfig = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+    // Windows editors commonly write a UTF-8 BOM. serde_json rejects it, so
+    // strip only the exact BOM prefix before parsing the QA config.
+    let raw = raw
+        .strip_prefix(&[0xef, 0xbb, 0xbf])
+        .unwrap_or(raw.as_slice());
+    let config: FaultConfig = serde_json::from_slice(raw).map_err(|error| error.to_string())?;
     let rules = config
         .rules
         .into_iter()

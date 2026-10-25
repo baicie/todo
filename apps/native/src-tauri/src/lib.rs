@@ -2,6 +2,7 @@ mod commands;
 mod db;
 #[cfg(desktop)]
 mod desktop_shell;
+mod diagnostics;
 mod lifecycle;
 mod notification_activation;
 #[cfg(feature = "native-qa")]
@@ -11,6 +12,9 @@ mod secure_tokens;
 mod security;
 
 use tauri::Manager;
+
+#[cfg(all(test, feature = "native-qa"))]
+pub(crate) static QA_FAULT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -126,6 +130,8 @@ pub fn run() {
             commands::secure_token_remove,
             notification_activation::native_take_notification_activation,
             notification_activation::native_ack_notification_activation,
+            diagnostics::native_recovery_diagnostics,
+            diagnostics::native_export_recovery_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Shishi native application");

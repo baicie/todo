@@ -1,7 +1,7 @@
 #![cfg(feature = "fault-injection")]
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -79,7 +79,7 @@ fn injected_error() -> FaultAction {
     }
 }
 
-fn ensure_root(root: &PathBuf) {
+fn ensure_root(root: &Path) {
     ensure_active_account(root).expect("fresh default");
 }
 

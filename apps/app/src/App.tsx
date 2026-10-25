@@ -771,6 +771,17 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     showToast('日历已导出', { tone: 'success' });
   };
 
+  const exportDiagnostics = async () => {
+    if (props.platform.kind !== 'tauri') return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const path = await invoke<string>('native_export_recovery_diagnostics');
+      showToast(`诊断包已导出：${path}`, { tone: 'success' });
+    } catch (error) {
+      reportError(error);
+    }
+  };
+
   const importBackup = async (file: File, mode: 'merge' | 'replace') => {
     if (cloud.state().phase === 'connected') {
       throw new Error('请先在“同步”设置中退出云同步，再导入备份。');
@@ -1260,6 +1271,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           onExportJson={exportJson}
           onExportCsv={exportCsv}
           onExportIcs={exportIcs}
+          onExportDiagnostics={exportDiagnostics}
           onImport={importBackup}
           onClear={clearAll}
         />

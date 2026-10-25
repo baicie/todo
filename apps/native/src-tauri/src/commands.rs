@@ -34,7 +34,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -353,10 +353,10 @@ fn cancel_reminders_for_account(
     let entries = reminders.scheduled().map_err(CommandError::reminder)?;
     let mut failures = Vec::new();
     for entry in entries {
-        if entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:") {
-            if let Err(error) = reminders.cancel(&entry.reminder_id) {
-                failures.push(format!("{}: {error}", entry.reminder_id));
-            }
+        if (entry.reminder_id.starts_with(&prefix) || !entry.reminder_id.starts_with("account:"))
+            && let Err(error) = reminders.cancel(&entry.reminder_id)
+        {
+            failures.push(format!("{}: {error}", entry.reminder_id));
         }
     }
     if !failures.is_empty() {
@@ -1002,6 +1002,55 @@ mod tests {
         assert_eq!(report.scheduled, 1);
         assert_eq!(report.unchanged, 0);
         assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[cfg(feature = "native-qa")]
+    struct RejectReminderCancel;
+
+    #[cfg(feature = "native-qa")]
+    impl todo_native_accounts::FaultInjector for RejectReminderCancel {
+        fn decide(
+            &self,
+            event: &todo_native_accounts::FaultEvent,
+        ) -> Option<todo_native_accounts::FaultAction> {
+            (event.point == FaultPoint::ReminderCancel).then(|| {
+                todo_native_accounts::FaultAction::Error {
+                    code: "QA_REMINDER_CANCEL".to_owned(),
+                    message: "QA injected reminder cancellation failure".to_owned(),
+                }
+            })
+        }
+
+        fn record(&self, _evidence: &todo_native_accounts::FaultEvidence) {}
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[test]
+    fn reminder_cancel_fault_is_propagated_before_mutation() {
+        let _fault_lock = crate::QA_FAULT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let adapter = FakeReminderAdapter::granted();
+        adapter
+            .entries
+            .lock()
+            .expect("entries")
+            .push(ScheduledReminderInfo {
+                reminder_id: "account:default:a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "task a".to_owned(),
+                body: String::new(),
+            });
+        todo_native_accounts::fault::install(std::sync::Arc::new(RejectReminderCancel))
+            .expect("install fault");
+        let error = cancel_reminders_for_account(&adapter, "default").expect_err("fault");
+        assert!(
+            error
+                .message
+                .contains("QA injected reminder cancellation failure")
+        );
+        assert_eq!(adapter.scheduled().expect("entries").len(), 1);
+        todo_native_accounts::fault::clear();
     }
 
     #[test]
