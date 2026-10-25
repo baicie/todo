@@ -1,9 +1,0 @@
-{"eventId":"01a1735e-0c78-7018-a187-5831478b5a6b","point":"target_database_before_open","phase":null,"accountId":"default","at":"2026-10-25T14:01:45.848944700+00:00","result":"passed"}
-{"eventId":"01a1735e-0c7a-7533-99d5-149520f4a581","point":"sqlite_busy","phase":null,"accountId":"default","at":"2026-10-25T14:01:45.850076300+00:00","result":"passed"}
-{"eventId":"01a1735e-0d73-74ae-aaa1-5f67ea40b013","point":"target_database_after_open","phase":null,"accountId":"default","at":"2026-10-25T14:01:46.099676200+00:00","result":"passed"}
-{"eventId":"01a1735e-1445-70c0-acaf-0ec5203ff653","point":"credential_set","phase":null,"accountId":null,"at":"2026-10-25T14:01:47.845568600+00:00","result":"passed"}
-{"eventId":"01a1735e-144f-77be-8a5c-7060b61f3a7c","point":"credential_get","phase":null,"accountId":null,"at":"2026-10-25T14:01:47.855183200+00:00","result":"passed"}
-{"eventId":"01a1735e-1458-71e7-970d-14054df84e41","point":"credential_delete","phase":null,"accountId":null,"at":"2026-10-25T14:01:47.864926700+00:00","result":"passed"}
-{"eventId":"01a1735e-145e-7414-a2bf-70829624027b","point":"credential_get","phase":null,"accountId":null,"at":"2026-10-25T14:01:47.870853500+00:00","result":"passed"}
-{"eventId":"01a1735e-1491-744e-aed1-a057da1aec58","point":"switch_prepared_persisted","phase":"PREPARED","accountId":"01a1735e-147c-71a6-bbf2-e84f2e06f404","at":"2026-10-25T14:01:47.921387200+00:00","result":"error:QA_INJECTED_SWITCH_PREPARE"}
-{"eventId":"01a1735e-1492-727f-af37-2469350584ce","point":"switch_journal_before_cleanup","phase":null,"accountId":null,"at":"2026-10-25T14:01:47.922239100+00:00","result":"passed"}
