@@ -121,7 +121,7 @@ Draining/Preparing failure -> DrainFailed (abort may reopen)
 - active account 的 DB 由 `ensure_active_account` 选路；target 打开失败时 `open_store_at` 回滚 source，绝不创建空目标库。
 - 故障注入点：
   - `TargetDatabaseBeforeOpen` / `TargetDatabaseAfterOpen`（Tauri）；
-  - `SqliteBusy` 使用外部真实锁 + harness 等待/错误分类，不用 mock 替代；
+  - `SqliteBusy` 当前是数据库打开前的确定性 QA 注入点；真实外部锁竞争的进程级测试仍为 NOT_RUN。
   - `MigrationCopyVerified` 之前与之后分别验证 backup/target fingerprint。
 - 不允许用“删除 outbox / 重建空 DB”作为恢复手段。
 
@@ -180,7 +180,7 @@ NotificationTargetV1 {
   5. 将 activation 放入 `PendingNotificationActivation`（idempotency id），`show_main_window`，emit `native-notification-activation`。
 - WebView 在 mount 完成后调用 `native_take_notification_activation`；Native 在 active account + WebView ready 后才交付；重复交付/重复点击幂等。
 - 冷启动：Native 在任何 active 账号确认前不处理任务打开；pending activation 只保存“已验证但未交付”的 target。若进程重启丢失 activation，则安全丢弃；不得打开错误账号任务。
-- 平台能力：Windows 的 `on_action` 已可用；在 app 未运行时 Toast 激活能否携带 action 由平台决定，无法确认时标记 NOT_RUN，不伪造端到端 PASS。
+- 平台能力：Windows 的 `on_action` 已可用；通知正文的 `tap` 不携带 target，因此产品契约使用“打开任务”按钮 action。真实 Toast 点击和双账号拒绝在本轮为 NOT_RUN；无法确认时不伪造端到端 PASS。
 - 旧无前缀通知：提供 QA fixture（内存/Windows QA 服务）创建 legacy ID，再执行 cleanup；生产不会为了测试直接写真实通知库。
 
 ## 6. FaultInjector 架构
@@ -235,8 +235,9 @@ pub trait FaultInjector: Send + Sync {
 
 ### 6.3 测试策略
 
-- 单元测试：内存注入器 + 每个点的三组用例：无注入成功、注入错误、恢复后成功。
-- 进程测试：QA harness 在点触发后强杀/等待；重启后读取 journal/registry/SQLite 只读快照。
+- 单元测试：内存注入器 + 每个已接线点的控制/错误/恢复用例；`fault-injection` feature 测试必须串行执行，因为注入器是进程级的。
+- QA 命令测试：`SWITCH_PREPARED_PERSISTED` 通过真实 QA 应用触发，验证错误、attempted abort 和 active account 不变，并写入 run-bound evidence。
+- **NOT_RUN**：本轮 QA harness 尚未实现“任意点强杀 + 重启后读取 journal/registry/SQLite 快照”的进程级矩阵；只完成可重复的故障配置、证据和 prepared 恢复路径。该缺口在最终报告中保留。
 - 生产回归：feature off 编译并运行全部既有测试，确认无注入器时行为与基线一致。
 
 ## 7. QA 构建与生产构建隔离
