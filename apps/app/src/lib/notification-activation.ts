@@ -167,6 +167,12 @@ export async function startNotificationActivationBridge(
         })
         .finally(() => {
           drainRunning = false;
+          if (!disposed && !signal?.aborted && (activationRequested || rejectionRequested)) {
+            // A wake-up can arrive between the loop condition and this finally.
+            // Requeue it explicitly instead of losing the last event.
+            if (activationRequested) void requestDrain('activation');
+            if (rejectionRequested) void requestDrain('rejection');
+          }
         });
       return drainChain;
     };
