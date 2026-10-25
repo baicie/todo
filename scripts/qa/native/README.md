@@ -8,6 +8,10 @@ Isolated Windows QA build for account lifecycle, credentials, reminders and faul
 - QA credential service: `app.shishi.todo.rc2d-qa.secure-token`.
 - Fault injection is compiled with `--features native-qa`, armed only by `--rc2d-fault-config <path>`. There is no WebView command or environment-variable switch.
 - The QA binary refuses to run under a non-QA identifier.
+- The launcher checks the executable ProductName, and the harness calls the
+  native `qa_build_identity` command before any credential/task/import fixture.
+  A production binary returns `isQa: false` and the harness aborts without
+  touching credentials or data.
 - Cleaning `artifacts/native-qa/<run-id>/` or the QA app data root is allowed only for this QA identifier. Never delete `%APPDATA%\app.shishi.todo`.
 
 ## Build

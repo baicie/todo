@@ -204,6 +204,7 @@ fn migrate_with(backend: &dyn CredentialBackend, account_id: &str) -> Result<(),
             );
         }
     }
+    check_fault(todo_native_accounts::FaultPoint::CredentialDelete)?;
     backend
         .delete(LEGACY_REFRESH_TOKEN_KEY)
         .map_err(|error| format!("new token saved, legacy token delete failed: {error}"))
@@ -214,7 +215,6 @@ fn migrate_with(backend: &dyn CredentialBackend, account_id: &str) -> Result<(),
 /// key is removed only after the account-scoped key is written and read back.
 pub fn migrate_legacy_refresh_token(app: &AppHandle, account_id: &str) -> Result<(), String> {
     let backend = backend(app);
-    check_fault(todo_native_accounts::FaultPoint::CredentialGet)?;
     migrate_with(backend.as_ref(), account_id)
 }
 
