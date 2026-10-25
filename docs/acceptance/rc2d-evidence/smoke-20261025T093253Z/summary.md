@@ -8,18 +8,18 @@
 
 ## Tests
 
-| Test | Status | Duration | Detail |
-| --- | --- | ---: | --- |
-| qa_build_identity | PASS | 0 ms |  |
-| qa_boot_context | PASS | 18 ms |  |
-| qa_storage_roundtrip | PASS | 1632 ms |  |
-| qa_reminder_permission_contract | PASS | 25 ms |  |
-| qa_reminder_schedule_cancel | PASS | 29 ms |  |
-| qa_credential_namespace | PASS | 50 ms |  |
-| qa_invalid_switch_does_not_change_active_account | PASS | 19 ms |  |
-| qa_desktop_notification_action_target | NOT_RUN | 0 ms |  |
-| qa_wrong_account_notification_is_rejected | NOT_RUN | 0 ms |  |
-| qa_fault_injection_prepared_recovery | NOT_RUN | 0 ms |  |
-| qa_fault_evidence | NOT_RUN | 0 ms |  |
+| Test                                             | Status  | Duration | Detail |
+| ------------------------------------------------ | ------- | -------: | ------ |
+| qa_build_identity                                | PASS    |     0 ms |        |
+| qa_boot_context                                  | PASS    |    18 ms |        |
+| qa_storage_roundtrip                             | PASS    |  1632 ms |        |
+| qa_reminder_permission_contract                  | PASS    |    25 ms |        |
+| qa_reminder_schedule_cancel                      | PASS    |    29 ms |        |
+| qa_credential_namespace                          | PASS    |    50 ms |        |
+| qa_invalid_switch_does_not_change_active_account | PASS    |    19 ms |        |
+| qa_desktop_notification_action_target            | NOT_RUN |     0 ms |        |
+| qa_wrong_account_notification_is_rejected        | NOT_RUN |     0 ms |        |
+| qa_fault_injection_prepared_recovery             | NOT_RUN |     0 ms |        |
+| qa_fault_evidence                                | NOT_RUN |     0 ms |        |
 
 NOT_RUN is not a pass. Real toast click and two-account notification routing require an interactive desktop account fixture.
