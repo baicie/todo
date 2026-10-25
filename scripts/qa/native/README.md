@@ -41,10 +41,18 @@ Smoke run against the release executable:
 ./scripts/qa/native/run-windows.ps1 -AppExe "apps/native/src-tauri/target/release/todo-native.exe"
 ```
 
-Install the NSIS package first, then run the installed binary:
+Build, install and run the installed binary. `-AllowPartial` is required for an
+investigative evidence run because the two real-desktop notification checks are
+explicit NOT_RUN; it does not turn them into PASS:
 
 ```powershell
-./scripts/qa/native/run-windows.ps1 -Build -Install
+./scripts/qa/native/run-windows.ps1 -Build -Install -AllowPartial
+```
+
+Verify the default executable discovery without launching the app:
+
+```powershell
+./scripts/qa/native/run-windows.ps1 -DiscoverOnly
 ```
 
 Fault run:

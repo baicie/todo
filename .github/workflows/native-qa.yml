@@ -66,6 +66,10 @@ jobs:
       - name: Build QA NSIS
         working-directory: apps/native
         run: pnpm dlx @tauri-apps/cli@2.12.4 build --config src-tauri/tauri.qa.conf.json --features native-qa --bundles nsis
+      - name: Verify default QA executable discovery
+        shell: pwsh
+        run: ./scripts/qa/native/run-windows.ps1 -DiscoverOnly
+
       - name: Hash QA installer
         shell: pwsh
         run: |

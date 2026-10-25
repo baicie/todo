@@ -10,6 +10,7 @@ param(
   [string]$BenchSizes = "",
   [int]$BenchRuns = 3,
   [switch]$AllowPartial,
+  [switch]$DiscoverOnly,
   [switch]$KeepRunning
 )
 
@@ -76,8 +77,18 @@ try {
         "--bundles", "nsis"
       )
       Write-Log $buildLog "pnpm $($buildArgs -join ' ')"
-      & pnpm @buildArgs 2>&1 | Tee-Object -FilePath $buildLog -Append | Out-Host
-      if ($LASTEXITCODE -ne 0) { throw "QA build failed with exit code $LASTEXITCODE" }
+      # PowerShell 5.1 turns native stderr into NativeCommandError; with
+      # ErrorActionPreference=Stop this aborts a successful Tauri build on
+      # progress output. Keep stderr as data and judge only the exit code.
+      $previousErrorAction = $ErrorActionPreference
+      $ErrorActionPreference = "Continue"
+      try {
+        & pnpm @buildArgs 2>&1 | Tee-Object -FilePath $buildLog -Append | Out-Host
+        $buildExit = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $previousErrorAction
+      }
+      if ($buildExit -ne 0) { throw "QA build failed with exit code $buildExit" }
     }
   } finally {
     Pop-Location
@@ -106,11 +117,19 @@ try {
   }
 
   if ([string]::IsNullOrWhiteSpace($AppExe)) {
-    $candidates = @(
-      (Join-Path $RepoRoot "apps\native\src-tauri\target\release\Shishi QA RC2D.exe"),
-      (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\Shishi QA RC2D.exe"),
-      (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\Shishi QA RC2D.exe")
+    # Cargo package name is todo-native, so both the release build and the
+    # NSIS-installed app use todo-native.exe (ProductName remains Shishi QA
+    # RC2D). Prefer the installed path when -Install was requested.
+    $releaseExe = Join-Path $RepoRoot "apps\native\src-tauri\target\release\todo-native.exe"
+    $installedExes = @(
+      (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\todo-native.exe"),
+      (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\todo-native.exe")
     )
+    $candidates = if ($Install) {
+      $installedExes + $releaseExe
+    } else {
+      @($releaseExe) + $installedExes
+    }
     $AppExe = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
   }
   if (-not $AppExe -or -not (Test-Path -LiteralPath $AppExe)) {
@@ -120,6 +139,12 @@ try {
   $appProduct = (Get-Item -LiteralPath $AppExe).VersionInfo.ProductName
   if ($appProduct -ne "Shishi QA RC2D") {
     throw "refusing non-QA app ProductName=$appProduct; QA harness never runs against production"
+  }
+  if ($DiscoverOnly) {
+    Write-Output "Discovered QA exe: $((Resolve-Path -LiteralPath $AppExe).Path)"
+    Write-Output "ProductName: $appProduct"
+    Write-Output "Next: native qa_build_identity must report identifier app.shishi.todo.qa"
+    exit 0
   }
   $qaDataRoot = Join-Path $env:APPDATA "app.shishi.todo.qa"
   $productionDataRoot = Join-Path $env:APPDATA "app.shishi.todo"
