@@ -28,7 +28,10 @@ for (const scenario of inventory) {
 }
 
 assert.ok(harness.includes('manual-scenarios.json'), 'harness must read the canonical inventory');
-assert.ok(!harness.includes('toast-open-task'), 'duplicate legacy scenario must not remain in harness');
+assert.ok(
+  !harness.includes('toast-open-task'),
+  'duplicate legacy scenario must not remain in harness',
+);
 assert.ok(
   !harness.includes('pre-listener-rejection"'),
   'legacy singular rejection scenario must not remain in harness',
