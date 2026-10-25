@@ -20,7 +20,7 @@ export interface RejectedNotificationActivation {
 const EVENT_OPEN = 'native-notification-activation';
 const EVENT_REJECTED = 'native-notification-rejected';
 
-/** Native keeps at most 8 pending activations; keep each drain bounded too. */
+/** Native keeps at most 8 pending activations and 8 pending rejections. */
 const MAX_DRAIN_PER_CYCLE = 8;
 
 function isTauriRuntime(): boolean {
@@ -36,15 +36,11 @@ function abortError(): Error {
 /**
  * Deliver Native-validated notification targets to the task detail view.
  *
- * Native has already checked the active account, runtime gate and task
- * existence. The frontend repeats the account check only as a stale-localStorage
- * defense; it never switches accounts or stores a target across a restart.
- *
- * Delivery is serialized and bounded. Native's take command skips rejected
- * records (emitting a reject event) and returns null only when it has no valid
- * activation left to deliver, so the loop below can stop on the first null.
- * An AbortSignal makes initialization cancellable at every await boundary; the
- * returned disposer is idempotent.
+ * Both the activation and rejection queues are pop-on-read. Events are only
+ * wake-ups: the frontend drains the bounded Native queues, so a rejection that
+ * happened before listener registration is not lost. Drains are serialized and
+ * bounded; an AbortSignal makes initialization cancellable at every await
+ * boundary and the returned disposer is idempotent.
  */
 export async function startNotificationActivationBridge(
   options: {
@@ -107,10 +103,7 @@ export async function startNotificationActivationBridge(
       options.openTask(activation.target.taskId);
     };
 
-    let drainChain: Promise<void> = Promise.resolve();
-    let drainRunning = false;
-    let drainRequested = false;
-    const drainOnce = async () => {
+    const drainActivations = async () => {
       for (let index = 0; index < MAX_DRAIN_PER_CYCLE; index += 1) {
         if (disposed || signal?.aborted) return;
         let pending: NotificationActivation | null;
@@ -127,23 +120,50 @@ export async function startNotificationActivationBridge(
         handleOpen(pending);
       }
     };
-    const drainPending = (): Promise<void> => {
-      // Coalesce a burst of wake events into serial cycles. A request that
-      // arrives while a cycle is running is served after that cycle, so an
-      // event cannot be lost or run concurrently with another take.
-      drainRequested = true;
+
+    const drainRejections = async () => {
+      for (let index = 0; index < MAX_DRAIN_PER_CYCLE; index += 1) {
+        if (disposed || signal?.aborted) return;
+        let rejection: RejectedNotificationActivation | null;
+        try {
+          rejection = await invoke<RejectedNotificationActivation | null>(
+            'native_take_notification_rejection',
+          );
+        } catch {
+          // A failed Native call ends this cycle; the next event may retry.
+          return;
+        }
+        if (disposed || signal?.aborted) return;
+        if (!rejection) return;
+        options.notify(rejection.message, 'danger');
+      }
+    };
+
+    let activationRequested = false;
+    let rejectionRequested = false;
+    let drainRunning = false;
+    let drainChain: Promise<void> = Promise.resolve();
+    const requestDrain = (kind: 'activation' | 'rejection' | 'both' = 'both') => {
+      if (kind === 'activation' || kind === 'both') activationRequested = true;
+      if (kind === 'rejection' || kind === 'both') rejectionRequested = true;
       if (drainRunning) return drainChain;
       drainRunning = true;
       drainChain = Promise.resolve()
         .then(async () => {
-          while (drainRequested && !disposed && !signal?.aborted) {
-            drainRequested = false;
-            await drainOnce();
+          while (!disposed && !signal?.aborted && (activationRequested || rejectionRequested)) {
+            if (activationRequested) {
+              activationRequested = false;
+              await drainActivations();
+            }
+            if (rejectionRequested) {
+              rejectionRequested = false;
+              await drainRejections();
+            }
           }
         })
         .catch(() => {
           // UI callbacks must not poison the serial chain; a later event can
-          // still drain a fresh Native activation.
+          // still drain a fresh Native result.
         })
         .finally(() => {
           drainRunning = false;
@@ -153,7 +173,7 @@ export async function startNotificationActivationBridge(
 
     const unlistenOpen = await listen<NotificationActivation>(EVENT_OPEN, () => {
       if (disposed || signal?.aborted) return;
-      void drainPending();
+      void requestDrain('activation');
     });
     unlisteners.push(unlistenOpen);
     if (disposed || signal?.aborted) {
@@ -163,23 +183,23 @@ export async function startNotificationActivationBridge(
       ensureActive();
     }
 
-    const unlistenRejected = await listen<RejectedNotificationActivation>(
-      EVENT_REJECTED,
-      (event) => {
-        if (disposed || signal?.aborted) return;
-        options.notify(event.payload.message, 'danger');
-      },
-    );
+    const unlistenRejected = await listen<RejectedNotificationActivation>(EVENT_REJECTED, () => {
+      if (disposed || signal?.aborted) return;
+      // The event is a wake-up only. The message is delivered exactly once
+      // through the Native rejection queue, never directly from the event.
+      void requestDrain('rejection');
+    });
     unlisteners.push(unlistenRejected);
     if (disposed || signal?.aborted) {
       unlistenRejected();
       ensureActive();
     }
 
-    // Consume activations that were queued before the WebView listened. The
-    // event handler only wakes a drain; this initial cycle must not depend on
-    // another notification arriving.
-    await drainPending();
+    // Listeners are installed before this drain, so a rejection produced by a
+    // cold-start notification is replayed from the Native queue.
+    activationRequested = true;
+    rejectionRequested = true;
+    await requestDrain();
     ensureActive();
 
     return dispose;

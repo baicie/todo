@@ -92,6 +92,7 @@ pub struct Activation {
 #[derive(Default)]
 pub struct NotificationActivationState {
     pending: Mutex<VecDeque<Activation>>,
+    rejections: Mutex<VecDeque<RejectedActivation>>,
     sequence: AtomicU64,
 }
 
@@ -119,13 +120,31 @@ impl NotificationActivationState {
             .ok()
             .and_then(|mut pending| pending.pop_front())
     }
+
+    fn put_rejection(&self, rejection: RejectedActivation) {
+        if let Ok(mut rejections) = self.rejections.lock() {
+            // The rejection notice is best-effort UX; failure to deliver it is
+            // fail-closed. Keep only the newest bounded window.
+            while rejections.len() >= 8 {
+                rejections.pop_front();
+            }
+            rejections.push_back(rejection);
+        }
+    }
+
+    pub fn take_rejection(&self) -> Option<RejectedActivation> {
+        self.rejections
+            .lock()
+            .ok()
+            .and_then(|mut rejections| rejections.pop_front())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RejectedActivation {
-    code: &'static str,
-    message: String,
+pub struct RejectedActivation {
+    pub code: &'static str,
+    pub message: String,
 }
 
 fn show_window(app: &AppHandle) {
@@ -134,9 +153,17 @@ fn show_window(app: &AppHandle) {
 }
 
 fn reject(app: &AppHandle, code: &'static str, message: impl Into<String>) {
-    let message = message.into();
+    let rejection = RejectedActivation {
+        code,
+        message: message.into(),
+    };
+    if let Some(state) = app.try_state::<NotificationActivationState>() {
+        state.put_rejection(rejection);
+    }
     show_window(app);
-    let _ = app.emit(EVENT_REJECTED, RejectedActivation { code, message });
+    // The event is only a wake-up. The WebView reads the bounded queue through
+    // native_take_notification_rejection, so a pre-listener rejection is not lost.
+    let _ = app.emit(EVENT_REJECTED, ());
 }
 
 /// Called from the notification plugin's action handler. This is deliberately
@@ -260,6 +287,13 @@ pub fn native_take_notification_activation(
     )
 }
 
+#[tauri::command]
+pub fn native_take_notification_rejection(
+    activation_state: State<'_, NotificationActivationState>,
+) -> Option<RejectedActivation> {
+    activation_state.take_rejection()
+}
+
 /// Register the action handler. Only desktop arms this path; mobile reminders
 /// are delivered by the mobile plugin and are not routed through this command.
 #[cfg(desktop)]
@@ -379,5 +413,59 @@ mod tests {
             });
         }
         assert_eq!(state.take().expect("pending").activation_id, "a2");
+    }
+    #[test]
+    fn rejection_queue_is_fifo_and_consumed_once() {
+        let state = NotificationActivationState::default();
+        for index in 0..2 {
+            state.put_rejection(RejectedActivation {
+                code: "ACCOUNT_SWITCH_REQUIRED",
+                message: format!("reject-{index}"),
+            });
+        }
+        assert_eq!(state.take_rejection().expect("first").message, "reject-0");
+        assert_eq!(state.take_rejection().expect("second").message, "reject-1");
+        assert!(state.take_rejection().is_none());
+    }
+
+    #[test]
+    fn rejection_queue_keeps_newest_eight() {
+        let state = NotificationActivationState::default();
+        for index in 0..10 {
+            state.put_rejection(RejectedActivation {
+                code: "TASK_NOT_FOUND",
+                message: format!("reject-{index}"),
+            });
+        }
+        assert_eq!(
+            state.take_rejection().expect("oldest kept").message,
+            "reject-2"
+        );
+        for index in 3..10 {
+            assert_eq!(
+                state.take_rejection().expect("queued").message,
+                format!("reject-{index}")
+            );
+        }
+        assert!(state.take_rejection().is_none());
+    }
+
+    #[test]
+    fn rejected_notification_does_not_consume_valid_activation() {
+        let state = NotificationActivationState::default();
+        state.put_rejection(RejectedActivation {
+            code: "TASK_NOT_FOUND",
+            message: "deleted".to_owned(),
+        });
+        state.put(Activation {
+            activation_id: "valid".to_owned(),
+            target: NotificationTargetV1::new("default", "task-1").expect("target"),
+            task_title: "current".to_owned(),
+        });
+        assert_eq!(state.take().expect("activation").activation_id, "valid");
+        assert_eq!(
+            state.take_rejection().expect("rejection").code,
+            "TASK_NOT_FOUND"
+        );
     }
 }
