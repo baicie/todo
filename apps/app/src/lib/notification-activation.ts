@@ -80,12 +80,9 @@ export async function startNotificationActivationBridge(options: {
     // active account, gate and task are revalidated at delivery time.
     void drainPending();
   });
-  const unlistenRejected = await listen<RejectedNotificationActivation>(
-    EVENT_REJECTED,
-    (event) => {
-      options.notify(event.payload.message, 'danger');
-    },
-  );
+  const unlistenRejected = await listen<RejectedNotificationActivation>(EVENT_REJECTED, (event) => {
+    options.notify(event.payload.message, 'danger');
+  });
 
   // Covers an activation emitted before the WebView listener existed.
   await drainPending();

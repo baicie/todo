@@ -36,14 +36,19 @@ async function connect() {
 }
 
 const { browser, page } = await connect();
-await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__), undefined, { timeout: 30000 });
+await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__), undefined, {
+  timeout: 30000,
+});
 
 // Benchmarks replace the whole store. Refuse to touch a non-QA binary.
 const identityResult = await page.evaluate(async () => {
   try {
     return { ok: true, value: await window.__TAURI_INTERNALS__.invoke('qa_build_identity') };
   } catch (error) {
-    return { ok: false, error: typeof error === 'string' ? error : error?.message ?? String(error) };
+    return {
+      ok: false,
+      error: typeof error === 'string' ? error : (error?.message ?? String(error)),
+    };
   }
 });
 const identity = identityResult.ok ? identityResult.value : null;
@@ -57,7 +62,10 @@ async function invoke(command, args = {}) {
       try {
         return { ok: true, value: await window.__TAURI_INTERNALS__.invoke(command, args) };
       } catch (error) {
-        return { ok: false, error: typeof error === 'string' ? error : error?.message ?? String(error) };
+        return {
+          ok: false,
+          error: typeof error === 'string' ? error : (error?.message ?? String(error)),
+        };
       }
     },
     { command, args },
@@ -115,7 +123,10 @@ for (const size of sizes) {
   for (let run = 1; run <= runs; run += 1) {
     const input = bundle(size, run);
     const begin = Date.now();
-    unwrap(await storage('import_data', { bundle: input, mode: 'replace' }), `import_data ${size}/${run}`);
+    unwrap(
+      await storage('import_data', { bundle: input, mode: 'replace' }),
+      `import_data ${size}/${run}`,
+    );
     const elapsedMs = Date.now() - begin;
     const counts = unwrap(
       await storage('get_counts', { localDate: new Date().toISOString().slice(0, 10) }),
@@ -143,7 +154,8 @@ for (const sample of samples) {
 }
 const summaries = [...bySize.entries()].map(([size, values]) => {
   const sorted = [...values].sort((a, b) => a - b);
-  const percentile = (p) => sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+  const percentile = (p) =>
+    sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
   return {
     scenario: `import_${size}`,
     size,

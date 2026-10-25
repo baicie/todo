@@ -61,7 +61,12 @@ async function run(name, fn) {
     return record;
   } catch (error) {
     if (error instanceof Skip) {
-      tests.push({ name, status: 'NOT_RUN', durationMs: Date.now() - begin, detail: error.message });
+      tests.push({
+        name,
+        status: 'NOT_RUN',
+        durationMs: Date.now() - begin,
+        detail: error.message,
+      });
       event(`test_not_run:${name}`, { reason: error.message });
       log(`NOT_RUN ${name}: ${error.message}`);
       return;
@@ -107,7 +112,7 @@ async function invoke(page, command, args = {}) {
       } catch (error) {
         return {
           ok: false,
-          error: typeof error === 'string' ? error : error?.message ?? String(error),
+          error: typeof error === 'string' ? error : (error?.message ?? String(error)),
         };
       }
     },
@@ -156,8 +161,11 @@ if (!identityOk) {
 No destructive QA fixture was executed.
 `,
   );
-  fs.writeFileSync(path.join(logDir, 'harness.jsonl'), `${message}
-`);
+  fs.writeFileSync(
+    path.join(logDir, 'harness.jsonl'),
+    `${message}
+`,
+  );
   await browser.close().catch(() => {});
   process.exit(1);
 }
@@ -175,9 +183,13 @@ event('qa_build_identity_verified', { identifier: identity.identifier });
 
 await run('qa_boot_context', async () => {
   const context = unwrap(await invoke(page, 'native_account_context'), 'native_account_context');
-  const status = unwrap(await invoke(page, 'native_account_switch_status'), 'native_account_switch_status');
+  const status = unwrap(
+    await invoke(page, 'native_account_switch_status'),
+    'native_account_switch_status',
+  );
   if (!context?.accountId) throw new Error('missing accountId');
-  if (status?.active !== true) throw new Error(`unexpected switch status ${JSON.stringify(status)}`);
+  if (status?.active !== true)
+    throw new Error(`unexpected switch status ${JSON.stringify(status)}`);
   return {
     accountId: context.accountId,
     kind: context.kind,
@@ -244,7 +256,10 @@ await run('qa_credential_namespace', async () => {
   const read = unwrap(await invoke(page, 'secure_token_get', { key }), 'secure_token_get');
   if (read !== value) throw new Error('credential readback mismatch');
   unwrap(await invoke(page, 'secure_token_remove', { key }), 'secure_token_remove');
-  const removed = unwrap(await invoke(page, 'secure_token_get', { key }), 'secure_token_get_removed');
+  const removed = unwrap(
+    await invoke(page, 'secure_token_get', { key }),
+    'secure_token_get_removed',
+  );
   if (removed !== null) throw new Error('credential was not removed');
   return {
     service: 'app.shishi.todo.rc2d-qa.secure-token',
@@ -260,12 +275,15 @@ await run('qa_invalid_switch_does_not_change_active_account', async () => {
   });
   if (prepared.ok) throw new Error('preparing an unregistered target unexpectedly succeeded');
   const after = unwrap(await invoke(page, 'native_account_context'), 'context after');
-  if (after.accountId !== before.accountId) throw new Error('active account changed after rejected switch');
+  if (after.accountId !== before.accountId)
+    throw new Error('active account changed after rejected switch');
   return { error: prepared.error, activeAccountId: after.accountId };
 });
 
 await run('qa_desktop_notification_action_target', async () => {
-  skip('covered by Rust unit tests; real toast click requires a logged-in account and desktop interaction');
+  skip(
+    'covered by Rust unit tests; real toast click requires a logged-in account and desktop interaction',
+  );
 });
 
 await run('qa_wrong_account_notification_is_rejected', async () => {
@@ -296,7 +314,8 @@ await run('qa_fault_injection_prepared_recovery', async () => {
     if (!abort.ok) throw new Error(`abort after injected prepare failed: ${abort.error}`);
   }
   const after = unwrap(await invoke(page, 'native_account_context'), 'context after abort');
-  if (after.accountId !== before.accountId) throw new Error('active account changed during fault recovery');
+  if (after.accountId !== before.accountId)
+    throw new Error('active account changed during fault recovery');
   return {
     faultPoint: 'switch_prepared_persisted',
     error: prepared.error,
@@ -393,7 +412,10 @@ const summary = [
   'NOT_RUN is not a pass. Real toast click and two-account notification routing require an interactive desktop account fixture.',
 ].join('\n');
 
-fs.writeFileSync(path.join(artifactRoot, 'tests.json'), JSON.stringify({ generatedAt: new Date().toISOString(), status, counts, tests }, null, 2));
+fs.writeFileSync(
+  path.join(artifactRoot, 'tests.json'),
+  JSON.stringify({ generatedAt: new Date().toISOString(), status, counts, tests }, null, 2),
+);
 fs.writeFileSync(path.join(artifactRoot, 'timeline.json'), JSON.stringify(timeline, null, 2));
 fs.writeFileSync(path.join(artifactRoot, 'performance.json'), JSON.stringify(performance, null, 2));
 fs.writeFileSync(path.join(artifactRoot, 'summary.md'), summary);

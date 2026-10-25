@@ -7,10 +7,9 @@ use std::{
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{
-    error::{AccountError, AccountResult},
-    fault::{self, FaultPoint},
-};
+use crate::error::{AccountError, AccountResult};
+#[cfg(windows)]
+use crate::fault::{self, FaultPoint};
 
 pub const DEFAULT_ACCOUNT_ID: &str = "default";
 pub const DATABASE_FILE: &str = "shishi.sqlite3";
