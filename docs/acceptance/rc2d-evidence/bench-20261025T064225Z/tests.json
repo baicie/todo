@@ -13,11 +13,7 @@
       "status": "BENCH_ONLY",
       "durationMs": 292468,
       "detail": {
-        "sizes": [
-          1000,
-          10000,
-          100000
-        ],
+        "sizes": [1000, 10000, 100000],
         "runs": 3,
         "samples": 9
       }

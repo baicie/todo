@@ -1,11 +1,7 @@
 {
   "generatedAt": "2026-10-25T06:47:35.197Z",
   "kind": "Windows QA import benchmark",
-  "sizes": [
-    1000,
-    10000,
-    100000
-  ],
+  "sizes": [1000, 10000, 100000],
   "runs": 3,
   "notes": [
     "Each run imports a real todo-export bundle through the WebView IPC into the QA SQLite store in replace mode.",
