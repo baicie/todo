@@ -69,6 +69,7 @@ jobs:
       - name: Hash QA installer
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $files = Get-ChildItem -Path apps/native/src-tauri/target/release/bundle/nsis -Filter '*.exe' -Recurse
           if ($files.Count -ne 1) { throw "expected one QA installer, found $($files.Count)" }
           $hash = Get-FileHash -LiteralPath $files[0].FullName -Algorithm SHA256
@@ -119,4 +120,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @todo/app build
       - name: Compile/check native shell (not a platform release PASS)
-        run: cargo check --manifest-path apps/native/src-tauri/Cargo.toml --target ${{ matrix.target }}
+        run: cargo check --manifest-path apps/native/src-tauri/Cargo.toml --features native-qa --target ${{ matrix.target }}

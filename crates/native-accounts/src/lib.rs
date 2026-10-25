@@ -12,7 +12,7 @@ pub use fault::{
 };
 pub use migration::{
     InstallationPhase, InstallationState, LegacyReviewReport, MigrationPhase, MigrationState,
-    ensure_active_account, legacy_review_report, migration_state,
+    ensure_active_account, legacy_review_report, migration_state, migration_state_read_only,
 };
 pub use paths::{
     DEFAULT_ACCOUNT_ID, LEGACY_REFRESH_TOKEN_KEY, account_dir, accounts_file,
@@ -30,5 +30,5 @@ pub use switch::{
     SwitchPhase, SwitchRecovery, SwitchStatus, abort_prepared_switch, create_pending_cloud_account,
     finish_pending_switch, list_accounts, mark_account_verified, prepare_account_switch,
     recover_pending_switch, request_account_switch, rollback_pending_switch, switch_status,
-    verify_cloud_identity,
+    validate_account_switch_request, verify_cloud_identity,
 };

@@ -106,6 +106,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::todo_storage,
+            commands::qa_build_identity,
             commands::schedule_reminder,
             commands::cancel_reminder,
             commands::reschedule_reminders,

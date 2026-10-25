@@ -45,6 +45,7 @@ export async function startNotificationActivationBridge(options: {
 
   const handleOpen = (activation: NotificationActivation) => {
     if (!activation?.activationId || seen.has(activation.activationId)) return;
+    if (seen.size > 64) seen.clear();
     seen.add(activation.activationId);
     if (activation.target.accountId !== activeAccountId()) {
       options.notify('该提醒属于另一个账号，请先切换账号', 'danger');
@@ -59,8 +60,25 @@ export async function startNotificationActivationBridge(options: {
     }).catch(() => {});
   };
 
-  const unlistenOpen = await listen<NotificationActivation>(EVENT_OPEN, (event) => {
-    handleOpen(event.payload);
+  let drainInFlight: Promise<void> = Promise.resolve();
+  const drainPending = (): Promise<void> => {
+    drainInFlight = drainInFlight.then(async () => {
+      try {
+        const pending = await invoke<NotificationActivation | null>(
+          'native_take_notification_activation',
+        );
+        if (pending) handleOpen(pending);
+      } catch {
+        // A failed delivery must not break the normal task UI.
+      }
+    });
+    return drainInFlight;
+  };
+
+  const unlistenOpen = await listen<NotificationActivation>(EVENT_OPEN, () => {
+    // The event is only a wake-up: take the activation back from Native so the
+    // active account, gate and task are revalidated at delivery time.
+    void drainPending();
   });
   const unlistenRejected = await listen<RejectedNotificationActivation>(
     EVENT_REJECTED,
@@ -69,14 +87,8 @@ export async function startNotificationActivationBridge(options: {
     },
   );
 
-  try {
-    const pending = await invoke<NotificationActivation | null>(
-      'native_take_notification_activation',
-    );
-    if (pending) handleOpen(pending);
-  } catch {
-    // The activation bridge is an enhancement; task editing must stay usable.
-  }
+  // Covers an activation emitted before the WebView listener existed.
+  await drainPending();
 
   return () => {
     unlistenOpen();

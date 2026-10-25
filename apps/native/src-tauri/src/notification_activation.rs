@@ -5,9 +5,12 @@
 //! the WebView receives it. A target from another account is never opened, and
 //! Native never switches accounts as a side effect of a click.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -88,7 +91,7 @@ pub struct Activation {
 
 #[derive(Default)]
 pub struct NotificationActivationState {
-    pending: Mutex<Option<Activation>>,
+    pending: Mutex<VecDeque<Activation>>,
     sequence: AtomicU64,
 }
 
@@ -101,7 +104,12 @@ impl NotificationActivationState {
 
     fn put(&self, activation: Activation) {
         if let Ok(mut pending) = self.pending.lock() {
-            *pending = Some(activation);
+            // Bound the in-memory queue; a burst of clicks must not grow without
+            // limit. Oldest activations are dropped before newer ones.
+            while pending.len() >= 8 {
+                pending.pop_front();
+            }
+            pending.push_back(activation);
         }
     }
 
@@ -109,19 +117,16 @@ impl NotificationActivationState {
         self.pending
             .lock()
             .ok()
-            .and_then(|mut pending| pending.take())
+            .and_then(|mut pending| pending.pop_front())
     }
 
     pub fn acknowledge(&self, activation_id: &str) -> bool {
         let Ok(mut pending) = self.pending.lock() else {
             return false;
         };
-        if pending.as_ref().map(|item| item.activation_id.as_str()) == Some(activation_id) {
-            *pending = None;
-            true
-        } else {
-            false
-        }
+        let before = pending.len();
+        pending.retain(|item| item.activation_id != activation_id);
+        pending.len() != before
     }
 }
 
@@ -145,6 +150,51 @@ fn reject(app: &AppHandle, code: &'static str, message: impl Into<String>) {
 
 /// Called from the notification plugin's action handler. This is deliberately
 /// synchronous and does not expose any command with the same power.
+fn validate_target(
+    app: &AppHandle,
+    state: &AppState,
+    target: &NotificationTargetV1,
+) -> Result<String, (&'static str, String)> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| ("DATA_DIR_UNAVAILABLE", format!("无法定位数据目录: {error}")))?;
+    let registry = match load_with_recovery(&data_dir) {
+        Ok(Some(registry)) => registry,
+        Ok(None) => {
+            return Err(("ACCOUNT_REGISTRY_MISSING", "账号注册表不可用".to_owned()));
+        }
+        Err(error) => return Err(("ACCOUNT_REGISTRY_INVALID", error.to_string())),
+    };
+    if registry.active_account_id != target.account_id
+        || registry.account(&target.account_id).is_none()
+    {
+        return Err((
+            "ACCOUNT_SWITCH_REQUIRED",
+            "该提醒属于另一个账号；请先手动切换账号后重试".to_owned(),
+        ));
+    }
+    if state.account.account_id != target.account_id {
+        return Err((
+            "ACCOUNT_SWITCH_REQUIRED",
+            "当前打开的账号与提醒目标不一致".to_owned(),
+        ));
+    }
+    let Some(_lease) = state.runtime.enter_storage() else {
+        return Err((
+            "ACCOUNT_SWITCH_IN_PROGRESS",
+            "账号切换进行中，暂时无法打开任务".to_owned(),
+        ));
+    };
+    match state.store.get_task(&target.task_id) {
+        Ok(Some(task)) => Ok(task.title.clone()),
+        Ok(None) => Err(("TASK_NOT_FOUND", "提醒对应的任务已删除或不可见".to_owned())),
+        Err(error) => Err(("TASK_READ_FAILED", format!("无法读取任务: {error}"))),
+    }
+}
+
+/// Called from the notification plugin's action handler. This is deliberately
+/// synchronous and does not expose any command with the same power.
 pub fn handle_action(app: &AppHandle, action_id: &str) {
     // A body tap is reported as `tap`; without a target token it must not open
     // an arbitrary task. The product uses an explicit "打开任务" action.
@@ -155,61 +205,17 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
         reject(app, "APP_NOT_READY", "应用尚未完成初始化");
         return;
     };
-    let data_dir = match app.path().app_data_dir() {
-        Ok(path) => path,
-        Err(error) => {
-            reject(
-                app,
-                "DATA_DIR_UNAVAILABLE",
-                format!("无法定位数据目录: {error}"),
-            );
-            return;
-        }
-    };
-    let registry = match load_with_recovery(&data_dir) {
-        Ok(Some(registry)) => registry,
-        Ok(None) => {
-            reject(app, "ACCOUNT_REGISTRY_MISSING", "账号注册表不可用");
-            return;
-        }
-        Err(error) => {
-            reject(app, "ACCOUNT_REGISTRY_INVALID", error.to_string());
-            return;
-        }
-    };
-    if registry.active_account_id != target.account_id
-        || registry.account(&target.account_id).is_none()
-    {
-        reject(
-            app,
-            "ACCOUNT_SWITCH_REQUIRED",
-            "该提醒属于另一个账号；请先手动切换账号后重试",
-        );
-        return;
-    }
-    if !state.runtime.accepts_storage() {
-        reject(
-            app,
-            "ACCOUNT_SWITCH_IN_PROGRESS",
-            "账号切换进行中，暂时无法打开任务",
-        );
-        return;
-    }
-    let task = match state.store.get_task(&target.task_id) {
-        Ok(Some(task)) => task,
-        Ok(None) => {
-            reject(app, "TASK_NOT_FOUND", "提醒对应的任务已删除或不可见");
-            return;
-        }
-        Err(error) => {
-            reject(app, "TASK_READ_FAILED", format!("无法读取任务: {error}"));
+    let task_title = match validate_target(app, &state, &target) {
+        Ok(title) => title,
+        Err((code, message)) => {
+            reject(app, code, message);
             return;
         }
     };
     let activation = Activation {
         activation_id: app.state::<NotificationActivationState>().next_id(),
         target,
-        task_title: task.title.clone(),
+        task_title,
     };
     app.state::<NotificationActivationState>()
         .put(activation.clone());
@@ -219,9 +225,24 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
 
 #[tauri::command]
 pub fn native_take_notification_activation(
-    state: State<'_, NotificationActivationState>,
+    app: AppHandle,
+    activation_state: State<'_, NotificationActivationState>,
+    app_state: State<'_, AppState>,
 ) -> Option<Activation> {
-    state.take()
+    let activation = activation_state.take()?;
+    match validate_target(&app, &app_state, &activation.target) {
+        Ok(task_title) => Some(Activation {
+            task_title,
+            ..activation
+        }),
+        Err((code, message)) => {
+            // The account can switch after the notification was clicked but
+            // before the WebView takes it. Never deliver a target that is no
+            // longer valid for the active account.
+            reject(&app, code, message);
+            None
+        }
+    }
 }
 
 #[tauri::command]

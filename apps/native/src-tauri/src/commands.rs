@@ -7,7 +7,8 @@ use todo_native_accounts::{
     AbortSwitchOutcome, AccountList, AccountSummary, FaultPoint, SwitchStatus,
     abort_prepared_switch, create_pending_cloud_account, fault_point, list_accounts,
     mark_account_verified, normalize_api_url, normalize_email, prepare_account_switch,
-    request_account_switch, rollback_pending_switch, switch_status, verify_cloud_identity,
+    request_account_switch, rollback_pending_switch, switch_status,
+    validate_account_switch_request, verify_cloud_identity,
 };
 use todo_native_core::{CloudInitializeRequest, StoreError, TodoStore};
 
@@ -54,6 +55,36 @@ impl CommandError {
 
     fn account_switch(message: impl Into<String>) -> Self {
         Self::new("ACCOUNT_SWITCH", message)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaBuildIdentity {
+    pub is_qa: bool,
+    pub identifier: String,
+    pub data_root: String,
+    pub credential_service: String,
+    pub fault_injection_enabled: bool,
+}
+
+/// A read-only identity probe used by the QA harness before any destructive
+/// fixture. A production build returns `isQa: false`; the harness must abort.
+/// This command cannot arm faults, change credentials or write data.
+#[tauri::command]
+pub fn qa_build_identity(app: AppHandle) -> QaBuildIdentity {
+    let identifier = app.config().identifier.clone();
+    let data_root = app
+        .path()
+        .app_data_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    QaBuildIdentity {
+        is_qa: identifier == "app.shishi.todo.qa",
+        identifier,
+        data_root,
+        credential_service: secure_tokens::service_name().to_owned(),
+        fault_injection_enabled: cfg!(feature = "native-qa"),
     }
 }
 
@@ -229,6 +260,10 @@ pub fn native_request_account_switch(
     ensure_restart_supported()?;
     let root = data_dir(&app)?;
     let mut request = state.runtime.begin_request().map_err(gate_error)?;
+    // Validate the journal before cancelling anything: a stale/malformed request
+    // must not remove the active account's notifications.
+    validate_account_switch_request(&root, &target_account_id, generation)
+        .map_err(|error| CommandError::account_switch(error.to_string()))?;
     // Cancel the old account's system notifications before the process exits.
     // Failure keeps the gate closed at PREPARED; the frontend must cold-restart.
     cancel_current_account_reminders(&state)?;
@@ -545,29 +580,46 @@ fn body_matches(current_body: &str, raw_body: &str) -> bool {
 /// Cancel one entry and verify the platform queue no longer reports it. A
 /// platform can return success while retaining the old notification; that must
 /// become a visible failed item rather than a silent success.
-fn cancel_and_verify(
+fn cancel_entry(
     reminders: &dyn ReminderAdapter,
     reminder_id: &str,
     report: &mut ReminderReconcileReport,
+    cancelled_ids: &mut Vec<String>,
 ) {
     match reminders.cancel(reminder_id) {
-        Ok(()) => {
-            report.cancelled += 1;
-            match reminders.scheduled() {
-                Ok(items) if items.iter().any(|item| item.reminder_id == reminder_id) => {
+        Ok(()) => cancelled_ids.push(reminder_id.to_owned()),
+        Err(error) => report
+            .failed
+            .push(format!("{reminder_id}: cancel failed: {error}")),
+    }
+}
+
+/// Verify all successful cancellation calls in one platform queue read. Doing
+/// this per entry made a large stale queue O(n^2) and could hold the storage
+/// lease long enough to trip the 2 second switch drain timeout.
+fn verify_cancellations(
+    reminders: &dyn ReminderAdapter,
+    cancelled_ids: &[String],
+    report: &mut ReminderReconcileReport,
+) {
+    if cancelled_ids.is_empty() {
+        return;
+    }
+    match reminders.scheduled() {
+        Ok(items) => {
+            for reminder_id in cancelled_ids {
+                if items.iter().any(|item| &item.reminder_id == reminder_id) {
                     report.failed.push(format!(
                         "{reminder_id}: cancel reported success but entry remains"
-                    ))
+                    ));
+                } else {
+                    report.cancelled += 1;
                 }
-                Ok(_) => {}
-                Err(error) => report
-                    .failed
-                    .push(format!("{reminder_id}: residual check failed: {error}")),
             }
         }
         Err(error) => report
             .failed
-            .push(format!("{reminder_id}: cancel failed: {error}")),
+            .push(format!("cancel residual verification failed: {error}")),
     }
 }
 
@@ -583,6 +635,7 @@ fn reconcile_reminder_queue(
     let prefix = format!("account:{account_id}:");
     let existing = reminders.scheduled()?;
     let mut report = ReminderReconcileReport::default();
+    let mut cancelled_ids = Vec::new();
     let mut existing_by_id: std::collections::HashMap<
         String,
         crate::reminders::ScheduledReminderInfo,
@@ -593,17 +646,28 @@ fn reconcile_reminder_queue(
             if active.contains(task_id) {
                 existing_by_id.insert(task_id.to_owned(), item);
             } else {
-                cancel_and_verify(reminders, &item.reminder_id, &mut report);
+                cancel_entry(
+                    reminders,
+                    &item.reminder_id,
+                    &mut report,
+                    &mut cancelled_ids,
+                );
             }
         } else {
             // Notifications created by another account, or legacy untagged
             // entries from before account scoping, must never be interpreted as
             // the current account's tasks.
-            cancel_and_verify(reminders, &item.reminder_id, &mut report);
+            cancel_entry(
+                reminders,
+                &item.reminder_id,
+                &mut report,
+                &mut cancelled_ids,
+            );
         }
     }
 
     if reminders.permission() != "granted" {
+        verify_cancellations(reminders, &cancelled_ids, &mut report);
         report.permission_denied =
             tasks.iter().filter(|task| task.remind_at.is_some()).count() as u32;
         return Ok(report);
@@ -632,27 +696,28 @@ fn reconcile_reminder_queue(
                     report.scheduled += 1;
                 }
                 Ok(mode) if mode == "past" || mode == "skipped-past" => {
-                    cancel_and_verify(reminders, &scoped, &mut report);
+                    cancel_entry(reminders, &scoped, &mut report, &mut cancelled_ids);
                     report.skipped_past += 1;
                 }
                 Ok(mode) if mode == "outside-window" => {
-                    cancel_and_verify(reminders, &scoped, &mut report);
+                    cancel_entry(reminders, &scoped, &mut report, &mut cancelled_ids);
                     report.outside_window += 1;
                 }
                 Ok(mode) if mode == "capacity-exceeded" => {
-                    cancel_and_verify(reminders, &scoped, &mut report);
+                    cancel_entry(reminders, &scoped, &mut report, &mut cancelled_ids);
                     report.capacity_exceeded += 1;
                 }
                 Ok(mode) => report
                     .failed
                     .push(format!("{}: unknown mode {mode}", task.id)),
                 Err(error) => {
-                    cancel_and_verify(reminders, &scoped, &mut report);
+                    cancel_entry(reminders, &scoped, &mut report, &mut cancelled_ids);
                     report.failed.push(format!("{}: {error}", task.id));
                 }
             }
         }
     }
+    verify_cancellations(reminders, &cancelled_ids, &mut report);
     Ok(report)
 }
 
@@ -661,19 +726,22 @@ pub async fn reschedule_reminders(
     state: State<'_, AppState>,
 ) -> Result<ReminderReconcileReport, CommandError> {
     ensure_runtime_active(&state)?;
+    let account_id = state.account.account_id.clone();
+    let store = Arc::clone(&state.store);
+    let reminders: Arc<dyn ReminderAdapter> = Arc::clone(&state.reminders);
+    // SQLite read-only candidate scan does not need to hold the switch lease.
+    // Release it while the blocking query runs, then re-acquire before touching
+    // the platform queue so a switch cannot be held up by a 100k scan.
+    let tasks = tauri::async_runtime::spawn_blocking(move || store.upcoming_reminders())
+        .await
+        .map_err(|error| CommandError::new("INTERNAL", format!("提醒查询异常: {error}")))?
+        .map_err(CommandError::from_store)?;
     let _lease = state.runtime.enter_storage().ok_or_else(|| {
         CommandError::new(
             "ACCOUNT_SWITCH_IN_PROGRESS",
             "账号切换进行中，当前账号已停止调度通知",
         )
     })?;
-    let account_id = state.account.account_id.clone();
-    let store = Arc::clone(&state.store);
-    let reminders: Arc<dyn ReminderAdapter> = Arc::clone(&state.reminders);
-    let tasks = tauri::async_runtime::spawn_blocking(move || store.upcoming_reminders())
-        .await
-        .map_err(|error| CommandError::new("INTERNAL", format!("提醒查询异常: {error}")))?
-        .map_err(CommandError::from_store)?;
     reconcile_reminder_queue(reminders.as_ref(), &tasks, &account_id)
         .map_err(CommandError::reminder)
 }
@@ -1089,7 +1157,10 @@ mod tests {
             });
         adapter.retain_after_cancel.store(true, Ordering::SeqCst);
         let report = reconcile_reminder_queue(&adapter, &[], "default").expect("reconcile");
-        assert_eq!(report.cancelled, 1);
+        assert_eq!(
+            report.cancelled, 0,
+            "a residual entry is not a cancellation"
+        );
         assert!(
             report
                 .failed

@@ -108,6 +108,17 @@ pub fn install_qa_backend(backend: Arc<dyn CredentialBackend>) -> Result<(), Str
     Ok(())
 }
 
+pub fn service_name() -> &'static str {
+    #[cfg(desktop)]
+    {
+        SERVICE
+    }
+    #[cfg(mobile)]
+    {
+        "mobile-keychain"
+    }
+}
+
 fn backend(app: &AppHandle) -> Arc<dyn CredentialBackend> {
     #[cfg(feature = "native-qa")]
     if let Some(slot) = QA_BACKEND.get()
@@ -168,6 +179,14 @@ fn migrate_with(backend: &dyn CredentialBackend, account_id: &str) -> Result<(),
     // needs no migration, and deleting the target would delete the only copy.
     if target_key == LEGACY_REFRESH_TOKEN_KEY {
         return Ok(());
+    }
+    if backend.get(&target_key)?.is_some() {
+        // A normal token refresh may have happened after an earlier migration
+        // whose legacy delete failed. Never overwrite the account-scoped token
+        // with the stale legacy value; remove only the leftover legacy copy.
+        return backend.delete(LEGACY_REFRESH_TOKEN_KEY).map_err(|error| {
+            format!("account token preserved, legacy token delete failed: {error}")
+        });
     }
     let Some(token) = backend.get(LEGACY_REFRESH_TOKEN_KEY)? else {
         return Ok(());
@@ -324,6 +343,45 @@ mod tests {
             values.get(LEGACY_REFRESH_TOKEN_KEY).map(String::as_str),
             Some("legacy-token"),
             "a failed delete must leave the old value for idempotent retry"
+        );
+    }
+
+    #[test]
+    fn existing_account_token_is_never_overwritten_by_stale_legacy() {
+        let backend = seeded();
+        backend
+            .values
+            .lock()
+            .expect("values")
+            .insert(TARGET.to_owned(), "fresh-account-token".to_owned());
+        migrate_with(&backend, ACCOUNT).expect("migration");
+        let values = backend.values.lock().expect("values");
+        assert_eq!(
+            values.get(TARGET).map(String::as_str),
+            Some("fresh-account-token")
+        );
+        assert!(!values.contains_key(LEGACY_REFRESH_TOKEN_KEY));
+    }
+
+    #[test]
+    fn existing_account_token_survives_legacy_delete_failure() {
+        let backend = seeded();
+        backend
+            .values
+            .lock()
+            .expect("values")
+            .insert(TARGET.to_owned(), "fresh-account-token".to_owned());
+        *backend.fail_delete.lock().expect("flag") = true;
+        let error = migrate_with(&backend, ACCOUNT).expect_err("delete failure");
+        assert!(error.contains("account token preserved"));
+        let values = backend.values.lock().expect("values");
+        assert_eq!(
+            values.get(TARGET).map(String::as_str),
+            Some("fresh-account-token")
+        );
+        assert_eq!(
+            values.get(LEGACY_REFRESH_TOKEN_KEY).map(String::as_str),
+            Some("legacy-token")
         );
     }
 

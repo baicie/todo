@@ -12,8 +12,8 @@ use chrono::Utc;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use todo_native_accounts::{
-    MigrationState, SwitchStatus, legacy_review_report, list_accounts, migration_backups_dir,
-    migration_state, switch_status, verify_integrity,
+    AccountRegistry, MigrationPhase, legacy_review_report, migration_backups_dir,
+    migration_state_read_only, switch_status, verify_integrity,
 };
 
 use crate::{commands::CommandError, db::AppState};
@@ -36,6 +36,35 @@ pub struct DiagnosticAccount {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiagnosticMigration {
+    pub phase: MigrationPhase,
+    pub target_account_id: Option<String>,
+    pub source_file: String,
+    pub backup_file: Option<String>,
+    pub has_error: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticLegacyReview {
+    pub reason_code: &'static str,
+    pub source_file: String,
+    pub backup_file: Option<String>,
+    pub requires_manual_identity_verification: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticSwitch {
+    pub active: bool,
+    pub phase: Option<String>,
+    pub from_account_id: Option<String>,
+    pub to_account_id: Option<String>,
+    pub pending_outbox: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecoveryDiagnostics {
     pub generated_at: String,
     pub app_version: String,
@@ -45,11 +74,12 @@ pub struct RecoveryDiagnostics {
     pub active_database_file: String,
     pub active_database_integrity: String,
     pub legacy_source_present: bool,
-    pub migration: Option<MigrationState>,
-    pub legacy_review: Option<todo_native_accounts::LegacyReviewReport>,
-    pub switch: Option<SwitchStatus>,
+    pub migration: Option<DiagnosticMigration>,
+    pub legacy_review: Option<DiagnosticLegacyReview>,
+    pub switch: Option<DiagnosticSwitch>,
     pub accounts: Vec<DiagnosticAccount>,
     pub backups: Vec<DiagnosticBackup>,
+    pub conflict_reasons: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -60,16 +90,21 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
 }
 
 pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnostics, String> {
-    let accounts = list_accounts(root).map_err(|error| error.to_string())?;
-    let migration = migration_state(root).map_err(|error| error.to_string())?;
+    let registry = AccountRegistry::load(root).map_err(|error| error.to_string())?;
+    let migration = migration_state_read_only(root).map_err(|error| error.to_string())?;
     let legacy_review = legacy_review_report(root).map_err(|error| error.to_string())?;
     let switch = switch_status(root).map_err(|error| error.to_string())?;
-    let active = accounts
+    let active = registry.active_account_id.clone();
+    let accounts: Vec<DiagnosticAccount> = registry
         .accounts
         .iter()
-        .find(|account| account.active)
-        .map(|account| account.id.clone())
-        .unwrap_or_else(|| active_account_id.to_owned());
+        .map(|account| DiagnosticAccount {
+            id: account.id.clone(),
+            kind: account.kind.as_str().to_owned(),
+            active: account.id == registry.active_account_id,
+            pending: account.pending,
+        })
+        .collect();
     let database = todo_native_accounts::account_database_path(root, active_account_id)
         .map_err(|error| error.to_string())?;
     let integrity = if database.is_file() {
@@ -98,22 +133,45 @@ pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnosti
     }
     backups.sort_by(|left, right| left.file.cmp(&right.file));
 
-    let mut warnings = Vec::new();
-    if let Some(review) = &legacy_review {
-        warnings.push(format!(
-            "legacy review required: {}",
-            review
-                .reason
-                .as_deref()
-                .unwrap_or("legacy ownership is ambiguous")
-        ));
-    }
-    if let Some(failure) = &switch.phase {
-        warnings.push(format!("switch journal phase: {failure:?}"));
+    let mut conflict_reasons = Vec::new();
+    let migration = migration.map(|state| {
+        if state.phase == MigrationPhase::RequiresReview {
+            conflict_reasons.push("legacy_identity_requires_manual_review".to_owned());
+        }
+        if state.phase == MigrationPhase::Failed {
+            conflict_reasons.push("legacy_migration_failed".to_owned());
+        }
+        DiagnosticMigration {
+            phase: state.phase,
+            target_account_id: state.target_account_id,
+            source_file: state.source_file,
+            backup_file: state.backup_file,
+            has_error: state.error.is_some(),
+        }
+    });
+    let legacy_review = legacy_review.map(|review| {
+        conflict_reasons.push("legacy_identity_requires_manual_review".to_owned());
+        DiagnosticLegacyReview {
+            reason_code: "LEGACY_IDENTITY_AMBIGUOUS",
+            source_file: review.source_file,
+            backup_file: review.backup_file,
+            requires_manual_identity_verification: review.requires_manual_identity_verification,
+        }
+    });
+    if switch.phase == Some(todo_native_accounts::SwitchPhase::Failed) {
+        conflict_reasons.push("switch_journal_failed".to_owned());
     }
     if integrity != "ok" {
-        warnings.push(format!("active database integrity: {integrity}"));
+        conflict_reasons.push("active_database_integrity_failed".to_owned());
     }
+    let switch = DiagnosticSwitch {
+        active: switch.active,
+        phase: switch.phase.map(|phase| format!("{phase:?}")),
+        from_account_id: switch.from_account_id,
+        to_account_id: switch.to_account_id,
+        pending_outbox: switch.pending_outbox,
+    };
+    let warnings = conflict_reasons.clone();
 
     Ok(RecoveryDiagnostics {
         generated_at: Utc::now().to_rfc3339(),
@@ -131,17 +189,9 @@ pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnosti
         migration,
         legacy_review,
         switch: Some(switch),
-        accounts: accounts
-            .accounts
-            .into_iter()
-            .map(|account| DiagnosticAccount {
-                id: account.id,
-                kind: account.kind,
-                active: account.active,
-                pending: account.pending,
-            })
-            .collect(),
+        accounts,
         backups,
+        conflict_reasons,
         warnings,
     })
 }
@@ -200,6 +250,13 @@ mod tests {
         assert_eq!(report.active_database_integrity, "ok");
         assert!(!report.force_bind_available);
         assert!(!report.legacy_source_present);
+        todo_native_accounts::create_pending_cloud_account(
+            root,
+            "redacted@example.test",
+            "https://example.test",
+        )
+        .expect("pending account");
+        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID).expect("diagnostics");
         let json = serde_json::to_string(&report).expect("json");
         assert!(!json.contains("token"));
         assert!(!json.contains("@example.test"));

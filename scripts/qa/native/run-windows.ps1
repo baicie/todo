@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $Timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = "rc2d-$Timestamp" }
-if ($RunId -match '[^A-Za-z0-9._-]') { throw "RunId contains unsafe characters: $RunId" }
+if ($RunId -match '[^A-Za-z0-9._-]' -or $RunId.Contains('..')) { throw "RunId contains unsafe characters: $RunId" }
 
 $ArtifactRoot = Join-Path $RepoRoot "artifacts\native-qa\$RunId"
 $LogDir = Join-Path $ArtifactRoot "logs"
@@ -68,6 +68,10 @@ try {
     if ($found) { $Installer = $found.FullName }
   }
   if ($Installer -and (Test-Path -LiteralPath $Installer)) {
+    $installerProduct = (Get-Item -LiteralPath $Installer).VersionInfo.ProductName
+    if ($installerProduct -ne "Shishi QA RC2D") {
+      throw "refusing non-QA installer ProductName=$installerProduct"
+    }
     $installerHash = Get-Sha256 $Installer
   }
 
@@ -92,6 +96,10 @@ try {
     throw "QA executable not found. Build with -Build or pass -AppExe."
   }
 
+  $appProduct = (Get-Item -LiteralPath $AppExe).VersionInfo.ProductName
+  if ($appProduct -ne "Shishi QA RC2D") {
+    throw "refusing non-QA app ProductName=$appProduct; QA harness never runs against production"
+  }
   $qaDataRoot = Join-Path $env:APPDATA "app.shishi.todo.qa"
   $productionDataRoot = Join-Path $env:APPDATA "app.shishi.todo"
   $environment = [ordered]@{
@@ -143,13 +151,22 @@ try {
   $arguments = @()
   if ($FaultConfig) {
     if (-not (Test-Path -LiteralPath $FaultConfig)) { throw "Fault config not found: $FaultConfig" }
-    $arguments = @("--rc2d-fault-config", (Resolve-Path -LiteralPath $FaultConfig).Path)
+    $sourceConfig = Get-Content -LiteralPath $FaultConfig -Raw | ConvertFrom-Json
+    $sourceConfig.evidencePath = $faultEvidence
+    $runConfigPath = Join-Path $ArtifactRoot "qa-fault-config.json"
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($runConfigPath, ($sourceConfig | ConvertTo-Json -Depth 10), $utf8)
+    $FaultConfig = $runConfigPath
+    Remove-Item -LiteralPath $faultEvidence -Force -ErrorAction SilentlyContinue
+    $arguments = @("--rc2d-fault-config", "`"$runConfigPath`"")
+    $env:QA_FAULT_CONFIG = $runConfigPath
   }
   $appExeAbsolute = (Resolve-Path -LiteralPath $AppExe).Path
   $AppExe = $appExeAbsolute
   Write-Log (Join-Path $LogDir "launcher.log") "launching $appExeAbsolute"
   $startArgs = @{
     FilePath = $appExeAbsolute
+    WorkingDirectory = $RepoRoot
     PassThru = $true
     RedirectStandardOutput = $appOut
     RedirectStandardError = $appErr
@@ -184,6 +201,8 @@ try {
     installerSha256 = $installerHash
     faultConfig = $FaultConfig
     faultEvidencePresent = (Test-Path -LiteralPath $faultEvidence)
+    gitCommit = if ($env:QA_GIT_COMMIT) { $env:QA_GIT_COMMIT } else { "unknown" }
+    gitBranch = if ($env:QA_GIT_BRANCH) { $env:QA_GIT_BRANCH } else { "unknown" }
     qaDataRoot = $qaDataRoot
     productionDataRootPresentAfter = (Test-Path -LiteralPath $productionDataRoot)
     status = $testStatus

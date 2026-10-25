@@ -20,7 +20,7 @@ use todo_native_accounts::{FaultAction, FaultEvent, FaultEvidence, FaultInjector
 use crate::secure_tokens::{self, CredentialBackend};
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FaultConfig {
     evidence_path: PathBuf,
     #[serde(default)]
@@ -38,6 +38,7 @@ enum CredentialBackendKind {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FaultRule {
     point: FaultPoint,
     action: Action,
@@ -125,7 +126,7 @@ fn argument_value(name: &str) -> Option<PathBuf> {
 
 fn require_qa_identifier(app: &AppHandle) -> Result<(), String> {
     let identifier = app.config().identifier.clone();
-    if identifier.starts_with("app.shishi.todo.qa") {
+    if identifier == "app.shishi.todo.qa" {
         Ok(())
     } else {
         Err(format!(
@@ -134,7 +135,20 @@ fn require_qa_identifier(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn open_evidence(path: &Path) -> Result<File, String> {
+fn open_evidence(app: &AppHandle, path: &Path) -> Result<File, String> {
+    let app_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let production_root = app_root
+        .parent()
+        .map(|parent| parent.join("app.shishi.todo"));
+    if production_root
+        .as_deref()
+        .is_some_and(|production| path.starts_with(production))
+    {
+        return Err("QA evidence path must not be inside the production data root".to_owned());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -170,7 +184,7 @@ pub fn initialize(app: &AppHandle) -> Result<(), String> {
         .collect();
     let injector = Arc::new(FileInjector {
         rules: Mutex::new(rules),
-        evidence: Mutex::new(open_evidence(&config.evidence_path)?),
+        evidence: Mutex::new(open_evidence(app, &config.evidence_path)?),
     });
     todo_native_accounts::fault::install(injector)
         .map_err(|error| format!("unable to install QA fault injector: {error}"))?;

@@ -127,6 +127,52 @@ await page.waitForFunction(
   { timeout: 30000 },
 );
 
+// P0 guard: never run credential writes, task imports or fault probes until
+// the binary proves it is the QA build. A production binary returns isQa=false.
+const identityResult = await invoke(page, 'qa_build_identity');
+const identity = identityResult.ok ? identityResult.value : null;
+const identityOk =
+  identity?.isQa === true &&
+  identity.identifier === 'app.shishi.todo.qa' &&
+  identity.credentialService === 'app.shishi.todo.rc2d-qa.secure-token' &&
+  identity.faultInjectionEnabled === true &&
+  String(identity.dataRoot).toLowerCase().endsWith('app.shishi.todo.qa');
+if (!identityOk) {
+  const message = `QA identity guard failed: ${JSON.stringify(identityResult)}`;
+  const failure = {
+    generatedAt: new Date().toISOString(),
+    status: 'FAIL',
+    counts: { PASS: 0, FAIL: 1, NOT_RUN: 0 },
+    tests: [{ name: 'qa_build_identity', status: 'FAIL', durationMs: 0, error: message }],
+  };
+  fs.writeFileSync(path.join(artifactRoot, 'tests.json'), JSON.stringify(failure, null, 2));
+  fs.writeFileSync(
+    path.join(artifactRoot, 'summary.md'),
+    `# RC2-D Native QA Run
+
+- Status: **FAIL**
+- ${message}
+
+No destructive QA fixture was executed.
+`,
+  );
+  fs.writeFileSync(path.join(logDir, 'harness.jsonl'), `${message}
+`);
+  await browser.close().catch(() => {});
+  process.exit(1);
+}
+tests.push({
+  name: 'qa_build_identity',
+  status: 'PASS',
+  durationMs: 0,
+  detail: {
+    identifier: identity.identifier,
+    dataRoot: identity.dataRoot,
+    credentialService: identity.credentialService,
+  },
+});
+event('qa_build_identity_verified', { identifier: identity.identifier });
+
 await run('qa_boot_context', async () => {
   const context = unwrap(await invoke(page, 'native_account_context'), 'native_account_context');
   const status = unwrap(await invoke(page, 'native_account_switch_status'), 'native_account_switch_status');

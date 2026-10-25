@@ -219,6 +219,30 @@ pub fn prepare_account_switch(root: &Path, target_id: &str) -> AccountResult<Swi
     })
 }
 
+/// Read-only request validation used by the command layer before destructive
+/// side effects such as cancelling notifications. It proves the journal target
+/// and generation still match before those effects run.
+pub fn validate_account_switch_request(
+    root: &Path,
+    target_id: &str,
+    generation: u64,
+) -> AccountResult<()> {
+    let journal = PendingAccountSwitch::load(root)?.ok_or_else(|| {
+        AccountError::InvalidRegistry("no prepared account switch exists".to_owned())
+    })?;
+    if journal.to_account_id != target_id || journal.generation != generation {
+        return Err(AccountError::InvalidRegistry(
+            "account switch request does not match the prepared journal".to_owned(),
+        ));
+    }
+    match journal.phase {
+        SwitchPhase::Prepared | SwitchPhase::RestartRequired => Ok(()),
+        _ => Err(AccountError::InvalidRegistry(
+            "account switch is not in a requestable phase".to_owned(),
+        )),
+    }
+}
+
 pub fn request_account_switch(
     root: &Path,
     target_id: &str,

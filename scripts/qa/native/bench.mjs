@@ -38,6 +38,19 @@ async function connect() {
 const { browser, page } = await connect();
 await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__), undefined, { timeout: 30000 });
 
+// Benchmarks replace the whole store. Refuse to touch a non-QA binary.
+const identityResult = await page.evaluate(async () => {
+  try {
+    return { ok: true, value: await window.__TAURI_INTERNALS__.invoke('qa_build_identity') };
+  } catch (error) {
+    return { ok: false, error: typeof error === 'string' ? error : error?.message ?? String(error) };
+  }
+});
+const identity = identityResult.ok ? identityResult.value : null;
+if (!identity?.isQa || identity.identifier !== 'app.shishi.todo.qa') {
+  throw new Error(`QA identity guard failed before benchmark: ${JSON.stringify(identityResult)}`);
+}
+
 async function invoke(command, args = {}) {
   return page.evaluate(
     async ({ command, args }) => {
@@ -160,12 +173,12 @@ fs.writeFileSync(
   JSON.stringify(
     {
       generatedAt: new Date().toISOString(),
-      status: 'PASS',
-      counts: { PASS: 1, FAIL: 0, NOT_RUN: 0 },
+      status: 'BENCH_ONLY',
+      counts: { PASS: 1, FAIL: 0, NOT_RUN: 0, BENCH_ONLY: 1 },
       tests: [
         {
           name: 'qa_import_benchmark',
-          status: 'PASS',
+          status: 'BENCH_ONLY',
           durationMs: samples.reduce((total, sample) => total + sample.elapsedMs, 0),
           detail: { sizes, runs, samples: samples.length },
         },

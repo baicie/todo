@@ -12,7 +12,7 @@ Isolated Windows QA build for account lifecycle, credentials, reminders and faul
 
 ## Build
 
-From the repository root:
+From `apps/native`:
 
 ```powershell
 pnpm dlx @tauri-apps/cli@2.12.4 build `
@@ -21,7 +21,7 @@ pnpm dlx @tauri-apps/cli@2.12.4 build `
   --bundles nsis
 ```
 
-Run it from `apps/native`, or use:
+Or from the repository root:
 
 ```powershell
 ./scripts/qa/native/run-windows.ps1 -Build
@@ -57,11 +57,23 @@ Performance smoke (`PerfTasks` creates tasks through the real WebView IPC):
 ./scripts/qa/native/run-windows.ps1 -AppExe "..." -PerfTasks 1000
 ```
 
+Repeatable import benchmark (replace mode, three runs by default):
+
+```powershell
+./scripts/qa/native/run-windows.ps1 `
+  -AppExe "..." `
+  -BenchSizes "1000,10000,100000" `
+  -BenchRuns 3
+```
+
+The benchmark writes `performance.json` with P50/P95 per size. It measures the
+real WebView IPC import path, not cloud outbox upload or desktop startup.
+
 ## Output
 
 `artifacts/native-qa/<run-id>/`:
 
-- `manifest.json` — run status, app/installer SHA-256, QA/production data roots.
+- `manifest.json` — run status, git commit/branch, app/installer SHA-256, QA/production data roots.
 - `environment.json` — OS, CPU, memory, Rust/Node/pnpm/WebView2 versions.
 - `provenance.json` — git HEAD/branch/status, package/native manifest, build log reference.
 - `tests.json` — PASS / FAIL / NOT_RUN with no fabricated results.

@@ -282,10 +282,25 @@ pub struct LegacyReviewReport {
     pub requires_manual_identity_verification: bool,
 }
 
+/// Read-only migration state load. Unlike startup recovery this never repairs
+/// a ReplaceFileW journal or writes the state file back.
+pub fn migration_state_read_only(root: &Path) -> AccountResult<Option<MigrationState>> {
+    let path = migration_state_file(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read(&path)?;
+    let state: MigrationState = serde_json::from_slice(&raw).map_err(|error| {
+        AccountError::InvalidRegistry(format!("migration state is corrupt: {error}"))
+    })?;
+    state.validate()?;
+    Ok(Some(state))
+}
+
 /// Read-only diagnosis for a legacy database blocked as REQUIRES_REVIEW.
 /// This never writes registry/DB state and never offers a force-bind shortcut.
 pub fn legacy_review_report(root: &Path) -> AccountResult<Option<LegacyReviewReport>> {
-    let Some(state) = MigrationState::load(root)? else {
+    let Some(state) = migration_state_read_only(root)? else {
         return Ok(None);
     };
     if state.phase != MigrationPhase::RequiresReview {
