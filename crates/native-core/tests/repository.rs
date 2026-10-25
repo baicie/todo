@@ -565,6 +565,48 @@ fn replace_import_allows_same_id_across_entity_types() {
 }
 
 #[test]
+fn external_sqlite_write_lock_is_reported_without_partial_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("locked.sqlite3");
+    let store = TodoStore::open(&path).expect("open store");
+    let lists_before = store.list_lists().expect("lists before");
+    let outbox_before = serde_json::to_value(store.pending_mutations(100).expect("outbox before"))
+        .expect("outbox json");
+
+    let external = Connection::open(&path).expect("external connection");
+    external
+        .execute_batch("BEGIN IMMEDIATE;")
+        .expect("hold external write lock");
+    let error = store
+        .create_list(NewList {
+            name: "blocked".to_owned(),
+            ..NewList::default()
+        })
+        .expect_err("write must observe the external lock");
+    external.execute_batch("ROLLBACK;").expect("release lock");
+
+    let message = error.to_string().to_lowercase();
+    assert!(
+        message.contains("locked") || message.contains("busy"),
+        "unexpected busy error: {error}"
+    );
+    assert_eq!(
+        lists_before.iter().map(|list| &list.id).collect::<Vec<_>>(),
+        store
+            .list_lists()
+            .expect("lists after")
+            .iter()
+            .map(|list| &list.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        outbox_before,
+        serde_json::to_value(store.pending_mutations(100).expect("outbox after"))
+            .expect("outbox json")
+    );
+}
+
+#[test]
 fn merge_import_preserves_unique_rows() {
     let (store, bundle, task_id) = import_fixture();
     store
