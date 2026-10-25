@@ -1,6 +1,7 @@
 #![cfg(feature = "fault-injection")]
 
 use std::{
+    fs,
     path::PathBuf,
     process::{Command, ExitStatus},
     sync::Arc,
@@ -10,8 +11,8 @@ use tempfile::TempDir;
 use todo_native_accounts::{
     DEFAULT_ACCOUNT_ID, FaultAction, FaultEvent, FaultInjector, FaultPoint, SwitchPhase,
     create_pending_cloud_account, ensure_active_account, fault::install, finish_pending_switch,
-    prepare_account_switch, read_snapshot, recover_pending_switch, request_account_switch,
-    switch_status,
+    list_accounts, prepare_account_switch, read_snapshot, recover_pending_switch,
+    request_account_switch, rollback_pending_switch, switch_status,
 };
 use todo_native_core::{NewTask, TodoStore};
 
@@ -42,6 +43,7 @@ fn crash_child_exits_at_configured_fault() {
     let point = match std::env::var("SHISHI_CRASH_POINT").expect("point").as_str() {
         "prepared" => FaultPoint::SwitchPreparedPersisted,
         "restart_required" => FaultPoint::SwitchRestartRequiredPersisted,
+        "failed_persisted" => FaultPoint::SwitchFailedPersisted,
         "verifying_target" => FaultPoint::SwitchVerifyingTargetPersisted,
         "registry_before" => FaultPoint::RegistryActiveBeforeUpdate,
         "registry_after" => FaultPoint::RegistryActiveAfterUpdate,
@@ -67,6 +69,9 @@ fn crash_child_exits_at_configured_fault() {
         "recover_finish" => {
             recover_pending_switch(&root).expect("recover");
             finish_pending_switch(&root).expect("finish");
+        }
+        "rollback" => {
+            rollback_pending_switch(&root, "QA_CRASH").expect("rollback");
         }
         other => panic!("unknown crash operation: {other}"),
     }
@@ -135,6 +140,29 @@ fn snapshots(
     let target = read_snapshot(&root.join("accounts").join(target).join("shishi.sqlite3"))
         .expect("target snap");
     (source, target)
+}
+
+fn assert_full_snapshots_unchanged(
+    root: &std::path::Path,
+    target: &str,
+    before_source: &todo_native_accounts::DataSnapshot,
+    before_target: &todo_native_accounts::DataSnapshot,
+) {
+    let (source_after, target_after) = snapshots(root, target);
+    assert_eq!(
+        source_after, *before_source,
+        "source rows/outbox/shadow/kv/cursor/device/schema must be unchanged"
+    );
+    assert_eq!(
+        target_after, *before_target,
+        "target rows/outbox/shadow/kv/cursor/device/schema must be unchanged"
+    );
+}
+
+fn active_account_id(root: &std::path::Path) -> String {
+    list_accounts(root)
+        .expect("list accounts")
+        .active_account_id
 }
 
 fn assert_exited_at_fault(status: ExitStatus) {
@@ -223,11 +251,17 @@ fn process_exit_at_verifying_target_retry_commits_target() {
     let prepared = prepare_account_switch(&root, &target).expect("prepare");
     request_account_switch(&root, &target, prepared.generation.expect("generation"))
         .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
     let status = run_child(&root, &target, "recover", "verifying_target", None);
     assert_exited_at_fault(status);
     assert_eq!(
         switch_status(&root).expect("status").phase,
         Some(SwitchPhase::VerifyingTarget)
+    );
+    assert_eq!(
+        active_account_id(&root),
+        DEFAULT_ACCOUNT_ID,
+        "journal persisted before registry commit; source remains active"
     );
     let recovery = recover_pending_switch(&root).expect("retry recover");
     assert!(recovery.target_committed);
@@ -238,6 +272,17 @@ fn process_exit_at_verifying_target_retry_commits_target() {
             .account_id,
         target
     );
+    assert_eq!(switch_status(&root).expect("status").phase, None);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+    let second = recover_pending_switch(&root).expect("second recover");
+    assert!(!second.target_committed);
+    assert_eq!(
+        ensure_active_account(&root)
+            .expect("target still active")
+            .account_id,
+        target
+    );
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
 }
 
 #[test]
@@ -246,10 +291,16 @@ fn process_exit_before_registry_update_retry_commits_target() {
     let prepared = prepare_account_switch(&root, &target).expect("prepare");
     request_account_switch(&root, &target, prepared.generation.expect("generation"))
         .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
     let status = run_child(&root, &target, "recover", "registry_before", None);
     assert_exited_at_fault(status);
     let journal = switch_status(&root).expect("status");
     assert_eq!(journal.phase, Some(SwitchPhase::VerifyingTarget));
+    assert_eq!(
+        active_account_id(&root),
+        DEFAULT_ACCOUNT_ID,
+        "registry must not be committed before the injected boundary"
+    );
     let recovery = recover_pending_switch(&root).expect("retry recover");
     assert!(recovery.target_committed);
     finish_pending_switch(&root).expect("finish");
@@ -259,6 +310,17 @@ fn process_exit_before_registry_update_retry_commits_target() {
             .account_id,
         target
     );
+    assert_eq!(switch_status(&root).expect("status").phase, None);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+    let second = recover_pending_switch(&root).expect("second recover");
+    assert!(!second.target_committed);
+    assert_eq!(
+        ensure_active_account(&root)
+            .expect("target still active")
+            .account_id,
+        target
+    );
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
 }
 
 #[test]
@@ -267,11 +329,17 @@ fn process_exit_after_registry_update_retry_is_idempotent() {
     let prepared = prepare_account_switch(&root, &target).expect("prepare");
     request_account_switch(&root, &target, prepared.generation.expect("generation"))
         .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
     let status = run_child(&root, &target, "recover", "registry_after", None);
     assert_exited_at_fault(status);
     assert_eq!(
         switch_status(&root).expect("status").phase,
         Some(SwitchPhase::VerifyingTarget)
+    );
+    assert_eq!(
+        active_account_id(&root),
+        target,
+        "registry was committed before the injected boundary"
     );
     let recovery = recover_pending_switch(&root).expect("recover idempotent");
     assert!(recovery.target_committed);
@@ -284,6 +352,8 @@ fn process_exit_after_registry_update_retry_is_idempotent() {
             .account_id,
         target
     );
+    assert_eq!(switch_status(&root).expect("status").phase, None);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
 }
 
 #[test]
@@ -292,11 +362,17 @@ fn process_exit_before_journal_cleanup_retry_finishes() {
     let prepared = prepare_account_switch(&root, &target).expect("prepare");
     request_account_switch(&root, &target, prepared.generation.expect("generation"))
         .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
     let status = run_child(&root, &target, "recover_finish", "journal_cleanup", None);
     assert_exited_at_fault(status);
     assert_eq!(
         switch_status(&root).expect("status").phase,
         Some(SwitchPhase::VerifyingTarget)
+    );
+    assert_eq!(
+        active_account_id(&root),
+        target,
+        "recovery committed target before journal cleanup"
     );
     let recovery = recover_pending_switch(&root).expect("recover");
     assert!(recovery.target_committed);
@@ -308,4 +384,132 @@ fn process_exit_before_journal_cleanup_retry_finishes() {
         target
     );
     assert_eq!(switch_status(&root).expect("status").phase, None);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+    let second = recover_pending_switch(&root).expect("second recover");
+    assert!(!second.target_committed);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+}
+
+#[test]
+fn process_exit_after_failed_journal_restores_source_and_keeps_target_bytes() {
+    let (_dir, root, target) = create_accounts();
+    let prepared = prepare_account_switch(&root, &target).expect("prepare");
+    request_account_switch(&root, &target, prepared.generation.expect("generation"))
+        .expect("request");
+    let target_db = root.join("accounts").join(&target).join("shishi.sqlite3");
+    fs::write(&target_db, b"corrupt target database").expect("corrupt target");
+    let source_before =
+        read_snapshot(&root.join("accounts/default/shishi.sqlite3")).expect("source snapshot");
+    let target_bytes = fs::read(&target_db).expect("target bytes");
+
+    let status = run_child(&root, &target, "recover", "failed_persisted", None);
+    assert_exited_at_fault(status);
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::Failed)
+    );
+    assert_eq!(
+        active_account_id(&root),
+        DEFAULT_ACCOUNT_ID,
+        "invalid target must never become active"
+    );
+
+    let recovery = recover_pending_switch(&root).expect("recover failed journal");
+    assert!(!recovery.target_committed);
+    assert!(recovery.failure.is_some());
+    let active = ensure_active_account(&root).expect("source active");
+    assert_eq!(active.account_id, DEFAULT_ACCOUNT_ID);
+    assert_eq!(
+        read_snapshot(&active.database_path)
+            .expect("source after")
+            .fingerprint,
+        source_before.fingerprint
+    );
+    assert_eq!(
+        fs::read(&target_db).expect("target bytes after"),
+        target_bytes
+    );
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::Failed)
+    );
+    let second = recover_pending_switch(&root).expect("second failed recovery");
+    assert!(!second.target_committed);
+    assert_eq!(
+        ensure_active_account(&root)
+            .expect("source still active")
+            .account_id,
+        DEFAULT_ACCOUNT_ID
+    );
+}
+
+#[test]
+fn process_exit_after_rollback_failed_journal_restores_source() {
+    let (_dir, root, target) = create_accounts();
+    let prepared = prepare_account_switch(&root, &target).expect("prepare");
+    request_account_switch(&root, &target, prepared.generation.expect("generation"))
+        .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
+    let status = run_child(&root, &target, "rollback", "failed_persisted", None);
+    assert_exited_at_fault(status);
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::Failed)
+    );
+    assert_eq!(
+        active_account_id(&root),
+        DEFAULT_ACCOUNT_ID,
+        "rollback must keep source active"
+    );
+
+    let recovery = recover_pending_switch(&root).expect("recover rollback failure");
+    assert!(!recovery.target_committed);
+    assert!(recovery.failure.is_some());
+    assert_eq!(
+        ensure_active_account(&root)
+            .expect("source active")
+            .account_id,
+        DEFAULT_ACCOUNT_ID
+    );
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+    let second = recover_pending_switch(&root).expect("second rollback recovery");
+    assert!(!second.target_committed);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+}
+
+#[test]
+fn recovery_interrupted_twice_still_commits_once() {
+    let (_dir, root, target) = create_accounts();
+    let prepared = prepare_account_switch(&root, &target).expect("prepare");
+    request_account_switch(&root, &target, prepared.generation.expect("generation"))
+        .expect("request");
+    let (source_before, target_before) = snapshots(&root, &target);
+    let first = run_child(&root, &target, "recover", "registry_before", None);
+    assert_exited_at_fault(first);
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::VerifyingTarget)
+    );
+    let second = run_child(&root, &target, "recover", "registry_after", None);
+    assert_exited_at_fault(second);
+    assert_eq!(
+        switch_status(&root).expect("status").phase,
+        Some(SwitchPhase::VerifyingTarget)
+    );
+    assert_eq!(active_account_id(&root), target);
+
+    let recovery = recover_pending_switch(&root).expect("third recovery");
+    assert!(recovery.target_committed);
+    finish_pending_switch(&root).expect("finish");
+    assert_eq!(
+        ensure_active_account(&root)
+            .expect("target active")
+            .account_id,
+        target
+    );
+    assert_eq!(switch_status(&root).expect("status").phase, None);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
+    let fourth = recover_pending_switch(&root).expect("idempotent recovery");
+    assert!(!fourth.target_committed);
+    assert_full_snapshots_unchanged(&root, &target, &source_before, &target_before);
 }

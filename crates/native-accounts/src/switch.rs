@@ -384,6 +384,12 @@ pub fn recover_pending_switch(root: &Path) -> AccountResult<SwitchRecovery> {
         journal.touch(SwitchPhase::Failed);
         journal.error_code = Some(code.to_owned());
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchFailedPersisted,
+            Some("FAILED"),
+            Some(&journal.to_account_id),
+            Some("failed journal persisted before registry restore"),
+        )?;
         if registry.active_account_id == journal.to_account_id {
             fault::point(
                 FaultPoint::RegistryActiveBeforeUpdate,
@@ -457,6 +463,12 @@ pub fn rollback_pending_switch(root: &Path, error_code: &str) -> AccountResult<S
     journal.touch(SwitchPhase::Failed);
     journal.error_code = Some(error_code.to_owned());
     journal.save(root)?;
+    fault::point(
+        FaultPoint::SwitchFailedPersisted,
+        Some("FAILED"),
+        Some(&journal.to_account_id),
+        Some("rollback failed journal persisted"),
+    )?;
     if registry.active_account_id == journal.to_account_id {
         fault::point(
             FaultPoint::RegistryActiveBeforeUpdate,
