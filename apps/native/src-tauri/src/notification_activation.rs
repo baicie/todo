@@ -228,9 +228,7 @@ where
     R: FnMut(&'static str, String),
 {
     for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
-        let Some(activation) = state.take() else {
-            return None;
-        };
+        let activation = state.take()?;
         match validate(&activation) {
             Ok(task_title) => {
                 return Some(Activation {
