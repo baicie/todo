@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-25T06:47:35.198Z",
+  "generatedAt": "2026-10-25T08:03:53.395Z",
   "status": "BENCH_ONLY",
   "counts": {
     "PASS": 1,
@@ -11,7 +11,7 @@
     {
       "name": "qa_import_benchmark",
       "status": "BENCH_ONLY",
-      "durationMs": 292468,
+      "durationMs": 266996,
       "detail": {
         "sizes": [1000, 10000, 100000],
         "runs": 3,
