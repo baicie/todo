@@ -15,11 +15,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use todo_native_accounts::load_with_recovery;
+use todo_native_accounts::{AccountError, load_with_recovery};
 
 use crate::db::AppState;
 #[cfg(desktop)]
 use crate::desktop_shell;
+use todo_native_core::StoreError;
 
 pub const ACTION_TYPE_ID: &str = "app.shishi.todo.notification.task.v1";
 pub const ACTION_PREFIX: &str = "shishi.task.v1:";
@@ -140,11 +141,72 @@ impl NotificationActivationState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectionCode {
+    AppNotReady,
+    DataDirUnavailable,
+    AccountRegistryMissing,
+    AccountRegistryInvalid,
+    AccountSwitchRequired,
+    AccountSwitchInProgress,
+    TaskNotFound,
+    TaskReadFailed,
+}
+
+impl RejectionCode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AppNotReady => "APP_NOT_READY",
+            Self::DataDirUnavailable => "DATA_DIR_UNAVAILABLE",
+            Self::AccountRegistryMissing => "ACCOUNT_REGISTRY_MISSING",
+            Self::AccountRegistryInvalid => "ACCOUNT_REGISTRY_INVALID",
+            Self::AccountSwitchRequired => "ACCOUNT_SWITCH_REQUIRED",
+            Self::AccountSwitchInProgress => "ACCOUNT_SWITCH_IN_PROGRESS",
+            Self::TaskNotFound => "TASK_NOT_FOUND",
+            Self::TaskReadFailed => "TASK_READ_FAILED",
+        }
+    }
+
+    /// Fixed user-visible message. Never interpolate internal error text,
+    /// paths, SQL, tokens, emails or task titles here.
+    const fn user_message(self) -> &'static str {
+        match self {
+            Self::AppNotReady => "应用尚未完成初始化，请稍后重试",
+            Self::DataDirUnavailable => "暂时无法读取本地账号数据",
+            Self::AccountRegistryMissing | Self::AccountRegistryInvalid => {
+                "本地账号状态不可用，请检查账号恢复状态"
+            }
+            Self::AccountSwitchRequired => "该提醒属于另一个账号，请先切换账号",
+            Self::AccountSwitchInProgress => "账号切换进行中，请稍后重试",
+            Self::TaskNotFound => "提醒对应的任务已删除或不可见",
+            Self::TaskReadFailed => "暂时无法读取提醒对应的任务",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RejectedActivation {
-    pub code: &'static str,
-    pub message: String,
+    code: &'static str,
+    message: &'static str,
+}
+
+impl RejectedActivation {
+    fn from_code(code: RejectionCode) -> Self {
+        Self {
+            code: code.as_str(),
+            message: code.user_message(),
+        }
+    }
+}
+
+fn map_registry_error(_error: &AccountError) -> RejectionCode {
+    // Deliberately discard internal Display text (paths, JSON details, SQL).
+    RejectionCode::AccountRegistryInvalid
+}
+
+fn map_task_read_error(_error: &StoreError) -> RejectionCode {
+    RejectionCode::TaskReadFailed
 }
 
 fn show_window(app: &AppHandle) {
@@ -152,11 +214,8 @@ fn show_window(app: &AppHandle) {
     desktop_shell::show_main_window(app);
 }
 
-fn reject(app: &AppHandle, code: &'static str, message: impl Into<String>) {
-    let rejection = RejectedActivation {
-        code,
-        message: message.into(),
-    };
+fn reject(app: &AppHandle, code: RejectionCode) {
+    let rejection = RejectedActivation::from_code(code);
     if let Some(state) = app.try_state::<NotificationActivationState>() {
         state.put_rejection(rejection);
     }
@@ -172,42 +231,31 @@ fn validate_target(
     app: &AppHandle,
     state: &AppState,
     target: &NotificationTargetV1,
-) -> Result<String, (&'static str, String)> {
+) -> Result<String, RejectionCode> {
     let data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|error| ("DATA_DIR_UNAVAILABLE", format!("无法定位数据目录: {error}")))?;
+        .map_err(|_| RejectionCode::DataDirUnavailable)?;
     let registry = match load_with_recovery(&data_dir) {
         Ok(Some(registry)) => registry,
-        Ok(None) => {
-            return Err(("ACCOUNT_REGISTRY_MISSING", "账号注册表不可用".to_owned()));
-        }
-        Err(error) => return Err(("ACCOUNT_REGISTRY_INVALID", error.to_string())),
+        Ok(None) => return Err(RejectionCode::AccountRegistryMissing),
+        Err(error) => return Err(map_registry_error(&error)),
     };
     if registry.active_account_id != target.account_id
         || registry.account(&target.account_id).is_none()
     {
-        return Err((
-            "ACCOUNT_SWITCH_REQUIRED",
-            "该提醒属于另一个账号；请先手动切换账号后重试".to_owned(),
-        ));
+        return Err(RejectionCode::AccountSwitchRequired);
     }
     if state.account.account_id != target.account_id {
-        return Err((
-            "ACCOUNT_SWITCH_REQUIRED",
-            "当前打开的账号与提醒目标不一致".to_owned(),
-        ));
+        return Err(RejectionCode::AccountSwitchRequired);
     }
     let Some(_lease) = state.runtime.enter_storage() else {
-        return Err((
-            "ACCOUNT_SWITCH_IN_PROGRESS",
-            "账号切换进行中，暂时无法打开任务".to_owned(),
-        ));
+        return Err(RejectionCode::AccountSwitchInProgress);
     };
     match state.store.get_task(&target.task_id) {
         Ok(Some(task)) => Ok(task.title.clone()),
-        Ok(None) => Err(("TASK_NOT_FOUND", "提醒对应的任务已删除或不可见".to_owned())),
-        Err(error) => Err(("TASK_READ_FAILED", format!("无法读取任务: {error}"))),
+        Ok(None) => Err(RejectionCode::TaskNotFound),
+        Err(error) => Err(map_task_read_error(&error)),
     }
 }
 
@@ -220,13 +268,13 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
         return;
     };
     let Some(state) = app.try_state::<AppState>() else {
-        reject(app, "APP_NOT_READY", "应用尚未完成初始化");
+        reject(app, RejectionCode::AppNotReady);
         return;
     };
     let task_title = match validate_target(app, &state, &target) {
         Ok(title) => title,
-        Err((code, message)) => {
-            reject(app, code, message);
+        Err(code) => {
+            reject(app, code);
             return;
         }
     };
@@ -251,8 +299,8 @@ fn take_valid_activation<F, R>(
     mut reject: R,
 ) -> Option<Activation>
 where
-    F: FnMut(&Activation) -> Result<String, (&'static str, String)>,
-    R: FnMut(&'static str, String),
+    F: FnMut(&Activation) -> Result<String, RejectionCode>,
+    R: FnMut(RejectionCode),
 {
     for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
         let activation = state.take()?;
@@ -263,7 +311,7 @@ where
                     ..activation
                 });
             }
-            Err((code, message)) => reject(code, message),
+            Err(code) => reject(code),
         }
     }
     None
@@ -278,11 +326,11 @@ pub fn native_take_notification_activation(
     take_valid_activation(
         &activation_state,
         |activation| validate_target(&app, &app_state, &activation.target),
-        |code, message| {
+        |code| {
             // The account can switch after the notification was clicked but
             // before the WebView takes it. Never deliver a target that is no
             // longer valid for the active account.
-            reject(&app, code, message);
+            reject(&app, code);
         },
     )
 }
@@ -367,21 +415,18 @@ mod tests {
             &state,
             |activation| {
                 if activation.target.task_id == "stale-task" {
-                    Err(("ACCOUNT_SWITCH_REQUIRED", "stale".to_owned()))
+                    Err(RejectionCode::AccountSwitchRequired)
                 } else {
                     Ok("current title".to_owned())
                 }
             },
-            |code, message| rejected.push((code, message)),
+            |code| rejected.push(code.as_str()),
         )
         .expect("valid activation");
 
         assert_eq!(activation.activation_id, "valid");
         assert_eq!(activation.task_title, "current title");
-        assert_eq!(
-            rejected,
-            vec![("ACCOUNT_SWITCH_REQUIRED", "stale".to_owned())]
-        );
+        assert_eq!(rejected, vec!["ACCOUNT_SWITCH_REQUIRED"]);
         assert!(state.take().is_none());
     }
 
@@ -417,46 +462,101 @@ mod tests {
     #[test]
     fn rejection_queue_is_fifo_and_consumed_once() {
         let state = NotificationActivationState::default();
-        for index in 0..2 {
-            state.put_rejection(RejectedActivation {
-                code: "ACCOUNT_SWITCH_REQUIRED",
-                message: format!("reject-{index}"),
-            });
-        }
-        assert_eq!(state.take_rejection().expect("first").message, "reject-0");
-        assert_eq!(state.take_rejection().expect("second").message, "reject-1");
+        state.put_rejection(RejectedActivation::from_code(
+            RejectionCode::AccountSwitchRequired,
+        ));
+        state.put_rejection(RejectedActivation::from_code(RejectionCode::TaskNotFound));
+        assert_eq!(
+            state.take_rejection().expect("first").code,
+            "ACCOUNT_SWITCH_REQUIRED"
+        );
+        assert_eq!(
+            state.take_rejection().expect("second").code,
+            "TASK_NOT_FOUND"
+        );
         assert!(state.take_rejection().is_none());
     }
 
     #[test]
     fn rejection_queue_keeps_newest_eight() {
+        const TEST_CODES: [&str; 10] = ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"];
         let state = NotificationActivationState::default();
-        for index in 0..10 {
+        for code in TEST_CODES {
             state.put_rejection(RejectedActivation {
-                code: "TASK_NOT_FOUND",
-                message: format!("reject-{index}"),
+                code,
+                message: "fixed test message",
             });
         }
-        assert_eq!(
-            state.take_rejection().expect("oldest kept").message,
-            "reject-2"
-        );
-        for index in 3..10 {
-            assert_eq!(
-                state.take_rejection().expect("queued").message,
-                format!("reject-{index}")
-            );
+        assert_eq!(state.take_rejection().expect("first kept").code, "R2");
+        for code in &TEST_CODES[3..] {
+            assert_eq!(state.take_rejection().expect("queued").code, *code);
         }
         assert!(state.take_rejection().is_none());
     }
 
     #[test]
+    fn rejection_serialization_does_not_leak_internal_errors() {
+        let registry_error = AccountError::UnsafePath(
+            "/Users/alice/Library/Application Support/app.shishi.todo/accounts.json".to_owned(),
+        );
+        let registry_rejection = RejectedActivation::from_code(map_registry_error(&registry_error));
+        let registry_json = serde_json::to_string(&registry_rejection).expect("serialize");
+        assert_eq!(
+            registry_json,
+            r#"{"code":"ACCOUNT_REGISTRY_INVALID","message":"本地账号状态不可用，请检查账号恢复状态"}"#
+        );
+        assert!(!registry_json.contains("UnsafePath"));
+        assert!(!registry_json.contains("/Users/alice"));
+
+        let task_error = StoreError::Internal(
+            "SELECT secret FROM local_tasks; /private/tmp/shishi.sqlite3".to_owned(),
+        );
+        let task_rejection = RejectedActivation::from_code(map_task_read_error(&task_error));
+        let task_json = serde_json::to_string(&task_rejection).expect("serialize");
+        assert_eq!(
+            task_json,
+            r#"{"code":"TASK_READ_FAILED","message":"暂时无法读取提醒对应的任务"}"#
+        );
+        assert!(!task_json.contains("SELECT"));
+        assert!(!task_json.contains("/private/tmp"));
+    }
+
+    #[test]
+    fn all_rejection_codes_have_stable_public_messages() {
+        for (code, expected) in [
+            (RejectionCode::AppNotReady, "APP_NOT_READY"),
+            (RejectionCode::DataDirUnavailable, "DATA_DIR_UNAVAILABLE"),
+            (
+                RejectionCode::AccountRegistryMissing,
+                "ACCOUNT_REGISTRY_MISSING",
+            ),
+            (
+                RejectionCode::AccountRegistryInvalid,
+                "ACCOUNT_REGISTRY_INVALID",
+            ),
+            (
+                RejectionCode::AccountSwitchRequired,
+                "ACCOUNT_SWITCH_REQUIRED",
+            ),
+            (
+                RejectionCode::AccountSwitchInProgress,
+                "ACCOUNT_SWITCH_IN_PROGRESS",
+            ),
+            (RejectionCode::TaskNotFound, "TASK_NOT_FOUND"),
+            (RejectionCode::TaskReadFailed, "TASK_READ_FAILED"),
+        ] {
+            assert_eq!(code.as_str(), expected);
+            let rejection = RejectedActivation::from_code(code);
+            assert!(!rejection.message.is_empty());
+            assert!(!rejection.message.contains('/'));
+            assert!(!rejection.message.contains("SELECT"));
+        }
+    }
+
+    #[test]
     fn rejected_notification_does_not_consume_valid_activation() {
         let state = NotificationActivationState::default();
-        state.put_rejection(RejectedActivation {
-            code: "TASK_NOT_FOUND",
-            message: "deleted".to_owned(),
-        });
+        state.put_rejection(RejectedActivation::from_code(RejectionCode::TaskNotFound));
         state.put(Activation {
             activation_id: "valid".to_owned(),
             target: NotificationTargetV1::new("default", "task-1").expect("target"),
