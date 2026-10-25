@@ -108,6 +108,8 @@ export async function startNotificationActivationBridge(
     };
 
     let drainChain: Promise<void> = Promise.resolve();
+    let drainRunning = false;
+    let drainRequested = false;
     const drainOnce = async () => {
       for (let index = 0; index < MAX_DRAIN_PER_CYCLE; index += 1) {
         if (disposed || signal?.aborted) return;
@@ -126,12 +128,26 @@ export async function startNotificationActivationBridge(
       }
     };
     const drainPending = (): Promise<void> => {
-      // Serialize cycles so a burst of events cannot interleave Native takes
-      // or reorder task openings.
-      drainChain = drainChain.then(drainOnce).catch(() => {
-        // UI callbacks must not poison the serial chain; a later event can
-        // still drain a fresh Native activation.
-      });
+      // Coalesce a burst of wake events into serial cycles. A request that
+      // arrives while a cycle is running is served after that cycle, so an
+      // event cannot be lost or run concurrently with another take.
+      drainRequested = true;
+      if (drainRunning) return drainChain;
+      drainRunning = true;
+      drainChain = Promise.resolve()
+        .then(async () => {
+          while (drainRequested && !disposed && !signal?.aborted) {
+            drainRequested = false;
+            await drainOnce();
+          }
+        })
+        .catch(() => {
+          // UI callbacks must not poison the serial chain; a later event can
+          // still drain a fresh Native activation.
+        })
+        .finally(() => {
+          drainRunning = false;
+        });
       return drainChain;
     };
 
