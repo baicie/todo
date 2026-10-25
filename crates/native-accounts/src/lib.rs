@@ -1,4 +1,5 @@
 mod error;
+pub mod fault;
 mod migration;
 mod paths;
 mod registry;
@@ -6,6 +7,9 @@ mod snapshot;
 mod switch;
 
 pub use error::{AccountError, AccountResult};
+pub use fault::{
+    FaultAction, FaultEvent, FaultEvidence, FaultInjector, FaultPoint, point as fault_point,
+};
 pub use migration::{
     InstallationPhase, InstallationState, LegacyReviewReport, MigrationPhase, MigrationState,
     ensure_active_account, legacy_review_report, migration_state,

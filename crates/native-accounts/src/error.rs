@@ -24,6 +24,8 @@ pub enum AccountError {
     MigrationFailed(String, PathBuf),
     #[error("database verification mismatch: {0}")]
     VerificationMismatch(String),
+    #[error("injected fault: {0}")]
+    FaultInjected(String),
 }
 
 pub type AccountResult<T> = Result<T, AccountError>;

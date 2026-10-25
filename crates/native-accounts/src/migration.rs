@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AccountError, AccountResult},
+    fault::{self, FaultPoint},
     paths::{
         DEFAULT_ACCOUNT_ID, database_path, ensure_account_dir, ensure_data_root,
         installation_state_file, legacy_database_path, migration_backups_dir, migration_state_file,
@@ -474,6 +475,12 @@ fn verify_complete_migration(
 fn initialize_fresh(root: &Path) -> AccountResult<ActiveAccountContext> {
     let state = InstallationState::new();
     state.save(root)?;
+    fault::point(
+        FaultPoint::InstallationPrepared,
+        Some("PREPARED"),
+        Some(DEFAULT_ACCOUNT_ID),
+        Some("fresh installation marker persisted"),
+    )?;
     resume_fresh_installation(root, state, None)
 }
 
@@ -513,6 +520,12 @@ fn resume_fresh_installation(
         state.touch(InstallationPhase::DatabaseCreated);
         state.save(root)?;
     }
+    fault::point(
+        FaultPoint::InstallationDatabaseCreated,
+        Some("DATABASE_CREATED"),
+        Some(DEFAULT_ACCOUNT_ID),
+        Some("fresh database created"),
+    )?;
     if state.phase == InstallationPhase::DatabaseCreated {
         registry.save(root)?;
         state.touch(InstallationPhase::RegistryCommitted);
@@ -675,6 +688,10 @@ fn run_migration(
     let result = run_migration_inner(root, &source, ownership, &mut state);
     match result {
         Ok(context) => Ok(context),
+        // A QA fault is not a data failure: preserve the phase that was already
+        // durably persisted so the next start resumes instead of pretending the
+        // migration failed or redoing the backup.
+        Err(error @ AccountError::FaultInjected(_)) => Err(error),
         Err(AccountError::NeedsReview { .. }) => Err(AccountError::NeedsReview {
             reason: state.reason.clone().unwrap_or_default(),
             state_path: migration_state_file(root),
@@ -784,6 +801,12 @@ fn run_migration_inner(
     state.verified = Some(target_snapshot.summary());
     state.touch(MigrationPhase::CopyVerified);
     state.save(root)?;
+    fault::point(
+        FaultPoint::MigrationCopyVerified,
+        Some("COPY_VERIFIED"),
+        Some(&target_id),
+        Some("backup/target fingerprints match"),
+    )?;
 
     if registry.account(&target_id).is_none() {
         match &ownership {
@@ -880,6 +903,12 @@ fn ensure_backup(
     state.backup_fingerprint = Some(snapshot.fingerprint);
     state.touch(MigrationPhase::BackupCreated);
     state.save(root)?;
+    fault::point(
+        FaultPoint::MigrationBackupCreated,
+        Some("BACKUP_CREATED"),
+        state.target_account_id.as_deref(),
+        Some("legacy backup durably created"),
+    )?;
     Ok(destination)
 }
 

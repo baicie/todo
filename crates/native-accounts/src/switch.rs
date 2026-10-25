@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AccountError, AccountResult},
+    fault::{self, FaultPoint},
     paths::{
         DEFAULT_ACCOUNT_ID, database_path, ensure_account_dir, pending_account_switch_file,
         sync_directory, sync_file, validate_account_id, validate_database_path, write_json_atomic,
@@ -201,6 +202,12 @@ pub fn prepare_account_switch(root: &Path, target_id: &str) -> AccountResult<Swi
         error_code: None,
     };
     journal.save(root)?;
+    fault::point(
+        FaultPoint::SwitchPreparedPersisted,
+        Some("PREPARED"),
+        Some(&journal.to_account_id),
+        Some("journal persisted"),
+    )?;
     Ok(SwitchStatus {
         active: false,
         from_account_id: Some(journal.from_account_id),
@@ -229,6 +236,12 @@ pub fn request_account_switch(
         SwitchPhase::Prepared => {
             journal.touch(SwitchPhase::RestartRequired);
             journal.save(root)?;
+            fault::point(
+                FaultPoint::SwitchRestartRequiredPersisted,
+                Some("RESTART_REQUIRED"),
+                Some(&journal.to_account_id),
+                Some("journal persisted"),
+            )?;
         }
         SwitchPhase::RestartRequired => {}
         _ => {
@@ -348,8 +361,20 @@ pub fn recover_pending_switch(root: &Path) -> AccountResult<SwitchRecovery> {
         journal.error_code = Some(code.to_owned());
         journal.save(root)?;
         if registry.active_account_id == journal.to_account_id {
+            fault::point(
+                FaultPoint::RegistryActiveBeforeUpdate,
+                Some("FAILED"),
+                Some(&journal.from_account_id),
+                Some("restore source after target validation failure"),
+            )?;
             registry.active_account_id = journal.from_account_id.clone();
             registry.save(root)?;
+            fault::point(
+                FaultPoint::RegistryActiveAfterUpdate,
+                Some("FAILED"),
+                Some(&journal.from_account_id),
+                Some("source restored"),
+            )?;
         }
         return Ok(SwitchRecovery {
             target_committed: false,
@@ -363,11 +388,35 @@ pub fn recover_pending_switch(root: &Path) -> AccountResult<SwitchRecovery> {
     if registry.active_account_id != journal.to_account_id {
         journal.touch(SwitchPhase::VerifyingTarget);
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchVerifyingTargetPersisted,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("journal persisted before registry update"),
+        )?;
+        fault::point(
+            FaultPoint::RegistryActiveBeforeUpdate,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("commit verified target"),
+        )?;
         registry.active_account_id = journal.to_account_id.clone();
         registry.save(root)?;
+        fault::point(
+            FaultPoint::RegistryActiveAfterUpdate,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("target committed"),
+        )?;
     } else {
         journal.touch(SwitchPhase::VerifyingTarget);
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchVerifyingTargetPersisted,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("journal persisted; registry already target"),
+        )?;
     }
     Ok(SwitchRecovery {
         target_committed: true,
@@ -385,8 +434,20 @@ pub fn rollback_pending_switch(root: &Path, error_code: &str) -> AccountResult<S
     journal.error_code = Some(error_code.to_owned());
     journal.save(root)?;
     if registry.active_account_id == journal.to_account_id {
+        fault::point(
+            FaultPoint::RegistryActiveBeforeUpdate,
+            Some("FAILED"),
+            Some(&journal.from_account_id),
+            Some("rollback target to source"),
+        )?;
         registry.active_account_id = journal.from_account_id.clone();
         registry.save(root)?;
+        fault::point(
+            FaultPoint::RegistryActiveAfterUpdate,
+            Some("FAILED"),
+            Some(&journal.from_account_id),
+            Some("rollback source committed"),
+        )?;
     }
     Ok(SwitchFailure {
         from_account_id: journal.from_account_id,
@@ -675,6 +736,12 @@ fn summary_from_record(record: &AccountRecord, active_id: &str) -> AccountSummar
 }
 
 fn remove_journal(root: &Path) -> AccountResult<()> {
+    fault::point(
+        FaultPoint::SwitchJournalBeforeCleanup,
+        None,
+        None,
+        Some("remove switch journal"),
+    )?;
     match fs::remove_file(pending_account_switch_file(root)) {
         Ok(()) => {
             sync_directory(root)?;

@@ -7,7 +7,10 @@ use std::{
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::error::{AccountError, AccountResult};
+use crate::{
+    error::{AccountError, AccountResult},
+    fault::{self, FaultPoint},
+};
 
 pub const DEFAULT_ACCOUNT_ID: &str = "default";
 pub const DATABASE_FILE: &str = "shishi.sqlite3";
@@ -282,6 +285,14 @@ pub fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
                 return Ok(());
             }
             let replace_error = std::io::Error::last_os_error();
+            if let Err(error) = fault::point(
+                FaultPoint::RegistryReplaceFallback,
+                Some("REPLACE_FILE_FALLBACK"),
+                None,
+                Some(&replace_error.to_string()),
+            ) {
+                return Err(std::io::Error::other(error.to_string()));
+            }
             // Some filesystems/AV filters reject ReplaceFileW. Fall back to a
             // recoverable two-step swap; a failed swap restores the old file.
             let file_name = target
