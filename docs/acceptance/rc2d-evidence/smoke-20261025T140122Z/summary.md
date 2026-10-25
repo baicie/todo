@@ -1,22 +1,22 @@
 # RC2-D Native QA Run
 
-- Run: `rc2d-20261025T120025Z`
-- App: `C:\Users\20555\AppData\Local\Shishi QA RC2D\todo-native.exe`
+- Run: `rc2d-20261025T140122Z`
+- App: `D:\workspace\git-code\todo\apps\native\src-tauri\target\release\todo-native.exe`
 - Status: **PARTIAL**
 - Tests: 7 PASS / 0 FAIL / 4 NOT_RUN
-- Duration: 2966 ms
+- Duration: 2250 ms
 
 ## Tests
 
 | Test                                             | Status  | Duration | Detail |
 | ------------------------------------------------ | ------- | -------: | ------ |
 | qa_build_identity                                | PASS    |     0 ms |        |
-| qa_boot_context                                  | PASS    |    15 ms |        |
-| qa_storage_roundtrip                             | PASS    |  1908 ms |        |
+| qa_boot_context                                  | PASS    |    12 ms |        |
+| qa_storage_roundtrip                             | PASS    |  1364 ms |        |
 | qa_reminder_permission_contract                  | PASS    |     5 ms |        |
-| qa_reminder_schedule_cancel                      | PASS    |    22 ms |        |
-| qa_credential_namespace                          | PASS    |    52 ms |        |
-| qa_invalid_switch_does_not_change_active_account | PASS    |    17 ms |        |
+| qa_reminder_schedule_cancel                      | PASS    |    17 ms |        |
+| qa_credential_namespace                          | PASS    |    42 ms |        |
+| qa_invalid_switch_does_not_change_active_account | PASS    |    15 ms |        |
 | qa_desktop_notification_action_target            | NOT_RUN |     0 ms |        |
 | qa_wrong_account_notification_is_rejected        | NOT_RUN |     0 ms |        |
 | qa_fault_injection_prepared_recovery             | NOT_RUN |     0 ms |        |

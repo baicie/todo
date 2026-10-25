@@ -105,7 +105,20 @@ data root and credential service; production root must remain absent.
 - Android/iOS: no SDK/NDK/Xcode/signing in this environment; `NOT_RUN`.
 - Compile check is not installation/runtime/release acceptance.
 
-## 6. Acceptance
+## 6. Implementation status
+
+- Rejection allowlist mapping implemented in `631e2ef`; all user-visible
+  messages are fixed static strings, and serialized-path/SQL regression tests
+  pass.
+- Queue boundary tests added in `e04c45e`; 24 frontend notification tests and
+  11 Native notification tests pass.
+- Six real child-process termination points implemented in `ca3db08`; the
+  existing SIGKILL tests remain. Other boundaries stay PARTIAL/NOT_RUN.
+- Manual M1–M10 plus generated `manual-platform.json`; real Toast/cold-start
+  remain NOT_RUN.
+- No production IPC or default-build terminate hook was added.
+
+## 7. Acceptance
 
 - Serialized rejection results contain no path/internal error text for all
   mapped error branches.
