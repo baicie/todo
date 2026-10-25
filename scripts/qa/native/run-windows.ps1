@@ -9,6 +9,7 @@ param(
   [int]$PerfTasks = 0,
   [string]$BenchSizes = "",
   [int]$BenchRuns = 3,
+  [switch]$AllowPartial,
   [switch]$KeepRunning
 )
 
@@ -34,6 +35,26 @@ function Write-Log([string]$Path, [string]$Text) {
 function Get-Sha256([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $null }
   (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-GitCommitFallback {
+  try {
+    $headPath = Join-Path $RepoRoot ".git\HEAD"
+    if (-not (Test-Path -LiteralPath $headPath)) { return "unknown" }
+    $head = (Get-Content -LiteralPath $headPath -Raw).Trim()
+    if ($head -match '^ref:\s*(.+)$') {
+      $ref = $Matches[1]
+      $refPath = Join-Path $RepoRoot (".git\" + $ref.Replace('/', '\'))
+      if (Test-Path -LiteralPath $refPath) { return (Get-Content -LiteralPath $refPath -Raw).Trim() }
+      $packed = Join-Path $RepoRoot ".git\packed-refs"
+      if (Test-Path -LiteralPath $packed) {
+        $line = Get-Content -LiteralPath $packed | Where-Object { $_ -match (" " + [regex]::Escape($ref) + "$") } | Select-Object -First 1
+        if ($line) { return ($line -split ' ')[0] }
+      }
+      return "unknown"
+    }
+    return $head
+  } catch { return "unknown" }
 }
 
 $started = (Get-Date).ToUniversalTime()
@@ -131,7 +152,7 @@ try {
   Write-Json (Join-Path $ArtifactRoot "environment.json") $environment
   Write-Log (Join-Path $LogDir "launcher.log") "environment captured"
 
-  $env:QA_GIT_COMMIT = if ($env:QA_GIT_COMMIT) { $env:QA_GIT_COMMIT } else { "unknown" }
+  if (-not $env:QA_GIT_COMMIT) { $env:QA_GIT_COMMIT = Get-GitCommitFallback }
   $env:QA_GIT_BRANCH = if ($env:QA_GIT_BRANCH) { $env:QA_GIT_BRANCH } else { "unknown" }
 
   $env:QA_CDP_PORT = "$CdpPort"
@@ -187,7 +208,7 @@ try {
 
   $finished = (Get-Date).ToUniversalTime()
   $testsPath = Join-Path $ArtifactRoot "tests.json"
-  $testStatus = "PASS"
+  $testStatus = "UNKNOWN"
   if (Test-Path -LiteralPath $testsPath) {
     $testStatus = (Get-Content -LiteralPath $testsPath -Raw | ConvertFrom-Json).status
   }
@@ -213,7 +234,11 @@ try {
     )
   }
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
-  Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot"
+  Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot status=$testStatus"
+  if ($testStatus -notin @("PASS", "BENCH_ONLY") -and -not $AllowPartial) {
+    Write-Log (Join-Path $LogDir "launcher.log") "PARTIAL/NOT_RUN evidence is not a successful gate; pass -AllowPartial only for investigative runs"
+    exit 2
+  }
 } catch {
   $failure = [ordered]@{
     runId = $RunId

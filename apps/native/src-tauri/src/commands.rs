@@ -533,10 +533,22 @@ pub fn cancel_reminder(
             "账号切换进行中，当前账号已停止调度通知",
         )
     })?;
+    let scoped = reminder_scope(&state.account.account_id, &reminder_id);
     state
         .reminders
-        .cancel(&reminder_scope(&state.account.account_id, &reminder_id))
-        .map_err(CommandError::reminder)
+        .cancel(&scoped)
+        .map_err(CommandError::reminder)?;
+    match state.reminders.scheduled() {
+        Ok(items) if items.iter().any(|item| item.reminder_id == scoped) => Err(CommandError::new(
+            "REMINDER_CANCEL_RESIDUAL",
+            "平台返回取消成功但队列仍有该提醒",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) => Err(CommandError::new(
+            "REMINDER_CANCEL_VERIFY_FAILED",
+            format!("无法核验提醒取消结果: {error}"),
+        )),
+    }
 }
 
 /// Reconcile the platform queue against open SQLite tasks. The queue is the

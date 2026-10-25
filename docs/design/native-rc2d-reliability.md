@@ -181,7 +181,7 @@ NotificationTargetV1 {
 - WebView 在 mount 完成后调用 `native_take_notification_activation`；Native 在 active account + WebView ready 后才交付；重复交付/重复点击幂等。
 - 冷启动：Native 在任何 active 账号确认前不处理任务打开；pending activation 只保存“已验证但未交付”的 target。若进程重启丢失 activation，则安全丢弃；不得打开错误账号任务。
 - 平台能力：Windows 的 `on_action` 已可用；通知正文的 `tap` 不携带 target，因此产品契约使用“打开任务”按钮 action。真实 Toast 点击和双账号拒绝在本轮为 NOT_RUN；无法确认时不伪造端到端 PASS。
-- 旧无前缀通知：提供 QA fixture（内存/Windows QA 服务）创建 legacy ID，再执行 cleanup；生产不会为了测试直接写真实通知库。
+- 旧无前缀通知：单元测试通过内存 adapter 创建 legacy/foreign 队列并执行 cleanup；真实 Windows 通知库 fixture **NOT_RUN**，生产不会为了测试直接写真实通知库。
 
 ## 6. FaultInjector 架构
 
@@ -228,14 +228,14 @@ pub trait FaultInjector: Send + Sync {
 - `native-accounts` 默认无注入器；`fault-injection` feature 才编译可设置注册表与 QA 实现。
 - Tauri `native-qa` feature 启用 `native-accounts/fault-injection`，并在 setup 里读取显式 `--rc2d-fault-config <path>`；**不注册任何 WebView IPC**。
 - 生产 Release 不启用 feature；运行时环境变量无法打开注入。
-- QA 启动前置校验：identifier 必须以 `app.shishi.todo.qa` 开头；否则拒绝 arm 注入并退出/报告。
+- QA 启动前置校验：identifier 必须严格等于 `app.shishi.todo.qa`；否则拒绝 arm 注入并退出/报告。
 - QA 数据根由 Tauri identifier 自动隔离，不允许传入真实用户路径；凭据 service 使用 QA 命名空间。
 - evidence JSONL 每行包含 event id、point、phase、结果、时间；不写 token/验证码/完整凭据目标。
 - `Terminate` 使用明确的 QA exit code；`Block` 有上限；所有外部等待有 deadline。
 
 ### 6.3 测试策略
 
-- 单元测试：内存注入器 + 每个已接线点的控制/错误/恢复用例；`fault-injection` feature 测试必须串行执行，因为注入器是进程级的。
+- 单元测试：内存注入器 + 已实现测试的控制/错误/恢复用例（覆盖 14/18 点）；`fault-injection` feature 测试必须串行执行，因为注入器是进程级的。`CredentialGet/Set/Delete` 和 `RegistryReplaceFallback` 的点级注入测试、`ReminderCancel` 的恢复用例仍为 NOT_RUN。
 - QA 命令测试：`SWITCH_PREPARED_PERSISTED` 通过真实 QA 应用触发，验证错误、attempted abort 和 active account 不变，并写入 run-bound evidence。
 - **NOT_RUN**：本轮 QA harness 尚未实现“任意点强杀 + 重启后读取 journal/registry/SQLite 快照”的进程级矩阵；只完成可重复的故障配置、证据和 prepared 恢复路径。该缺口在最终报告中保留。
 - 生产回归：feature off 编译并运行全部既有测试，确认无注入器时行为与基线一致。
@@ -258,13 +258,13 @@ QA package never writes production keys/data. All destructive fixtures use temp 
 
 ## 8. 多平台验收策略
 
-| 平台        | 本轮目标                                                     | 真实 PASS 条件                                         |
-| ----------- | ------------------------------------------------------------ | ------------------------------------------------------ |
-| Windows x64 | QA NSIS + real app harness + Credential Manager/notification | 有真实安装、真实进程、真实凭据/通知证据                |
-| macOS ARM64 | build + Rust tests                                           | 只在有 runner/真机时声明构建 PASS；不声称通知点击 PASS |
-| Linux x64   | build + Rust tests                                           | headless 环境不声称系统通知 PASS                       |
-| Android     | unsigned debug APK when SDK available                        | 无真机时 NOT_RUN                                       |
-| iOS         | Rust/Swift bridge compile when available                     | 无签名/模拟器真机时 NOT_RUN                            |
+| 平台        | 本轮目标                                                     | 真实 PASS 条件                                              |
+| ----------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
+| Windows x64 | QA NSIS + real app harness + Credential Manager/notification | 有真实安装、真实进程、真实凭据/通知证据                     |
+| macOS ARM64 | CI `cargo check --features native-qa`（编译检查）            | 只在有 runner/真机时声明构建/测试 PASS；不声称通知点击 PASS |
+| Linux x64   | CI `cargo check --features native-qa`（编译检查）            | headless 环境不声称构建/系统通知 PASS                       |
+| Android     | unsigned debug APK when SDK available                        | 无真机时 NOT_RUN                                            |
+| iOS         | Rust/Swift bridge compile when available                     | 无签名/模拟器真机时 NOT_RUN                                 |
 
 CI 只产出 unsigned QA artifacts；不自动触发正式 Release。发布门禁拆成：
 
@@ -297,14 +297,14 @@ CI 只产出 unsigned QA artifacts；不自动触发正式 Release。发布门�
 
 ### 9.4 改造变更矩阵
 
-| 改造                               | 持久化格式                              | IPC 契约                           | 产品行为                                       |
-| ---------------------------------- | --------------------------------------- | ---------------------------------- | ---------------------------------------------- |
-| FaultInjector / FaultPoint         | 不改变业务文件；QA 另写 evidence JSONL  | **不新增生产 IPC**；仅 QA 启动参数 | 生产无变化                                     |
-| CredentialBackend                  | Token key 格式不变；生产 service 名不变 | `secure_token_*` 参数/返回不变     | 生产无变化；QA 使用独立 service                |
-| Legacy token 迁移顺序              | 不改变 key，增加读回校验                | 不改变                             | 失败时保留旧 token，不伪造成功                 |
-| ReminderAdapter 失败处理           | 不改变                                  | 报告字段只增不改（`failed` 已有）  | 取消/调度失败显式诊断，不再静默成功            |
-| NotificationTargetV1 click routing | 不写入 DB；activation 仅内存            | **新增** activation command/event  | **新增**“打开任务” action；body tap 不路由任务 |
-| Legacy reminder fixture/cleanup    | 不改变                                  | QA fixture 不暴露生产 IPC          | 生产旧队列清理更严格                           |
-| QA Harness / CI                    | 不写入生产数据                          | 不新增生产 IPC                     | 无生产变化                                     |
-| Diagnostics export                 | 新增脱敏 JSON 文件                      | **新增**只读 diagnostics command   | **新增**可见诊断/导出按钮（不 force-bind）     |
-| 性能优化                           | 不改变 schema/格式                      | 不改变                             | 仅在证据支撑下改变查询路径                     |
+| 改造                               | 持久化格式                                          | IPC 契约                                                             | 产品行为                                       |
+| ---------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------- |
+| FaultInjector / FaultPoint         | 不改变业务文件；QA 另写 evidence JSONL              | 无注入 IPC；新增只读 `qa_build_identity` 生产探测命令（不 arm 故障） | 生产无变化                                     |
+| CredentialBackend                  | Token key 格式不变；生产 service 名不变             | `secure_token_*` 参数/返回不变                                       | 生产无变化；QA 使用独立 service                |
+| Legacy token 迁移顺序              | 不改变 key，增加读回校验                            | 不改变                                                               | 失败时保留旧 token，不伪造成功                 |
+| ReminderAdapter 失败处理           | 不改变                                              | 报告字段只增不改（`failed` 已有）                                    | 取消/调度失败显式诊断，不再静默成功            |
+| NotificationTargetV1 click routing | 不写入 DB；activation 仅内存                        | **新增** activation command/event                                    | **新增**“打开任务” action；body tap 不路由任务 |
+| Legacy reminder fixture/cleanup    | 不改变                                              | QA fixture 不暴露生产 IPC                                            | 生产旧队列清理更严格                           |
+| QA Harness / CI                    | 不写入生产数据（identity guard 之后才执行 fixture） | 新增只读 `qa_build_identity`；不新增故障 arm IPC                     | 生产无变化                                     |
+| Diagnostics export                 | 新增脱敏 JSON 文件                                  | **新增**只读 diagnostics command                                     | **新增**可见诊断/导出按钮（不 force-bind）     |
+| 性能优化                           | 不改变 schema/格式                                  | 不改变                                                               | 仅在证据支撑下改变查询路径                     |

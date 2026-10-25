@@ -304,7 +304,12 @@ await run('qa_fault_injection_prepared_recovery', async () => {
   const prepared = await invoke(page, 'native_prepare_account_switch', {
     targetAccountId: account.id,
   });
-  if (prepared.ok) throw new Error('fault point did not abort switch preparation');
+  if (prepared.ok) {
+    // Never leave a PREPARED journal or a closed gate behind on a failed
+    // expectation; clean up before failing the test.
+    await invoke(page, 'native_abort_account_switch');
+    throw new Error('fault point unexpectedly allowed switch preparation');
+  }
   const status = unwrap(await invoke(page, 'native_account_switch_status'), 'switch status');
   // The command path aborts a failed prepare; a raw journal may also be left for
   // startup recovery. Both are safe as long as the active account and gate are
@@ -338,12 +343,25 @@ await run('qa_fault_evidence', async () => {
   const lines = fs.readFileSync(evidencePath, 'utf8').split(/\r?\n/).filter(Boolean);
   if (lines.length === 0) throw new Error('fault evidence file exists but is empty');
   let parsed = 0;
+  const points = [];
   for (const line of lines) {
     const item = JSON.parse(line);
     if (!item.eventId || !item.point || !item.result) throw new Error('malformed fault evidence');
+    points.push(item.point);
     parsed += 1;
   }
-  return { evidenceFile: 'fault-evidence.jsonl', records: parsed };
+  const configuredPoints = (config.rules || []).map((rule) =>
+    String(rule.point || '').toLowerCase(),
+  );
+  if (configuredPoints.length > 0 && !configuredPoints.some((point) => points.includes(point))) {
+    throw new Error('fault evidence has no record for any configured rule point');
+  }
+  return {
+    evidenceFile: 'fault-evidence.jsonl',
+    records: parsed,
+    configuredPoints,
+    observedPoints: [...new Set(points)],
+  };
 });
 
 const perfTasks = Number(process.env.QA_PERF_TASKS || 0);

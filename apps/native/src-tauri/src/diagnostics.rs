@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use todo_native_accounts::{
     AccountRegistry, MigrationPhase, legacy_review_report, migration_backups_dir,
-    migration_state_read_only, switch_status, verify_integrity,
+    migration_state_read_only, switch_status_read_only, verify_integrity,
 };
 
 use crate::{commands::CommandError, db::AppState};
@@ -93,7 +93,7 @@ pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnosti
     let registry = AccountRegistry::load(root).map_err(|error| error.to_string())?;
     let migration = migration_state_read_only(root).map_err(|error| error.to_string())?;
     let legacy_review = legacy_review_report(root).map_err(|error| error.to_string())?;
-    let switch = switch_status(root).map_err(|error| error.to_string())?;
+    let switch = switch_status_read_only(root).map_err(|error| error.to_string())?;
     let active = registry.active_account_id.clone();
     let accounts: Vec<DiagnosticAccount> = registry
         .accounts
@@ -256,7 +256,29 @@ mod tests {
             "https://example.test",
         )
         .expect("pending account");
+        let pending = todo_native_accounts::create_pending_cloud_account(
+            root,
+            "pending@example.test",
+            "https://example.test",
+        )
+        .expect("pending target");
+        todo_native_accounts::prepare_account_switch(root, &pending.id).expect("prepared switch");
+        let journal = fs::read(todo_native_accounts::pending_account_switch_file(root))
+            .expect("journal before diagnostics");
         let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID).expect("diagnostics");
+        let journal_after = fs::read(todo_native_accounts::pending_account_switch_file(root))
+            .expect("journal after diagnostics");
+        assert_eq!(
+            journal, journal_after,
+            "diagnostics must not repair switch state"
+        );
+        assert_eq!(
+            report
+                .switch
+                .as_ref()
+                .and_then(|status| status.phase.as_deref()),
+            Some("Prepared")
+        );
         let json = serde_json::to_string(&report).expect("json");
         assert!(!json.contains("token"));
         assert!(!json.contains("@example.test"));

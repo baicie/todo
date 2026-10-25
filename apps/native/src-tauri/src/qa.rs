@@ -8,7 +8,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -79,8 +79,13 @@ impl FaultInjector for FileInjector {
         if let Ok(mut file) = self.evidence.lock()
             && let Ok(line) = serde_json::to_string(evidence)
         {
+            // Explicitly seek to EOF as well as opening with append: this is
+            // robust against a sparse/preallocated evidence file left by a
+            // previous Windows run, which otherwise can produce NUL records.
+            let _ = file.seek(SeekFrom::End(0));
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
+            let _ = file.sync_data();
         }
     }
 }

@@ -485,6 +485,43 @@ pub fn switch_status(root: &Path) -> AccountResult<SwitchStatus> {
     status_from_journal(root, journal)
 }
 
+/// Read-only switch status for diagnostics. Unlike startup status, this never
+/// runs registry recovery or repairs a replacement journal.
+pub fn switch_status_read_only(root: &Path) -> AccountResult<SwitchStatus> {
+    let journal = PendingAccountSwitch::load(root)?;
+    let registry = AccountRegistry::load(root).ok();
+    let from = registry
+        .as_ref()
+        .map(|registry| registry.active_account_id.clone());
+    let current_db = registry
+        .as_ref()
+        .and_then(|registry| database_path(root, &registry.active_account_id).ok());
+    let pending_outbox = current_db
+        .filter(|path| path.is_file())
+        .map(|path| pending_outbox_count(&path))
+        .unwrap_or_default();
+    match journal {
+        Some(journal) => Ok(SwitchStatus {
+            active: false,
+            from_account_id: Some(journal.from_account_id),
+            to_account_id: Some(journal.to_account_id),
+            generation: Some(journal.generation),
+            phase: Some(journal.phase),
+            pending_outbox,
+            error_code: journal.error_code,
+        }),
+        None => Ok(SwitchStatus {
+            active: true,
+            from_account_id: from,
+            to_account_id: None,
+            generation: None,
+            phase: None,
+            pending_outbox,
+            error_code: None,
+        }),
+    }
+}
+
 fn pending_outbox_count(path: &Path) -> i64 {
     if !path.is_file() {
         return 0;

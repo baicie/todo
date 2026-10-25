@@ -30,5 +30,5 @@ pub use switch::{
     SwitchPhase, SwitchRecovery, SwitchStatus, abort_prepared_switch, create_pending_cloud_account,
     finish_pending_switch, list_accounts, mark_account_verified, prepare_account_switch,
     recover_pending_switch, request_account_switch, rollback_pending_switch, switch_status,
-    validate_account_switch_request, verify_cloud_identity,
+    switch_status_read_only, validate_account_switch_request, verify_cloud_identity,
 };

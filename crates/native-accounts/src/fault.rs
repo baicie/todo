@@ -213,6 +213,8 @@ mod tests {
 
     use super::*;
 
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[derive(Default)]
     struct RecordingInjector {
         action: Mutex<Option<FaultAction>>,
@@ -238,6 +240,9 @@ mod tests {
 
     #[test]
     fn no_injector_is_a_noop() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear();
         point(
             FaultPoint::SwitchPreparedPersisted,
@@ -250,6 +255,9 @@ mod tests {
 
     #[test]
     fn injected_error_has_a_machine_readable_code() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let injector = Arc::new(RecordingInjector::default());
         *injector.action.lock().expect("action") = Some(FaultAction::Error {
             code: "SIMULATED_CRASH".to_owned(),
@@ -277,6 +285,9 @@ mod tests {
 
     #[test]
     fn injected_block_is_bounded() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let injector = Arc::new(RecordingInjector::default());
         *injector.action.lock().expect("action") = Some(FaultAction::Block { duration_ms: 1 });
         install(injector).expect("install");
