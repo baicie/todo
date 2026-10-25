@@ -283,6 +283,7 @@ try {
       [ordered]@{ id = "pre-listener-multi-pending"; status = "NOT_RUN"; expected = "Multiple queued activations open in FIFO order"; observed = $null; evidence = $null },
       [ordered]@{ id = "duplicate-toast-click"; status = "NOT_RUN"; expected = "Repeated click/activation opens a task once"; observed = $null; evidence = $null },
       [ordered]@{ id = "pre-listener-rejection"; status = "NOT_RUN"; expected = "Rejection produced before listener registration is shown once"; observed = $null; evidence = $null },
+      [ordered]@{ id = "target-db-corrupt"; status = "NOT_RUN"; expected = "Damaged target database fails closed and restores the source account"; observed = $null; evidence = $null },
       [ordered]@{ id = "kill-restart-notification"; status = "NOT_RUN"; expected = "After forced process kill/restart, queue behavior matches the documented fail-closed/at-most-once contract"; observed = $null; evidence = $null }
     )
   }

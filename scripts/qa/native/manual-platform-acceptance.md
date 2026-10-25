@@ -84,20 +84,39 @@ real user task content into committed evidence.
    each retained result is shown once; no direct event replay duplicates a toast.
    If more than 8 rejections occurred, the oldest may be dropped by design.
 
-### M8 — Forced process kill/restart
+### M8 — Target account database damaged
+
+1. In a QA-only account, corrupt or truncate the target `shishi.sqlite3` before
+   the switch verification, or remove its write permission.
+2. Trigger the account switch and restart the app.
+3. **Expected:** fail-closed; the target must not become active; the source
+   account is restored, journal moves to FAILED or is repaired, and no empty
+   target database is created.
+4. Record the exact corruption, observed active account, journal phase, and
+   source/target file existence.
+
+### M9 — Forced process kill/restart
 
 1. With QA data only, queue a notification action, then terminate the QA process
    with Task Manager/`Stop-Process -Force`.
 2. Restart the QA app.
 3. **Expected:** no wrong-account task opens; any in-memory activation/rejection
    queue is lost (at-most-once UX, fail-closed security); account/journal
-   recovery follows the crash matrix in the RC2-D.2 report.
+   recovery follows the crash matrix in the RC2-D.3 report.
 4. Record the process kill time and post-restart active account.
+
+### M10 — Repeated click / duplicate activation
+
+1. Click the same Toast action repeatedly and trigger the same activation event
+   multiple times.
+2. **Expected:** the task is opened at most once per activation; duplicate wake
+   events do not produce duplicate toasts or navigation.
+3. Record click count, observed open count and any duplicate toast.
 
 ## Exit criteria
 
 - All executed scenarios have real observation evidence.
 - Any scenario without real interaction remains `NOT_RUN`, even if automated
   unit/IPC/harness tests pass.
-- `PLATFORM_RELEASE_READY` stays `NOT_READY` until M1–M8 have acceptable
+- `PLATFORM_RELEASE_READY` stays `NOT_READY` until M1–M10 have acceptable
   evidence and the crash matrix blockers are closed.
