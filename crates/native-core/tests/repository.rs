@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{Value, json};
 use todo_native_core::{
     ApplyServerResultRequest, CloudInitializeRequest, CloudMergeMode, CloudSnapshot, DayPlan,
     ExportBundle, ImportMode, ImportRequest, NewList, NewTask, TaskPatch, TaskStatus, TaskView,
@@ -455,8 +455,32 @@ fn import_fixture() -> (TodoStore, ExportBundle, String) {
     (store, bundle, task.id)
 }
 
+/// Stable public-API view of all local state touched by Replace import.
+///
+/// `exportedAt`, `appVersion`, and the export format/version envelope are
+/// intentionally excluded: they are export metadata, not business state. The
+/// public API does not expose `server_shadow`/`kv_state` rows, so diagnostics
+/// are recorded here instead; no test-only production IPC was added.
+fn stable_import_snapshot(store: &TodoStore) -> Value {
+    let bundle = store.export_data().expect("export snapshot");
+    json!({
+        "lists": bundle.lists,
+        "tasks": bundle.tasks,
+        "steps": bundle.steps,
+        "dayPlans": bundle.day_plans,
+        "pendingMutations": store
+            .pending_mutations(500)
+            .expect("pending mutations snapshot"),
+        "syncCursor": store.get_sync_cursor().expect("sync cursor snapshot"),
+        "deviceId": store.get_device_id().expect("device id snapshot"),
+        "syncDiagnostics": store
+            .sync_diagnostics()
+            .expect("sync diagnostics snapshot"),
+    })
+}
+
 fn assert_duplicate_import_rejected(kind: &str) {
-    let (store, bundle, task_id) = import_fixture();
+    let (store, bundle, _) = import_fixture();
     let mut duplicate = bundle.clone();
     match kind {
         "list" => {
@@ -477,13 +501,7 @@ fn assert_duplicate_import_rejected(kind: &str) {
         }
         _ => panic!("unknown kind"),
     }
-    let lists_before = store.list_lists().expect("lists before");
-    let task_before = store
-        .get_task(&task_id)
-        .expect("task before")
-        .expect("task");
-    let outbox_before = serde_json::to_value(store.pending_mutations(100).expect("outbox before"))
-        .expect("outbox json");
+    let snapshot_before = stable_import_snapshot(&store);
 
     let error = store
         .import_data(ImportRequest {
@@ -500,19 +518,10 @@ fn assert_duplicate_import_rejected(kind: &str) {
         "error must identify entity type {kind}: {error}"
     );
 
-    let lists_after = store.list_lists().expect("lists after");
+    let snapshot_after = stable_import_snapshot(&store);
     assert_eq!(
-        lists_before.iter().map(|list| &list.id).collect::<Vec<_>>(),
-        lists_after.iter().map(|list| &list.id).collect::<Vec<_>>()
-    );
-    let task_after = store.get_task(&task_id).expect("task after").expect("task");
-    assert_eq!(task_before.title, task_after.title);
-    assert_eq!(task_before.steps.len(), task_after.steps.len());
-    assert_eq!(task_before.day_plan_dates, task_after.day_plan_dates);
-    assert_eq!(
-        outbox_before,
-        serde_json::to_value(store.pending_mutations(100).expect("outbox after"))
-            .expect("outbox after json")
+        snapshot_before, snapshot_after,
+        "rejected duplicate {kind} import must not mutate any stable local state"
     );
 }
 
