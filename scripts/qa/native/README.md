@@ -105,6 +105,15 @@ labels do not enter these jobs.
 - `screenshots/` — real WebView screenshots.
 - `summary.md` — human-readable result.
 - `fault-evidence.jsonl` — only when a QA fault config was armed.
+- `manual-platform.json` — a template for real desktop evidence; every scenario
+  starts as `NOT_RUN` and must be filled only after actual interaction.
+
+## Real platform acceptance
+
+`manual-platform-acceptance.md` contains the M1–M8 real Toast/cold-start/
+wrong-account/rejection checklist and required evidence. The automated harness
+cannot click a real Windows Toast; unit/IPC harness results must not be promoted
+to platform PASS.
 
 ## Current limits
 

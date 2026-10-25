@@ -152,4 +152,5 @@ jobs:
           echo "windows-qa-bundle (installer + EXE discovery): ${{ needs.windows-qa-bundle.result }}"
           echo "compile-other-platforms (compile only): ${{ needs.compile-other-platforms.result }}"
           echo "Real Windows Toast/cold-start/two-account acceptance: NOT_RUN in CI"
+          echo "Android/iOS build+run: NOT_RUN (no SDK/signing/toolchain in this workflow)"
           echo "PLATFORM_RELEASE_READY: NOT_READY"

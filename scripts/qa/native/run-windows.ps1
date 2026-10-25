@@ -260,10 +260,33 @@ try {
     status = $testStatus
     files = @(
       "environment.json", "provenance.json", "manifest.json", "tests.json",
-      "timeline.json", "performance.json", "summary.md",
+      "timeline.json", "performance.json", "summary.md", "manual-platform.json",
       "logs/build.log", "logs/app.stdout.log", "logs/app.stderr.log", "logs/harness.log"
     )
   }
+  $manual = [ordered]@{
+    runId = $RunId
+    gitCommit = $manifest.gitCommit
+    appExe = $AppExe
+    appExeSha256 = $manifest.appExeSha256
+    installer = $Installer
+    installerSha256 = $installerHash
+    environment = "see environment.json"
+    note = "Fill observed results only after real desktop interaction; never mark a scenario PASS without evidence."
+    scenarios = @(
+      [ordered]@{ id = "toast-open-task"; status = "NOT_RUN"; expected = "Clicking 打开任务 opens the target task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "cold-start-activation"; status = "NOT_RUN"; expected = "Clicking a toast while app is stopped cold-starts and opens the task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "running-app-activation"; status = "NOT_RUN"; expected = "Clicking a toast while app is running opens the task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "wrong-account-rejection"; status = "NOT_RUN"; expected = "A toast for account A while B is active does not open A task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "switch-race-rejection"; status = "NOT_RUN"; expected = "Click during account switch is rejected without opening wrong task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "deleted-task-rejection"; status = "NOT_RUN"; expected = "Deleted-task toast does not open any task"; observed = $null; evidence = $null },
+      [ordered]@{ id = "pre-listener-multi-pending"; status = "NOT_RUN"; expected = "Multiple queued activations open in FIFO order"; observed = $null; evidence = $null },
+      [ordered]@{ id = "duplicate-toast-click"; status = "NOT_RUN"; expected = "Repeated click/activation opens a task once"; observed = $null; evidence = $null },
+      [ordered]@{ id = "pre-listener-rejection"; status = "NOT_RUN"; expected = "Rejection produced before listener registration is shown once"; observed = $null; evidence = $null },
+      [ordered]@{ id = "kill-restart-notification"; status = "NOT_RUN"; expected = "After forced process kill/restart, queue behavior matches the documented fail-closed/at-most-once contract"; observed = $null; evidence = $null }
+    )
+  }
+  Write-Json (Join-Path $ArtifactRoot "manual-platform.json") $manual
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
   Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot status=$testStatus"
   if ($testStatus -notin @("PASS", "BENCH_ONLY") -and -not $AllowPartial) {
