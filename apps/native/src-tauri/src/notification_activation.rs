@@ -508,6 +508,16 @@ mod tests {
         assert!(!registry_json.contains("UnsafePath"));
         assert!(!registry_json.contains("/Users/alice"));
 
+        let parse_error = serde_json::from_str::<serde_json::Value>("{").expect_err("invalid json");
+        let parse_rejection =
+            RejectedActivation::from_code(map_registry_error(&AccountError::Json(parse_error)));
+        let parse_json = serde_json::to_string(&parse_rejection).expect("serialize");
+        assert!(!parse_json.contains("expected"));
+        assert_eq!(
+            parse_json,
+            r#"{"code":"ACCOUNT_REGISTRY_INVALID","message":"本地账号状态不可用，请检查账号恢复状态"}"#
+        );
+
         let task_error = StoreError::Internal(
             "SELECT secret FROM local_tasks; /private/tmp/shishi.sqlite3".to_owned(),
         );
