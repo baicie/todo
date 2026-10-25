@@ -179,6 +179,8 @@ NotificationTargetV1 {
   4. 当前 store 查 task；不存在/已删除 => 丢弃，不按同名/同 task id 路由。
   5. 将 activation 放入 `PendingNotificationActivation`（idempotency id），`show_main_window`，emit `native-notification-activation`。
 - WebView 在 mount 完成后调用 `native_take_notification_activation`；Native 在 active account + WebView ready 后才交付。交付契约为 **pop-on-read（一次性消费）**：take 即交付；没有独立的 ACK 接口，重复 take 返回 None。
+- 启动 drain：Native 单次 take 最多处理 8 条，跳过并 reject 已无效的记录后返回下一条有效；WebView 注册 listener 后主动循环 take 到 null，单轮上限 8，事件触发的 drain 通过串行 Promise chain 合并。Native 调用失败立即结束当前 cycle，不忙循环。
+- 生命周期：App 同步创建 `AbortController`；`onCleanup` 先 abort 再释放 dispatcher。bridge 在动态 import、每个 listener 注册和初始 drain 前后检查取消；取消后注册才返回的 listener 立即 unlisten，禁止再调用 `openTask`/`notify`。
 - 冷启动：Native 在任何 active 账号确认前不处理任务打开；pending activation 只保存“已验证但未交付”的 target。若进程重启丢失 activation，则安全丢弃；不得打开错误账号任务。
 - 平台能力：Windows 的 `on_action` 已可用；通知正文的 `tap` 不携带 target，因此产品契约使用“打开任务”按钮 action。真实 Toast 点击和双账号拒绝在本轮为 NOT_RUN；无法确认时不伪造端到端 PASS。
 - 旧无前缀通知：单元测试通过内存 adapter 创建 legacy/foreign 队列并执行 cleanup；真实 Windows 通知库 fixture **NOT_RUN**，生产不会为了测试直接写真实通知库。

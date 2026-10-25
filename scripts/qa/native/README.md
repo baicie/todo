@@ -81,6 +81,16 @@ Repeatable import benchmark (replace mode, three runs by default):
 The benchmark writes `performance.json` with P50/P95 per size. It measures the
 real WebView IPC import path, not cloud outbox upload or desktop startup.
 
+## CI trigger
+
+`.github/workflows/native-qa.yml` is added by an unmerged PR, so
+`workflow_dispatch` is not available from the default branch yet. The supported
+pre-merge entry point is adding the `native-qa` label to the PR. That label event
+runs core fault-injection, Windows QA NSIS build + default EXE discovery, and
+macOS/Linux compile checks; the summary job prints the separated results and
+`Real Windows Toast/cold-start/two-account acceptance: NOT_RUN in CI`. Other PR
+labels do not enter these jobs.
+
 ## Output
 
 `artifacts/native-qa/<run-id>/`:
