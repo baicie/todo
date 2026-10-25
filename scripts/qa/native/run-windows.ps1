@@ -268,7 +268,10 @@ try {
   if (-not (Test-Path -LiteralPath $manualScenariosPath)) {
     throw "manual scenario inventory missing: $manualScenariosPath"
   }
-  $manualScenarios = Get-Content -LiteralPath $manualScenariosPath -Raw | ConvertFrom-Json
+  $manualScenarios = [System.IO.File]::ReadAllText(
+    $manualScenariosPath,
+    [System.Text.Encoding]::UTF8
+  ) | ConvertFrom-Json
   $manual = [ordered]@{
     runId = $RunId
     gitCommit = $manifest.gitCommit
@@ -288,7 +291,12 @@ try {
       }
     })
   }
-  Write-Json (Join-Path $ArtifactRoot "manual-platform.json") $manual
+  $manualEvidencePath = Join-Path $ArtifactRoot "manual-platform.json"
+  Write-Json $manualEvidencePath $manual
+  & node (Join-Path $PSScriptRoot "check-manual-scenarios.mjs") $manualEvidencePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "manual platform evidence does not match the canonical scenario inventory"
+  }
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
   Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot status=$testStatus"
   if ($testStatus -notin @("PASS", "BENCH_ONLY") -and -not $AllowPartial) {

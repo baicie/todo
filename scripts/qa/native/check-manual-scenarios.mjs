@@ -9,7 +9,9 @@ const inventoryPath = join(here, 'manual-scenarios.json');
 const checklistPath = join(here, 'manual-platform-acceptance.md');
 const harnessPath = join(here, 'run-windows.ps1');
 
-const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+
+const inventory = readJson(inventoryPath);
 const checklist = readFileSync(checklistPath, 'utf8');
 const harness = readFileSync(harnessPath, 'utf8');
 
@@ -31,5 +33,28 @@ assert.ok(
   !harness.includes('pre-listener-rejection"'),
   'legacy singular rejection scenario must not remain in harness',
 );
+
+const manifestPath = process.argv[2];
+if (manifestPath) {
+  const manifest = readJson(manifestPath);
+  assert.ok(Array.isArray(manifest.scenarios), 'manifest scenarios must be an array');
+  const manifestIds = manifest.scenarios.map((scenario) => scenario.id);
+  assert.equal(
+    new Set(manifestIds).size,
+    manifestIds.length,
+    'manifest scenario IDs must be unique',
+  );
+  assert.deepEqual(
+    [...manifestIds].sort(),
+    [...ids].sort(),
+    'generated manifest IDs must exactly match the canonical inventory',
+  );
+  for (const scenario of manifest.scenarios) {
+    assert.ok(['NOT_RUN', 'PASS', 'FAIL', 'PARTIAL'].includes(scenario.status), scenario.id);
+    assert.equal(typeof scenario.expected, 'string', `${scenario.id} expected`);
+    assert.ok('observed' in scenario, `${scenario.id} observed field`);
+    assert.ok('evidence' in scenario, `${scenario.id} evidence field`);
+  }
+}
 
 console.log(`manual scenario inventory OK: ${inventory.length} unique scenarios`);
