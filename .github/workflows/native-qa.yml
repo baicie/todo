@@ -1,0 +1,122 @@
+name: native-qa
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_installer:
+        description: Build the Windows QA NSIS installer
+        required: true
+        type: boolean
+        default: true
+  pull_request:
+    types: [labeled]
+    paths:
+      - 'apps/native/**'
+      - 'crates/native-accounts/**'
+      - 'apps/app/**'
+      - '.github/workflows/native-qa.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-fault-injection:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'native-qa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p todo-native-accounts
+      - run: cargo test -p todo-native-accounts --features fault-injection
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p todo-native-accounts --all-targets --features fault-injection -- -D warnings
+
+  windows-qa-bundle:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_installer == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @todo/app build
+      - name: Rust QA tests
+        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml --lib --features native-qa -- --test-threads=1
+      - name: Build QA NSIS
+        working-directory: apps/native
+        run: pnpm dlx @tauri-apps/cli@2.12.4 build --config src-tauri/tauri.qa.conf.json --features native-qa --bundles nsis
+      - name: Hash QA installer
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path apps/native/src-tauri/target/release/bundle/nsis -Filter '*.exe' -Recurse
+          if ($files.Count -ne 1) { throw "expected one QA installer, found $($files.Count)" }
+          $hash = Get-FileHash -LiteralPath $files[0].FullName -Algorithm SHA256
+          Set-Content -Path artifacts/native-qa-installer.sha256 -Value "$($hash.Hash.ToLowerInvariant())  $($files[0].Name)" -Encoding utf8
+          Get-Content artifacts/native-qa-installer.sha256 | Write-Output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shishi-rc2d-qa-windows
+          path: |
+            apps/native/src-tauri/target/release/bundle/nsis/*.exe
+            artifacts/native-qa-installer.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  compile-other-platforms:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'native-qa'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+      - name: Install Linux Tauri dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @todo/app build
+      - name: Compile/check native shell (not a platform release PASS)
+        run: cargo check --manifest-path apps/native/src-tauri/Cargo.toml --target ${{ matrix.target }}

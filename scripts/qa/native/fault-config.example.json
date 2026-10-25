@@ -1,0 +1,14 @@
+{
+  "evidencePath": "artifacts/native-qa/example/fault-evidence.jsonl",
+  "credentialBackend": "os",
+  "rules": [
+    {
+      "point": "SWITCH_PREPARED_PERSISTED",
+      "action": {
+        "type": "error",
+        "code": "QA_INJECTED_SWITCH_PREPARE",
+        "message": "QA injected failure after switch journal PREPARED"
+      }
+    }
+  ]
+}
