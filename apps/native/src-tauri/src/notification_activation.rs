@@ -214,26 +214,52 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
     let _ = app.emit(EVENT_OPEN, activation);
 }
 
+/// Bounded drain size. Invalid activations are reported and skipped in one
+/// command call so the WebView does not have to poll once per stale click.
+const MAX_ACTIVATION_DRAIN_ATTEMPTS: usize = 8;
+
+fn take_valid_activation<F, R>(
+    state: &NotificationActivationState,
+    mut validate: F,
+    mut reject: R,
+) -> Option<Activation>
+where
+    F: FnMut(&Activation) -> Result<String, (&'static str, String)>,
+    R: FnMut(&'static str, String),
+{
+    for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
+        let Some(activation) = state.take() else {
+            return None;
+        };
+        match validate(&activation) {
+            Ok(task_title) => {
+                return Some(Activation {
+                    task_title,
+                    ..activation
+                });
+            }
+            Err((code, message)) => reject(code, message),
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn native_take_notification_activation(
     app: AppHandle,
     activation_state: State<'_, NotificationActivationState>,
     app_state: State<'_, AppState>,
 ) -> Option<Activation> {
-    let activation = activation_state.take()?;
-    match validate_target(&app, &app_state, &activation.target) {
-        Ok(task_title) => Some(Activation {
-            task_title,
-            ..activation
-        }),
-        Err((code, message)) => {
+    take_valid_activation(
+        &activation_state,
+        |activation| validate_target(&app, &app_state, &activation.target),
+        |code, message| {
             // The account can switch after the notification was clicked but
             // before the WebView takes it. Never deliver a target that is no
             // longer valid for the active account.
             reject(&app, code, message);
-            None
-        }
-    }
+        },
+    )
 }
 
 /// Register the action handler. Only desktop arms this path; mobile reminders
@@ -291,6 +317,40 @@ mod tests {
         assert_eq!(target.account_id, "default");
         assert_eq!(target.task_id, "task-1");
         assert_eq!(target.source_version, 1);
+    }
+
+    #[test]
+    fn take_drains_rejected_activations_and_returns_first_valid() {
+        let state = NotificationActivationState::default();
+        for (activation_id, task_id) in [("stale", "stale-task"), ("valid", "task-ok")] {
+            state.put(Activation {
+                activation_id: activation_id.to_owned(),
+                target: NotificationTargetV1::new("default", task_id).expect("target"),
+                task_title: "queued".to_owned(),
+            });
+        }
+
+        let mut rejected = Vec::new();
+        let activation = take_valid_activation(
+            &state,
+            |activation| {
+                if activation.target.task_id == "stale-task" {
+                    Err(("ACCOUNT_SWITCH_REQUIRED", "stale".to_owned()))
+                } else {
+                    Ok("current title".to_owned())
+                }
+            },
+            |code, message| rejected.push((code, message)),
+        )
+        .expect("valid activation");
+
+        assert_eq!(activation.activation_id, "valid");
+        assert_eq!(activation.task_title, "current title");
+        assert_eq!(
+            rejected,
+            vec![("ACCOUNT_SWITCH_REQUIRED", "stale".to_owned())]
+        );
+        assert!(state.take().is_none());
     }
 
     #[test]
