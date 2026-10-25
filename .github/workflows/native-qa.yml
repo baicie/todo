@@ -8,13 +8,11 @@ on:
         required: true
         type: boolean
         default: true
+  # This workflow file is introduced by an unmerged PR, so workflow_dispatch is
+  # not available from the default branch yet. The label event is the supported
+  # pre-merge entry point; job-level conditions below require the exact label.
   pull_request:
     types: [labeled]
-    paths:
-      - 'apps/native/**'
-      - 'crates/native-accounts/**'
-      - 'apps/app/**'
-      - '.github/workflows/native-qa.yml'
 
 permissions:
   contents: read
@@ -25,7 +23,10 @@ concurrency:
 
 jobs:
   core-fault-injection:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'native-qa'
+    name: Core fault-injection tests
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'native-qa') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -41,7 +42,10 @@ jobs:
       - run: cargo clippy -p todo-native-accounts --all-targets --features fault-injection -- -D warnings
 
   windows-qa-bundle:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_installer == 'true'
+    name: Windows QA installer and EXE discovery
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'native-qa') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_installer == 'true')
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -89,7 +93,10 @@ jobs:
           if-no-files-found: error
 
   compile-other-platforms:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'native-qa'
+    name: macOS/Linux compile check (not a platform release pass)
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'native-qa') ||
+      github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -125,3 +132,24 @@ jobs:
       - run: pnpm --filter @todo/app build
       - name: Compile/check native shell (not a platform release PASS)
         run: cargo check --manifest-path apps/native/src-tauri/Cargo.toml --features native-qa --target ${{ matrix.target }}
+
+  qa-summary:
+    name: QA result summary
+    if: |
+      always() && (
+        (github.event_name == 'pull_request' && github.event.label.name == 'native-qa') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    needs:
+      - core-fault-injection
+      - windows-qa-bundle
+      - compile-other-platforms
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize separated QA results
+        run: |
+          echo "core-fault-injection: ${{ needs.core-fault-injection.result }}"
+          echo "windows-qa-bundle (installer + EXE discovery): ${{ needs.windows-qa-bundle.result }}"
+          echo "compile-other-platforms (compile only): ${{ needs.compile-other-platforms.result }}"
+          echo "Real Windows Toast/cold-start/two-account acceptance: NOT_RUN in CI"
+          echo "PLATFORM_RELEASE_READY: NOT_READY"
