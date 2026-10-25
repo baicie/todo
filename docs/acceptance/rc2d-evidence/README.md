@@ -1,11 +1,11 @@
 # RC2-D Evidence Index
 
-Committed excerpts from the local QA runs for the RC2-D.1 code gate `144d8a6`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
+Committed excerpts from the local QA runs for the RC2-D.1 code gate `b3756b7`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
 
 | Run                     | Kind                                 | Source commit | Status     | Tests                       |
 | ----------------------- | ------------------------------------ | ------------- | ---------- | --------------------------- |
-| `rc2d-20261025T093253Z` | QA release exe smoke                 | `144d8a6`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
-| `rc2d-20261025T093323Z` | QA release exe fault run             | `144d8a6`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
+| `rc2d-20261025T094545Z` | QA release exe smoke                 | `b3756b7`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
+| `rc2d-20261025T095210Z` | QA release exe fault run             | `b3756b7`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
 | `rc2d-20261025T075858Z` | 1k/10k/100k import benchmark (prior) | `749eb6c`     | BENCH_ONLY | 1 benchmark sample          |
 
 The benchmark is retained because RC2-D.1 did not change import production behavior; it is not a new RC2-D.1 benchmark.
@@ -14,9 +14,9 @@ The benchmark is retained because RC2-D.1 did not change import production behav
 
 | Artifact                                                         | SHA-256                                                            |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
-| QA NSIS `Shishi QA RC2D_1.0.0-rc2d_x64-setup.exe`                | `452c306d32b7870bc10ead9e4c2120359bd9e4236569b43ae2f6d3fccf70d7df` |
-| QA release exe `target/release/todo-native.exe`                  | `c080edbc4149bef55d816bc83bac46f34868b3324ace894e00872026e881f480` |
-| Installed QA exe `%LOCALAPPDATA%\Shishi QA RC2D\todo-native.exe` | `fdf446eec3875f8fb87654ba55d3aa1ebdde7a6ec857e6926073fe74445d1736` |
+| QA NSIS `Shishi QA RC2D_1.0.0-rc2d_x64-setup.exe`                | `8918968a13441063aaa833ddcf9b5a4edac11d2496a71425ffa859bea0551f43` |
+| QA release exe `target/release/todo-native.exe`                  | `53228203b33dd06722a36d7d93470d8ba95919328843d619c408a177d0cf848a` |
+| Installed QA exe `%LOCALAPPDATA%\Shishi QA RC2D\todo-native.exe` | `62887ddd738753a9da30d5de733755d84d74fb6765307e6a4a0876a51a283969` |
 
 The documented `run-windows.ps1 -Build -Install -AllowPartial` flow built and installed the QA package, discovered the installed `todo-native.exe`, and verified native identity `app.shishi.todo.qa` with the QA credential service. The production data root `%APPDATA%\app.shishi.todo` was absent before/after every run; production credentials were not read or written.
 
