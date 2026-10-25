@@ -162,7 +162,10 @@ try {
   $env:QA_APP_SHA256 = Get-Sha256 $AppExe
   $env:QA_INSTALLER = if ($Installer) { $Installer } else { "" }
   $env:QA_INSTALLER_SHA256 = if ($installerHash) { $installerHash } else { "" }
-  $env:QA_FAULT_EVIDENCE = $faultEvidence
+  $faultEvidenceSource = Join-Path $qaDataRoot ("evidence\fault-" + $RunId + ".jsonl")
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $faultEvidenceSource) | Out-Null
+  Remove-Item -LiteralPath $faultEvidenceSource -Force -ErrorAction SilentlyContinue
+  $env:QA_FAULT_EVIDENCE = $faultEvidenceSource
   $env:QA_FAULT_CONFIG = $FaultConfig
   $env:QA_PERF_TASKS = "$PerfTasks"
   $env:QA_BENCH_SIZES = $BenchSizes
@@ -173,12 +176,12 @@ try {
   if ($FaultConfig) {
     if (-not (Test-Path -LiteralPath $FaultConfig)) { throw "Fault config not found: $FaultConfig" }
     $sourceConfig = Get-Content -LiteralPath $FaultConfig -Raw | ConvertFrom-Json
-    $sourceConfig.evidencePath = $faultEvidence
+    $sourceConfig.evidencePath = $faultEvidenceSource
     $runConfigPath = Join-Path $ArtifactRoot "qa-fault-config.json"
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($runConfigPath, ($sourceConfig | ConvertTo-Json -Depth 10), $utf8)
     $FaultConfig = $runConfigPath
-    Remove-Item -LiteralPath $faultEvidence -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $faultEvidenceSource -Force -ErrorAction SilentlyContinue
     $arguments = @("--rc2d-fault-config", "`"$runConfigPath`"")
     $env:QA_FAULT_CONFIG = $runConfigPath
   }
@@ -204,6 +207,9 @@ try {
     & node (Join-Path $PSScriptRoot "bench.mjs") 2>&1 | Tee-Object -FilePath $harnessLog | Out-Host
   }
   $harnessExit = $LASTEXITCODE
+  if ((Test-Path -LiteralPath $faultEvidenceSource) -and -not (Test-Path -LiteralPath $faultEvidence)) {
+    Copy-Item -LiteralPath $faultEvidenceSource -Destination $faultEvidence -Force
+  }
   if ($harnessExit -ne 0) { throw "QA harness failed with exit code $harnessExit" }
 
   $finished = (Get-Date).ToUniversalTime()
