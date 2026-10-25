@@ -128,6 +128,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
   let stopNotificationActivation: (() => void) | undefined;
+  const notificationAbort = new AbortController();
   const scheduledReminders = new Map<string, string>();
   const [reminderIssues, setReminderIssues] = createSignal<ReminderIssue[]>([]);
   let reminderReconcileInFlight: Promise<void> | null = null;
@@ -490,11 +491,24 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     };
     window.addEventListener('keydown', onKeydown);
     void refreshReminders();
-    void startNotificationActivationBridge({
-      openTask: (taskId) => setSelectedId(taskId),
-      notify: (message, tone) => showToast(message, { tone }),
-    })
+    void startNotificationActivationBridge(
+      {
+        openTask: (taskId) => {
+          if (!notificationAbort.signal.aborted) setSelectedId(taskId);
+        },
+        notify: (message, tone) => {
+          if (!notificationAbort.signal.aborted) showToast(message, { tone });
+        },
+      },
+      notificationAbort.signal,
+    )
       .then((stop) => {
+        if (notificationAbort.signal.aborted) {
+          // Cleanup happened while initialization was in flight. Release the
+          // listeners now instead of storing a disposer nobody will call.
+          stop();
+          return;
+        }
         stopNotificationActivation = stop;
       })
       .catch(() => {
@@ -514,12 +528,14 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
       void navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
     onCleanup(() => {
+      notificationAbort.abort();
+      stopNotificationActivation?.();
+      stopNotificationActivation = undefined;
       cloud.dispose();
       stopTheme();
       unsubscribe();
       stopResume();
       stopOnline();
-      stopNotificationActivation?.();
       clearInterval(dateTimer);
       window.removeEventListener('keydown', onKeydown);
       if (toastTimer) clearTimeout(toastTimer);
