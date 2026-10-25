@@ -130,7 +130,6 @@ pub fn run() {
             commands::secure_token_set,
             commands::secure_token_remove,
             notification_activation::native_take_notification_activation,
-            notification_activation::native_ack_notification_activation,
             diagnostics::native_recovery_diagnostics,
             diagnostics::native_export_recovery_diagnostics,
         ])

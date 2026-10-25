@@ -49,15 +49,11 @@ export async function startNotificationActivationBridge(options: {
     seen.add(activation.activationId);
     if (activation.target.accountId !== activeAccountId()) {
       options.notify('该提醒属于另一个账号，请先切换账号', 'danger');
-      void invoke('native_ack_notification_activation', {
-        activationId: activation.activationId,
-      }).catch(() => {});
       return;
     }
+    // The Native command is pop-on-read: taking the activation is the
+    // delivery commitment. There is no second ACK mutation to fail.
     options.openTask(activation.target.taskId);
-    void invoke('native_ack_notification_activation', {
-      activationId: activation.activationId,
-    }).catch(() => {});
   };
 
   let drainInFlight: Promise<void> = Promise.resolve();

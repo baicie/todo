@@ -119,15 +119,6 @@ impl NotificationActivationState {
             .ok()
             .and_then(|mut pending| pending.pop_front())
     }
-
-    pub fn acknowledge(&self, activation_id: &str) -> bool {
-        let Ok(mut pending) = self.pending.lock() else {
-            return false;
-        };
-        let before = pending.len();
-        pending.retain(|item| item.activation_id != activation_id);
-        pending.len() != before
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -245,14 +236,6 @@ pub fn native_take_notification_activation(
     }
 }
 
-#[tauri::command]
-pub fn native_ack_notification_activation(
-    state: State<'_, NotificationActivationState>,
-    activation_id: String,
-) -> bool {
-    state.acknowledge(&activation_id)
-}
-
 /// Register the action handler. Only desktop arms this path; mobile reminders
 /// are delivered by the mobile plugin and are not routed through this command.
 #[cfg(desktop)]
@@ -311,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_ack_is_idempotent_only_for_the_same_id() {
+    fn activation_is_consumed_once() {
         let state = NotificationActivationState::default();
         let target = NotificationTargetV1::new("default", "task-1").expect("target");
         state.put(Activation {
@@ -319,8 +302,24 @@ mod tests {
             target,
             task_title: "task".to_owned(),
         });
-        assert!(!state.acknowledge("other"));
         assert_eq!(state.take().expect("pending").activation_id, "a1");
-        assert!(state.take().is_none());
+        assert!(
+            state.take().is_none(),
+            "pop-on-read is the delivery contract"
+        );
+    }
+
+    #[test]
+    fn activation_queue_preserves_click_order_and_drops_oldest() {
+        let state = NotificationActivationState::default();
+        for index in 0..10 {
+            state.put(Activation {
+                activation_id: format!("a{index}"),
+                target: NotificationTargetV1::new("default", format!("task-{index}"))
+                    .expect("target"),
+                task_title: "task".to_owned(),
+            });
+        }
+        assert_eq!(state.take().expect("pending").activation_id, "a2");
     }
 }
