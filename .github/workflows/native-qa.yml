@@ -63,6 +63,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/native/src-tauri
+      - name: Verify manual platform scenario inventory
+        run: node scripts/qa/native/check-manual-scenarios.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @todo/app build
       - name: Rust QA tests

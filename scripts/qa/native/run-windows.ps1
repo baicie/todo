@@ -264,6 +264,11 @@ try {
       "logs/build.log", "logs/app.stdout.log", "logs/app.stderr.log", "logs/harness.log"
     )
   }
+  $manualScenariosPath = Join-Path $PSScriptRoot "manual-scenarios.json"
+  if (-not (Test-Path -LiteralPath $manualScenariosPath)) {
+    throw "manual scenario inventory missing: $manualScenariosPath"
+  }
+  $manualScenarios = Get-Content -LiteralPath $manualScenariosPath -Raw | ConvertFrom-Json
   $manual = [ordered]@{
     runId = $RunId
     gitCommit = $manifest.gitCommit
@@ -273,19 +278,15 @@ try {
     installerSha256 = $installerHash
     environment = "see environment.json"
     note = "Fill observed results only after real desktop interaction; never mark a scenario PASS without evidence."
-    scenarios = @(
-      [ordered]@{ id = "toast-open-task"; status = "NOT_RUN"; expected = "Clicking 打开任务 opens the target task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "cold-start-activation"; status = "NOT_RUN"; expected = "Clicking a toast while app is stopped cold-starts and opens the task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "running-app-activation"; status = "NOT_RUN"; expected = "Clicking a toast while app is running opens the task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "wrong-account-rejection"; status = "NOT_RUN"; expected = "A toast for account A while B is active does not open A task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "switch-race-rejection"; status = "NOT_RUN"; expected = "Click during account switch is rejected without opening wrong task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "deleted-task-rejection"; status = "NOT_RUN"; expected = "Deleted-task toast does not open any task"; observed = $null; evidence = $null },
-      [ordered]@{ id = "pre-listener-multi-pending"; status = "NOT_RUN"; expected = "Multiple queued activations open in FIFO order"; observed = $null; evidence = $null },
-      [ordered]@{ id = "duplicate-toast-click"; status = "NOT_RUN"; expected = "Repeated click/activation opens a task once"; observed = $null; evidence = $null },
-      [ordered]@{ id = "pre-listener-rejection"; status = "NOT_RUN"; expected = "Rejection produced before listener registration is shown once"; observed = $null; evidence = $null },
-      [ordered]@{ id = "target-db-corrupt"; status = "NOT_RUN"; expected = "Damaged target database fails closed and restores the source account"; observed = $null; evidence = $null },
-      [ordered]@{ id = "kill-restart-notification"; status = "NOT_RUN"; expected = "After forced process kill/restart, queue behavior matches the documented fail-closed/at-most-once contract"; observed = $null; evidence = $null }
-    )
+    scenarios = @($manualScenarios | ForEach-Object {
+      [ordered]@{
+        id = $_.id
+        status = "NOT_RUN"
+        expected = $_.expected
+        observed = $null
+        evidence = $null
+      }
+    })
   }
   Write-Json (Join-Path $ArtifactRoot "manual-platform.json") $manual
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest

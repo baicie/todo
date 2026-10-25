@@ -24,7 +24,7 @@ real user task content into committed evidence.
 
 ## Scenarios
 
-### M1 — Toast “打开任务” while app is running
+### M1 — running-app-activation: Toast “打开任务” while app is running
 
 1. Install the QA NSIS package and start the QA app.
 2. Create a QA-only task with a reminder/test notification in the future.
@@ -32,7 +32,7 @@ real user task content into committed evidence.
 4. **Expected:** the QA app focuses and opens that task; no production data is touched.
 5. Record the task ID/name in QA-only data and a screenshot.
 
-### M2 — Cold start from a Toast action
+### M2 — cold-start-activation: Cold start from a Toast action
 
 1. Quit the QA app (verify the process is gone).
 2. Trigger a QA-only reminder and wait for its Toast.
@@ -41,7 +41,7 @@ real user task content into committed evidence.
    production account/data is used.
 5. Record process start, the opened task, and a screenshot.
 
-### M3 — Wrong-account rejection
+### M3 — wrong-account-rejection
 
 1. Create QA accounts A and B with distinct QA-only data.
 2. Activate B, then produce a Toast for an A task.
@@ -51,7 +51,7 @@ real user task content into committed evidence.
    pop-on-read.
 5. Record both account IDs in short form and the observed/no-toast behavior.
 
-### M4 — Account switch race
+### M4 — switch-race-rejection: Account switch race
 
 1. Start an A→B or B→A switch and click an A notification during the gate-closed
    window.
@@ -59,14 +59,14 @@ real user task content into committed evidence.
    delivered after the bridge drains its bounded queue.
 3. Record the switch phase and observed result.
 
-### M5 — Deleted task
+### M5 — deleted-task-rejection: Deleted task
 
 1. Schedule a QA reminder, then delete the QA task before the Toast.
 2. Click **打开任务**.
 3. **Expected:** no task opens; a rejection result is produced and delivered once
    after the listener is ready; no stale target is retained.
 
-### M6 — Several activations before the WebView listener
+### M6 — pre-listener-multi-pending: Several activations before the WebView listener
 
 1. Quit the QA app.
 2. Produce 2–8 QA notification actions while the process/WebView is not ready
@@ -75,7 +75,7 @@ real user task content into committed evidence.
 4. **Expected:** queued activations are drained in FIFO order without another
    event; the bounded queue keeps at most 8; opening is not duplicated.
 
-### M7 — Rejection before listener registration
+### M7 — pre-listener-multi-rejection: Rejections before listener registration
 
 1. Quit the QA app.
 2. Trigger 2+ invalid QA notifications (wrong account/deleted task) while stopped.
@@ -84,7 +84,7 @@ real user task content into committed evidence.
    each retained result is shown once; no direct event replay duplicates a toast.
    If more than 8 rejections occurred, the oldest may be dropped by design.
 
-### M8 — Target account database damaged
+### M8 — target-db-corrupt: Target account database damaged
 
 1. In a QA-only account, corrupt or truncate the target `shishi.sqlite3` before
    the switch verification, or remove its write permission.
@@ -95,7 +95,7 @@ real user task content into committed evidence.
 4. Record the exact corruption, observed active account, journal phase, and
    source/target file existence.
 
-### M9 — Forced process kill/restart
+### M9 — kill-restart-notification: Forced process kill/restart
 
 1. With QA data only, queue a notification action, then terminate the QA process
    with Task Manager/`Stop-Process -Force`.
@@ -105,7 +105,7 @@ real user task content into committed evidence.
    recovery follows the crash matrix in the RC2-D.3 report.
 4. Record the process kill time and post-restart active account.
 
-### M10 — Repeated click / duplicate activation
+### M10 — duplicate-toast-click: Repeated click / duplicate activation
 
 1. Click the same Toast action repeatedly and trigger the same activation event
    multiple times.
