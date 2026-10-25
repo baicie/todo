@@ -3,6 +3,9 @@ mod db;
 #[cfg(desktop)]
 mod desktop_shell;
 mod lifecycle;
+mod notification_activation;
+#[cfg(feature = "native-qa")]
+mod qa;
 mod reminders;
 mod secure_tokens;
 mod security;
@@ -33,6 +36,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(feature = "native-qa")]
+            qa::initialize(app.handle()).map_err(std::io::Error::other)?;
             let opened = db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
             let account = opened.account;
             if account.migrated_from_legacy
@@ -51,7 +56,11 @@ pub fn run() {
             let lifecycle =
                 lifecycle::LifecycleState::load(app.handle()).map_err(std::io::Error::other)?;
             app.manage(lifecycle);
+            app.manage(notification_activation::NotificationActivationState::default());
             app.manage(db::AppState::new(opened.store, reminders, account));
+            #[cfg(desktop)]
+            notification_activation::install_handler(app.handle())
+                .map_err(std::io::Error::other)?;
 
             #[cfg(desktop)]
             {
@@ -115,6 +124,8 @@ pub fn run() {
             commands::secure_token_get,
             commands::secure_token_set,
             commands::secure_token_remove,
+            notification_activation::native_take_notification_activation,
+            notification_activation::native_ack_notification_activation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Shishi native application");

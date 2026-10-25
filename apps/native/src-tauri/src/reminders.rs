@@ -84,6 +84,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 #[cfg(desktop)]
 struct QueuedReminder {
+    reminder_id: String,
     fire_at: DateTime<Utc>,
     title: String,
     body: String,
@@ -148,6 +149,7 @@ impl ReminderAdapter for DesktopTimerAdapter {
         entries.insert(
             reminder_id.to_owned(),
             QueuedReminder {
+                reminder_id: reminder_id.to_owned(),
                 fire_at,
                 title: title.to_owned(),
                 body: body.to_owned(),
@@ -222,13 +224,32 @@ fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
                     } else {
                         reminder.body.as_str()
                     };
-                    if let Err(error) = app
+                    let target = crate::notification_activation::target_from_reminder_id(
+                        &reminder.reminder_id,
+                    );
+                    let mut builder = app
                         .notification()
                         .builder()
                         .title(reminder.title)
-                        .body(body)
-                        .show()
-                    {
+                        .body(body);
+                    if let Some(target) = target {
+                        use tauri_plugin_notification::{Action, ActionType};
+                        let action_type =
+                            ActionType::builder(crate::notification_activation::ACTION_TYPE_ID)
+                                .actions(vec![
+                                    Action::builder(target.encode_action_id(), "打开任务").build(),
+                                ])
+                                .build();
+                        if let Err(error) =
+                            app.notification().register_action_types(vec![action_type])
+                        {
+                            eprintln!("shishi: notification action registration failed: {error}");
+                        } else {
+                            builder = builder
+                                .action_type_id(crate::notification_activation::ACTION_TYPE_ID);
+                        }
+                    }
+                    if let Err(error) = builder.show() {
                         eprintln!("shishi: desktop reminder notification failed: {error}");
                     }
                 }

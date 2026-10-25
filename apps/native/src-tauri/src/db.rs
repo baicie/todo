@@ -9,8 +9,8 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 use todo_native_accounts::{
-    ActiveAccountContext, ensure_active_account, finish_pending_switch, recover_pending_switch,
-    rollback_pending_switch,
+    ActiveAccountContext, FaultPoint, ensure_active_account, fault_point, finish_pending_switch,
+    recover_pending_switch, rollback_pending_switch,
 };
 use todo_native_core::TodoStore;
 
@@ -287,6 +287,13 @@ pub fn open_store_at(data_dir: &std::path::Path) -> Result<OpenedStore, String> 
         recover_pending_switch(data_dir).map_err(|error| format!("无法恢复账号切换: {error}"))?;
     let account = ensure_active_account(data_dir).map_err(|error| error.to_string())?;
     let target_committed = recovery.target_committed;
+    fault_point(
+        FaultPoint::TargetDatabaseBeforeOpen,
+        None,
+        Some(&account.account_id),
+        Some("open active account database"),
+    )
+    .map_err(|error| error.to_string())?;
     let store = match TodoStore::open(&account.database_path) {
         Ok(store) => store,
         Err(error) if target_committed => {
@@ -305,6 +312,13 @@ pub fn open_store_at(data_dir: &std::path::Path) -> Result<OpenedStore, String> 
         }
         Err(error) => return Err(format!("无法打开本地数据库: {error}")),
     };
+    fault_point(
+        FaultPoint::TargetDatabaseAfterOpen,
+        None,
+        Some(&account.account_id),
+        Some("active account database opened"),
+    )
+    .map_err(|error| error.to_string())?;
     if target_committed {
         finish_pending_switch(data_dir).map_err(|error| format!("无法完成账号切换: {error}"))?;
     }

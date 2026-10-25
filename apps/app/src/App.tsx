@@ -47,6 +47,7 @@ import {
   type TaskWithSteps,
 } from '@todo/domain';
 import type { AppPlatform, ThemePreference } from './adapters/platform';
+import { startNotificationActivationBridge } from './lib/notification-activation';
 import { DetailPanel } from './components/DetailPanel';
 import { CalendarView } from './components/CalendarView';
 import { QuickAdd } from './components/QuickAdd';
@@ -126,6 +127,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   let quickAddInput: HTMLInputElement | undefined;
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
+  let stopNotificationActivation: (() => void) | undefined;
   const scheduledReminders = new Map<string, string>();
   const [reminderIssues, setReminderIssues] = createSignal<ReminderIssue[]>([]);
   let reminderReconcileInFlight: Promise<void> | null = null;
@@ -488,6 +490,16 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     };
     window.addEventListener('keydown', onKeydown);
     void refreshReminders();
+    void startNotificationActivationBridge({
+      openTask: (taskId) => setSelectedId(taskId),
+      notify: (message, tone) => showToast(message, { tone }),
+    })
+      .then((stop) => {
+        stopNotificationActivation = stop;
+      })
+      .catch(() => {
+        // Notification activation is an enhancement; editing must stay usable.
+      });
     void cloud.initialize();
     if (props.platform.startupSwitchFailure) {
       showToast('上次账号切换未完成，已恢复原账号', {
@@ -507,6 +519,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
       unsubscribe();
       stopResume();
       stopOnline();
+      stopNotificationActivation?.();
       clearInterval(dateTimer);
       window.removeEventListener('keydown', onKeydown);
       if (toastTimer) clearTimeout(toastTimer);

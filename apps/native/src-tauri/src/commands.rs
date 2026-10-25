@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use todo_native_accounts::{
-    AbortSwitchOutcome, AccountList, AccountSummary, SwitchStatus, abort_prepared_switch,
-    create_pending_cloud_account, list_accounts, mark_account_verified, normalize_api_url,
-    normalize_email, prepare_account_switch, request_account_switch, rollback_pending_switch,
-    switch_status, verify_cloud_identity,
+    AbortSwitchOutcome, AccountList, AccountSummary, FaultPoint, SwitchStatus,
+    abort_prepared_switch, create_pending_cloud_account, fault_point, list_accounts,
+    mark_account_verified, normalize_api_url, normalize_email, prepare_account_switch,
+    request_account_switch, rollback_pending_switch, switch_status, verify_cloud_identity,
 };
 use todo_native_core::{CloudInitializeRequest, StoreError, TodoStore};
 
@@ -342,6 +342,13 @@ fn cancel_reminders_for_account(
     reminders: &dyn ReminderAdapter,
     account_id: &str,
 ) -> Result<(), CommandError> {
+    fault_point(
+        FaultPoint::ReminderCancel,
+        Some("ACCOUNT_SWITCH_REQUEST"),
+        Some(account_id),
+        Some("cancel account-scoped reminders"),
+    )
+    .map_err(|error| CommandError::reminder(error.to_string()))?;
     let prefix = format!("account:{account_id}:");
     let entries = reminders.scheduled().map_err(CommandError::reminder)?;
     let mut failures = Vec::new();
@@ -535,6 +542,35 @@ fn body_matches(current_body: &str, raw_body: &str) -> bool {
     }
 }
 
+/// Cancel one entry and verify the platform queue no longer reports it. A
+/// platform can return success while retaining the old notification; that must
+/// become a visible failed item rather than a silent success.
+fn cancel_and_verify(
+    reminders: &dyn ReminderAdapter,
+    reminder_id: &str,
+    report: &mut ReminderReconcileReport,
+) {
+    match reminders.cancel(reminder_id) {
+        Ok(()) => {
+            report.cancelled += 1;
+            match reminders.scheduled() {
+                Ok(items) if items.iter().any(|item| item.reminder_id == reminder_id) => {
+                    report.failed.push(format!(
+                        "{reminder_id}: cancel reported success but entry remains"
+                    ))
+                }
+                Ok(_) => {}
+                Err(error) => report
+                    .failed
+                    .push(format!("{reminder_id}: residual check failed: {error}")),
+            }
+        }
+        Err(error) => report
+            .failed
+            .push(format!("{reminder_id}: cancel failed: {error}")),
+    }
+}
+
 /// Reconcile the system queue without any Tauri state. Keeping this pure makes
 /// the repeated-reconcile/idempotency contract directly testable.
 fn reconcile_reminder_queue(
@@ -557,23 +593,13 @@ fn reconcile_reminder_queue(
             if active.contains(task_id) {
                 existing_by_id.insert(task_id.to_owned(), item);
             } else {
-                match reminders.cancel(&item.reminder_id) {
-                    Ok(()) => report.cancelled += 1,
-                    Err(error) => report
-                        .failed
-                        .push(format!("{}: cancel failed: {error}", item.reminder_id)),
-                }
+                cancel_and_verify(reminders, &item.reminder_id, &mut report);
             }
         } else {
             // Notifications created by another account, or legacy untagged
             // entries from before account scoping, must never be interpreted as
             // the current account's tasks.
-            match reminders.cancel(&item.reminder_id) {
-                Ok(()) => report.cancelled += 1,
-                Err(error) => report
-                    .failed
-                    .push(format!("{}: cancel failed: {error}", item.reminder_id)),
-            }
+            cancel_and_verify(reminders, &item.reminder_id, &mut report);
         }
     }
 
@@ -606,22 +632,22 @@ fn reconcile_reminder_queue(
                     report.scheduled += 1;
                 }
                 Ok(mode) if mode == "past" || mode == "skipped-past" => {
-                    let _ = reminders.cancel(&scoped);
+                    cancel_and_verify(reminders, &scoped, &mut report);
                     report.skipped_past += 1;
                 }
                 Ok(mode) if mode == "outside-window" => {
-                    let _ = reminders.cancel(&scoped);
+                    cancel_and_verify(reminders, &scoped, &mut report);
                     report.outside_window += 1;
                 }
                 Ok(mode) if mode == "capacity-exceeded" => {
-                    let _ = reminders.cancel(&scoped);
+                    cancel_and_verify(reminders, &scoped, &mut report);
                     report.capacity_exceeded += 1;
                 }
                 Ok(mode) => report
                     .failed
                     .push(format!("{}: unknown mode {mode}", task.id)),
                 Err(error) => {
-                    let _ = reminders.cancel(&scoped);
+                    cancel_and_verify(reminders, &scoped, &mut report);
                     report.failed.push(format!("{}: {error}", task.id));
                 }
             }
@@ -811,6 +837,9 @@ mod tests {
         schedule_calls: AtomicUsize,
         permission: String,
         cancel_failures: Mutex<std::collections::HashSet<String>>,
+        schedule_failure: std::sync::atomic::AtomicBool,
+        scheduled_failure: std::sync::atomic::AtomicBool,
+        retain_after_cancel: std::sync::atomic::AtomicBool,
     }
 
     impl FakeReminderAdapter {
@@ -820,6 +849,9 @@ mod tests {
                 schedule_calls: AtomicUsize::new(0),
                 permission: "granted".to_owned(),
                 cancel_failures: Mutex::new(std::collections::HashSet::new()),
+                schedule_failure: std::sync::atomic::AtomicBool::new(false),
+                scheduled_failure: std::sync::atomic::AtomicBool::new(false),
+                retain_after_cancel: std::sync::atomic::AtomicBool::new(false),
             }
         }
     }
@@ -834,6 +866,9 @@ mod tests {
             _exact: bool,
         ) -> Result<String, String> {
             self.schedule_calls.fetch_add(1, Ordering::SeqCst);
+            if self.schedule_failure.load(Ordering::SeqCst) {
+                return Err("simulated schedule failure".to_owned());
+            }
             let mut entries = self.entries.lock().expect("entries");
             entries.retain(|entry| entry.reminder_id != reminder_id);
             entries.push(ScheduledReminderInfo {
@@ -854,6 +889,9 @@ mod tests {
             {
                 return Err("platform cancel failed".to_owned());
             }
+            if self.retain_after_cancel.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             self.entries
                 .lock()
                 .expect("entries")
@@ -862,6 +900,9 @@ mod tests {
         }
 
         fn scheduled(&self) -> Result<Vec<ScheduledReminderInfo>, String> {
+            if self.scheduled_failure.load(Ordering::SeqCst) {
+                return Err("simulated scheduled() failure".to_owned());
+            }
             Ok(self.entries.lock().expect("entries").clone())
         }
 
@@ -960,6 +1001,119 @@ mod tests {
             .expect("second");
         assert_eq!(report.scheduled, 1);
         assert_eq!(report.unchanged, 0);
+        assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn reminder_schedule_and_queue_failures_are_visible() {
+        let adapter = FakeReminderAdapter::granted();
+        adapter.schedule_failure.store(true, Ordering::SeqCst);
+        let report = reconcile_reminder_queue(&adapter, &[reminder_task("a", "")], "default")
+            .expect("reconcile");
+        assert_eq!(report.scheduled, 0);
+        assert!(
+            report
+                .failed
+                .iter()
+                .any(|item| item.contains("simulated schedule failure"))
+        );
+
+        let adapter = FakeReminderAdapter::granted();
+        adapter.scheduled_failure.store(true, Ordering::SeqCst);
+        let error =
+            reconcile_reminder_queue(&adapter, &[], "default").expect_err("scheduled error");
+        assert!(error.contains("simulated scheduled() failure"));
+    }
+
+    #[test]
+    fn cancel_success_with_a_residual_entry_is_a_failure() {
+        let adapter = FakeReminderAdapter::granted();
+        adapter
+            .entries
+            .lock()
+            .expect("entries")
+            .push(ScheduledReminderInfo {
+                reminder_id: "account:default:old".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "old".to_owned(),
+                body: String::new(),
+            });
+        adapter.retain_after_cancel.store(true, Ordering::SeqCst);
+        let report = reconcile_reminder_queue(&adapter, &[], "default").expect("reconcile");
+        assert_eq!(report.cancelled, 1);
+        assert!(
+            report
+                .failed
+                .iter()
+                .any(|item| item.contains("reported success but entry remains"))
+        );
+        assert_eq!(adapter.scheduled().expect("entries").len(), 1);
+    }
+
+    #[test]
+    fn legacy_and_other_account_notifications_are_never_reused() {
+        let adapter = FakeReminderAdapter::granted();
+        adapter.entries.lock().expect("entries").extend([
+            ScheduledReminderInfo {
+                reminder_id: "account:default:a".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "task a".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "account:other:leak".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "other".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "legacy-unprefixed".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "legacy".to_owned(),
+                body: String::new(),
+            },
+        ]);
+        let report = reconcile_reminder_queue(&adapter, &[reminder_task("a", "")], "default")
+            .expect("reconcile");
+        assert_eq!(
+            report.cancelled, 2,
+            "foreign and legacy entries are cancelled"
+        );
+        assert!(report.failed.is_empty());
+        let remaining = adapter.scheduled().expect("entries");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].reminder_id, "account:default:a");
+
+        adapter.entries.lock().expect("entries").extend([
+            ScheduledReminderInfo {
+                reminder_id: "account:other:leak2".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "other".to_owned(),
+                body: String::new(),
+            },
+            ScheduledReminderInfo {
+                reminder_id: "legacy-unprefixed-2".to_owned(),
+                fire_at_utc: "2026-10-24T09:00:00Z".to_owned(),
+                title: "legacy".to_owned(),
+                body: String::new(),
+            },
+        ]);
+        crate::reminders::cleanup_foreign_queue(&adapter, "default").expect("restart cleanup");
+        let remaining = adapter.scheduled().expect("entries");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].reminder_id, "account:default:a");
+    }
+
+    #[test]
+    fn scheduling_the_same_id_replaces_instead_of_duplicating() {
+        let adapter = FakeReminderAdapter::granted();
+        let mut task = reminder_task("a", "");
+        reconcile_reminder_queue(&adapter, std::slice::from_ref(&task), "default").expect("first");
+        task.title = "changed title".to_owned();
+        reconcile_reminder_queue(&adapter, std::slice::from_ref(&task), "default").expect("second");
+        let entries = adapter.scheduled().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].title, "changed title");
         assert_eq!(adapter.schedule_calls.load(Ordering::SeqCst), 2);
     }
 
