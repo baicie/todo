@@ -196,6 +196,18 @@ describe('notification activation bridge abort lifecycle', () => {
     expect(options.openTask).not.toHaveBeenCalled();
   });
 
+  it('does not register listeners when aborted while dynamic imports resolve', async () => {
+    const controller = new AbortController();
+    const options = defaultOptions();
+
+    const start = startNotificationActivationBridge(options, controller.signal);
+    controller.abort();
+
+    await expect(start).rejects.toMatchObject({ name: 'AbortError' });
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(options.openTask).not.toHaveBeenCalled();
+  });
+
   it('unlistens the first listener when cleanup occurs during its registration', async () => {
     const registration = deferred<() => void>();
     listenMock.mockReturnValueOnce(registration.promise);
