@@ -121,7 +121,21 @@ use, and must not be registered in production builds.
 - CI must run on the final code SHA. `native-qa` is triggered by PR label
   `native-qa` before merge; `workflow_dispatch` is unavailable until merged.
 
-## 5. Acceptance criteria
+## 5. Implementation status
+
+- Rejection queue and `native_take_notification_rejection` implemented in
+  `5ebc7bd`; event is wake-only; frontend drains activation and rejection queues
+  serially with a bounded cycle.
+- Wake/finally boundary requeue implemented in `00e3dcd`.
+- Crash tests: PREPARED and RESTART_REQUIRED are real child-process kill/restart
+  PASS; other boundaries remain PARTIAL/NOT_RUN as listed in the acceptance
+  report.
+- Windows manual template and M1–M8 checklist added; all real scenarios remain
+  NOT_RUN until an operator records real desktop evidence.
+- Android/iOS remain NOT_RUN because this environment has only the Windows Rust
+  target and no SDK/NDK/Xcode/signing.
+
+## 6. Acceptance criteria
 
 - Rust rejection queue tests: FIFO, once-only, capacity/overflow, multiple
   rejections, valid activation unaffected.
