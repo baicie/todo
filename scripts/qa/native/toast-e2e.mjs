@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { verifyQaExecutable, verifyRunningProcess } from './qa-executable.mjs';
 
 function arg(name, required = true) {
   const index = process.argv.indexOf(`--${name}`);
@@ -14,11 +15,12 @@ function arg(name, required = true) {
   return process.argv[index + 1];
 }
 
-const appExe = path.resolve(arg('app-exe'));
+let appExe = path.resolve(arg('app-exe'));
 const artifactRoot = path.resolve(arg('artifact-root'));
 const scenarioId = arg('scenario', false) ?? 'running-app-activation';
 const cdpPort = Number(arg('cdp-port', false) ?? 9346);
 const driver = path.join(import.meta.dirname, 'windows-toast-driver.ps1');
+const diagnostic = path.join(import.meta.dirname, 'windows-notification-diagnostic.ps1');
 const scenarioPath = path.join(artifactRoot, 'platform-scenario.json');
 const screenshotRel = 'screenshots/toast-driver.png';
 const screenshotPath = path.join(artifactRoot, screenshotRel);
@@ -52,6 +54,13 @@ try {
   if (environment.productionDataRootPresentAfter === true) {
     throw new Error('production data root was present; refusing real platform run');
   }
+  const verified = verifyQaExecutable({
+    appExe,
+    artifactRoot,
+    expectedHead: process.env.QA_EXPECTED_HEAD,
+  });
+  appExe = verified.realPath;
+  event('qa_executable_verified', { sha256: verified.sha256, productName: verified.productName });
   event('starting_qa_app', { appExe });
   child = spawn(appExe, [], {
     cwd: path.dirname(appExe),
@@ -81,6 +90,8 @@ try {
     await sleep(500);
   }
   if (!page) throw new Error(`QA WebView CDP unavailable on ${cdpPort}`);
+  verifyRunningProcess(child.pid, appExe);
+  event('qa_process_path_verified', { pid: child.pid });
   event('cdp_connected');
   await page.waitForFunction(
     () => document.readyState === 'complete' && Boolean(window.__TAURI_INTERNALS__),
@@ -107,6 +118,8 @@ try {
     return response.value;
   };
 
+  const runMarker = manifest.runId;
+  if (!runMarker) throw new Error('manifest runId missing; cannot attribute Toast');
   const identity = unwrap(await invoke('qa_build_identity'), 'qa_build_identity');
   if (
     identity?.isQa !== true ||
@@ -125,7 +138,7 @@ try {
       await invoke('todo_storage', { request: { action: 'initialize', payload: {} } }),
       'storage initialize',
     );
-    const title = `QA Toast ${Date.now()}`;
+    const title = `QA Toast ${runMarker} ${Date.now()}`;
     const task = unwrap(
       await invoke('todo_storage', {
         request: { action: 'create_task', payload: { input: { title } } },
@@ -141,13 +154,32 @@ try {
         reminderId: task.id,
         fireAtUtc,
         title,
-        body: 'QA isolated Toast fixture',
+        body: `QA isolated Toast fixture ${runMarker}`,
         exact: false,
       }),
       'schedule_reminder',
     );
     event('toast_scheduled', { fireAtUtc, mode, taskId: task.id });
     await sleep(3500);
+
+    const platformDiagnosticPath = path.join(artifactRoot, 'notification-platform.json');
+    const diagnosticRun = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-File',
+        diagnostic,
+        '-OutFile',
+        platformDiagnosticPath,
+        '-Identifier',
+        'app.shishi.todo.qa',
+      ],
+      { stdio: 'ignore' },
+    );
+    event('notification_platform_diagnostic', { code: diagnosticRun.status });
+    if (fs.existsSync(platformDiagnosticPath)) {
+      result.platformDiagnostic = readJson(platformDiagnosticPath);
+    }
 
     const driverResultPath = path.join(artifactRoot, 'toast-driver-result.json');
     const driverRun = spawnSync(
@@ -162,6 +194,8 @@ try {
         artifactRoot,
         '-OutFile',
         driverResultPath,
+        '-RunMarker',
+        runMarker,
         '-TimeoutSeconds',
         '25',
       ],
@@ -176,7 +210,12 @@ try {
     result.driver = readJson(driverResultPath);
     if (result.driver.status !== 'PARTIAL') {
       result.status = 'NOT_RUN';
-      result.reason = result.driver.error ?? `driver status ${result.driver.status}`;
+      const added = result.platformDiagnostic?.lastNotificationAddedTime;
+      result.reason =
+        (result.driver.error ?? `driver status ${result.driver.status}`) +
+        (added
+          ? `; Windows platform recorded notification at ${added}`
+          : '; Windows platform timestamp unavailable');
     } else {
       // The driver only invoked UIA. The app must now show the expected task.
       let opened = false;
@@ -232,6 +271,7 @@ const scenarioRecord = {
   error: result.error,
   taskId: result.taskId,
   taskTitle: result.taskTitle,
+  platformDiagnostic: result.platformDiagnostic ?? null,
   driver: result.driver,
   evidence: result.evidence,
   startedAt: startedAt.toISOString(),

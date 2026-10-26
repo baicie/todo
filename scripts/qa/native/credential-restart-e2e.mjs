@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { verifyQaExecutable, verifyRunningProcess } from './qa-executable.mjs';
 
 const arg = (name, required = true) => {
   const index = process.argv.indexOf(`--${name}`);
@@ -13,7 +14,7 @@ const arg = (name, required = true) => {
   return process.argv[index + 1];
 };
 
-const appExe = path.resolve(arg('app-exe'));
+let appExe = path.resolve(arg('app-exe'));
 const artifactRoot = path.resolve(arg('artifact-root'));
 const cdpPort = Number(arg('cdp-port', false) ?? 9348);
 const resultPath = path.join(artifactRoot, 'credential-restart.json');
@@ -76,6 +77,8 @@ async function start() {
     return response.value;
   };
   const identity = unwrap(await invoke('qa_build_identity'), 'qa_build_identity');
+  verifyRunningProcess(child.pid, appExe);
+  event('qa_process_path_verified', { pid: child.pid });
   if (
     identity?.isQa !== true ||
     identity.identifier !== 'app.shishi.todo.qa' ||
@@ -122,6 +125,13 @@ const result = {
 };
 let key;
 try {
+  const verified = verifyQaExecutable({
+    appExe,
+    artifactRoot,
+    expectedHead: process.env.QA_EXPECTED_HEAD,
+  });
+  appExe = verified.realPath;
+  event('qa_executable_verified', { sha256: verified.sha256, productName: verified.productName });
   const first = await start();
   result.accountId = first.accountId;
   result.credentialService = 'app.shishi.todo.rc2d-qa.secure-token';
