@@ -4,7 +4,8 @@ param(
   [string]$ArtifactRoot = "",
   [string]$OutFile = "",
   [int]$TimeoutSeconds = 20,
-  [string]$ExpectedText = ""
+  [string]$ExpectedText = "",
+  [string]$RunMarker = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,7 +59,24 @@ function Test-NotificationHost([System.Windows.Automation.AutomationElement]$win
   return [bool]$hostMatch
 }
 
-function Find-ToastButton([string]$expected, [int]$seconds) {
+function Test-WindowMarker([System.Windows.Automation.AutomationElement]$window, [string]$marker) {
+  if ([string]::IsNullOrWhiteSpace($marker)) { return $false }
+  try {
+    $all = $window.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($element in $all) {
+      try {
+        $name = "$($element.Current.Name)"
+        if ($name.Contains($marker, [System.StringComparison]::Ordinal)) { return $true }
+      } catch {}
+    }
+  } catch {}
+  return $false
+}
+
+function Find-ToastButton([string]$expected, [string]$marker, [int]$seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::NameProperty,
@@ -78,6 +96,7 @@ function Find-ToastButton([string]$expected, [int]$seconds) {
         )
         foreach ($button in $buttons) {
           if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+          if (-not (Test-WindowMarker $window $marker)) { continue }
           return [ordered]@{ element = $button; window = $window }
         }
       } catch {
@@ -143,11 +162,17 @@ try {
     throw $result.error
   }
 
-  $found = Find-ToastButton -expected $ExpectedText -seconds $TimeoutSeconds
+  if ([string]::IsNullOrWhiteSpace($RunMarker)) {
+    $result.status = "FAIL"
+    $result.error = "RunMarker is required to attribute a notification to this QA run"
+    Add-Timeline "missing_run_marker"
+    throw $result.error
+  }
+  $found = Find-ToastButton -expected $ExpectedText -marker $RunMarker -seconds $TimeoutSeconds
   if ($null -eq $found) {
     $result.status = "NOT_RUN"
-    $result.error = "no real Toast button '$ExpectedText' found in a notification host within $TimeoutSeconds s"
-    Add-Timeline "toast_not_found"
+    $result.error = "no real Toast button '$ExpectedText' with QA run marker '$RunMarker' found within $TimeoutSeconds s"
+    Add-Timeline "toast_not_found_or_ambiguous"
   } else {
     $window = $found.window
     $button = $found.element
