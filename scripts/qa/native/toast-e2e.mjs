@@ -35,6 +35,7 @@ const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).dige
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let child;
+let driverProcess;
 let browser;
 let result = {
   scenarioId,
@@ -45,6 +46,11 @@ let result = {
   taskId: null,
   taskTitle: null,
   driver: null,
+  driverReadyAt: null,
+  notificationScheduledAt: null,
+  notificationObservedAt: null,
+  invokeAt: null,
+  taskOpenedAt: null,
   evidence: [],
 };
 
@@ -148,7 +154,45 @@ try {
     if (!task?.id) throw new Error('create_task returned no task');
     result.taskId = task.id;
     result.taskTitle = title;
-    const fireAtUtc = new Date(Date.now() + 2500).toISOString();
+    const driverResultPath = path.join(artifactRoot, 'toast-driver-result.json');
+    const readyPath = path.join(artifactRoot, 'toast-driver-ready.txt');
+    fs.rmSync(driverResultPath, { force: true });
+    fs.rmSync(readyPath, { force: true });
+    driverProcess = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-File',
+        driver,
+        '-Mode',
+        'Click',
+        '-ArtifactRoot',
+        artifactRoot,
+        '-OutFile',
+        driverResultPath,
+        '-ReadyFile',
+        readyPath,
+        '-RunMarker',
+        runMarker,
+        '-TimeoutSeconds',
+        '40',
+      ],
+      { stdio: 'ignore', windowsHide: true },
+    );
+    event('toast_driver_started', { pid: driverProcess.pid });
+    const readyDeadline = Date.now() + 15000;
+    while (!fs.existsSync(readyPath)) {
+      if (driverProcess.exitCode !== null) {
+        throw new Error(`Toast driver exited before READY (exit ${driverProcess.exitCode})`);
+      }
+      if (Date.now() > readyDeadline)
+        throw new Error('Toast driver did not reach READY within 15s');
+      await sleep(100);
+    }
+    result.driverReadyAt = new Date().toISOString();
+    event('toast_driver_ready', { readyAt: result.driverReadyAt });
+
+    const fireAtUtc = new Date(Date.now() + 1200).toISOString();
     const mode = unwrap(
       await invoke('schedule_reminder', {
         reminderId: task.id,
@@ -159,8 +203,24 @@ try {
       }),
       'schedule_reminder',
     );
+    result.notificationScheduledAt = new Date().toISOString();
     event('toast_scheduled', { fireAtUtc, mode, taskId: task.id });
-    await sleep(3500);
+
+    const driverExitCode = await new Promise((resolve, reject) => {
+      if (driverProcess.exitCode !== null) {
+        resolve(driverProcess.exitCode);
+        return;
+      }
+      driverProcess.once('exit', (code) => resolve(code));
+      driverProcess.once('error', reject);
+    });
+    event('toast_driver_exit', { code: driverExitCode });
+    if (!fs.existsSync(driverResultPath)) {
+      throw new Error(`Toast driver produced no result (exit ${driverExitCode})`);
+    }
+    result.driver = readJson(driverResultPath);
+    result.notificationObservedAt = result.driver.notificationObservedAt ?? null;
+    result.invokeAt = result.driver.invokeAt ?? null;
 
     const platformDiagnosticPath = path.join(artifactRoot, 'notification-platform.json');
     const diagnosticRun = spawnSync(
@@ -180,34 +240,6 @@ try {
     if (fs.existsSync(platformDiagnosticPath)) {
       result.platformDiagnostic = readJson(platformDiagnosticPath);
     }
-
-    const driverResultPath = path.join(artifactRoot, 'toast-driver-result.json');
-    const driverRun = spawnSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-File',
-        driver,
-        '-Mode',
-        'Click',
-        '-ArtifactRoot',
-        artifactRoot,
-        '-OutFile',
-        driverResultPath,
-        '-RunMarker',
-        runMarker,
-        '-TimeoutSeconds',
-        '25',
-      ],
-      { stdio: 'inherit' },
-    );
-    event('toast_driver_exit', { code: driverRun.status, error: driverRun.error?.message ?? null });
-    if (driverRun.error)
-      throw new Error(`Toast driver could not start: ${driverRun.error.message}`);
-    if (!fs.existsSync(driverResultPath)) {
-      throw new Error(`Toast driver produced no result (exit ${driverRun.status})`);
-    }
-    result.driver = readJson(driverResultPath);
     if (result.driver.status !== 'PARTIAL') {
       result.status = 'NOT_RUN';
       const added = result.platformDiagnostic?.lastNotificationAddedTime;
@@ -225,6 +257,7 @@ try {
         );
         if (detail === title) {
           opened = true;
+          result.taskOpenedAt = new Date().toISOString();
           break;
         }
         await sleep(300);
@@ -255,6 +288,11 @@ try {
     if (browser) await browser.close();
   } catch {}
   try {
+    if (driverProcess && driverProcess.exitCode === null) {
+      process.kill(driverProcess.pid);
+    }
+  } catch {}
+  try {
     if (child && child.pid) {
       process.kill(child.pid);
       event('qa_app_killed', { pid: child.pid });
@@ -272,6 +310,11 @@ const scenarioRecord = {
   taskId: result.taskId,
   taskTitle: result.taskTitle,
   platformDiagnostic: result.platformDiagnostic ?? null,
+  driverReadyAt: result.driverReadyAt,
+  notificationScheduledAt: result.notificationScheduledAt,
+  notificationObservedAt: result.notificationObservedAt,
+  invokeAt: result.invokeAt,
+  taskOpenedAt: result.taskOpenedAt,
   driver: result.driver,
   evidence: result.evidence,
   startedAt: startedAt.toISOString(),
