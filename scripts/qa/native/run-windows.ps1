@@ -35,7 +35,9 @@ function Write-Log([string]$Path, [string]$Text) {
 
 function Get-Sha256([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $null }
-  (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  $hash = Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop
+  if ($null -eq $hash) { throw "SHA-256 failed for $Path" }
+  $hash.Hash.ToLowerInvariant()
 }
 
 function Get-GitCommitFallback {
@@ -237,6 +239,13 @@ try {
   }
   if ($harnessExit -ne 0) { throw "QA harness failed with exit code $harnessExit" }
 
+  # Release redirected app log handles before hashing the artifact directory.
+  if ($appPid -and -not $KeepRunning) {
+    Get-Process -Id $appPid -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    $appPid = $null
+  }
+
   $finished = (Get-Date).ToUniversalTime()
   $testsPath = Join-Path $ArtifactRoot "tests.json"
   $testStatus = "UNKNOWN"
@@ -273,6 +282,7 @@ try {
     [System.Text.Encoding]::UTF8
   ) | ConvertFrom-Json
   $manual = [ordered]@{
+    schemaVersion = 2
     runId = $RunId
     gitCommit = $manifest.gitCommit
     appExe = $AppExe
@@ -287,18 +297,76 @@ try {
         status = "NOT_RUN"
         expected = $_.expected
         observed = $null
-        evidence = $null
+        evidence = @()
+        reason = $null
+        runId = $RunId
+        headSha = $manifest.gitCommit
+        appExeSha256 = $manifest.appExeSha256
+        installerSha256 = $installerHash
+        startedAt = $started.ToString("o")
+        finishedAt = $finished.ToString("o")
       }
     })
   }
   $manualEvidencePath = Join-Path $ArtifactRoot "manual-platform.json"
+  # The validator needs the finalized manifest for run/HEAD/binary binding.
+  Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
   Write-Json $manualEvidencePath $manual
-  & node (Join-Path $PSScriptRoot "check-manual-scenarios.mjs") $manualEvidencePath
+  & node (Join-Path $PSScriptRoot "check-manual-scenarios.mjs") `
+    --artifact-root $ArtifactRoot --expected-head $manifest.gitCommit
   if ($LASTEXITCODE -ne 0) {
     throw "manual platform evidence does not match the canonical scenario inventory"
   }
-  Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
+  $platformResults = [ordered]@{
+    schemaVersion = 1
+    runId = $RunId
+    headSha = $manifest.gitCommit
+    appExeSha256 = $manifest.appExeSha256
+    installerSha256 = $installerHash
+    windowsPlatformReady = $false
+    otherDesktopPlatformReady = $false
+    mobilePlatformReady = $false
+    platformReleaseReady = $false
+    generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    scenarios = @($manual.scenarios | ForEach-Object {
+      [ordered]@{ id = $_.id; status = $_.status }
+    })
+  }
+  Write-Json (Join-Path $ArtifactRoot "platform-results.json") $platformResults
+  $evidenceIndex = [ordered]@{
+    schemaVersion = 1
+    runId = $RunId
+    headSha = $manifest.gitCommit
+    appExeSha256 = $manifest.appExeSha256
+    installerSha256 = $installerHash
+    generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    scenarios = @($manual.scenarios | ForEach-Object {
+      [ordered]@{ id = $_.id; status = $_.status; evidence = $_.evidence }
+    })
+  }
+  Write-Json (Join-Path $ArtifactRoot "evidence-index.json") $evidenceIndex
+
   Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot status=$testStatus"
+
+  $sumLines = New-Object System.Collections.Generic.List[string]
+  $sumFiles = Get-ChildItem -LiteralPath $ArtifactRoot -Recurse -File |
+    Where-Object { $_.Name -notin @("sha256sums.txt", "manifest.json") } |
+    Sort-Object FullName
+  foreach ($file in $sumFiles) {
+    $rel = $file.FullName.Substring($ArtifactRoot.Length + 1).Replace([string][char]92, '/')
+    $hash = Get-Sha256 $file.FullName
+    $sumLines.Add("$hash  $rel")
+  }
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllLines(
+    (Join-Path $ArtifactRoot "sha256sums.txt"),
+    $sumLines,
+    $utf8NoBom
+  )
+  $manifest.files = @($manifest.files) + @(
+    "platform-results.json", "evidence-index.json", "sha256sums.txt"
+  )
+  Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
   if ($testStatus -notin @("PASS", "BENCH_ONLY") -and -not $AllowPartial) {
     Write-Log (Join-Path $LogDir "launcher.log") "PARTIAL/NOT_RUN evidence is not a successful gate; pass -AllowPartial only for investigative runs"
     exit 2
