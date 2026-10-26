@@ -67,6 +67,9 @@ jobs:
         run: node scripts/qa/native/check-manual-scenarios.mjs
       - name: Test QA evidence and executable contracts
         run: node --test scripts/qa/native/*.test.mjs
+      - name: Test PowerShell 5.1 marker compatibility
+        shell: powershell
+        run: powershell.exe -NoProfile -File scripts/qa/native/windows-toast-marker.tests.ps1
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @todo/app build
       - name: Rust QA tests
