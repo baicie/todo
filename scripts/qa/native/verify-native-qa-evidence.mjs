@@ -36,6 +36,17 @@ if (manifest && platform) {
       errors.push(`platform-results ${key} does not match manifest`);
     }
   }
+  const manualStatuses = new Map(
+    (manualResult.manual?.scenarios ?? []).map((item) => [item.id, item.status]),
+  );
+  if (platform.scenarios?.length !== manualStatuses.size) {
+    errors.push('platform-results scenario count does not match manual evidence');
+  }
+  for (const item of platform.scenarios ?? []) {
+    if (manualStatuses.get(item.id) !== item.status) {
+      errors.push(`platform-results status mismatch for ${item.id}`);
+    }
+  }
 }
 
 const sumsPath = join(artifactRoot, 'sha256sums.txt');
@@ -75,7 +86,8 @@ if (!existsSync(sumsPath)) {
   }
 }
 
-const allPass = manualResult.ok && manualResult.manual?.scenarios?.every((item) => item.status === 'PASS');
+const allPass =
+  manualResult.ok && manualResult.manual?.scenarios?.every((item) => item.status === 'PASS');
 const windowsReady = platform?.windowsPlatformReady === true && allPass;
 if (platform?.windowsPlatformReady === true && !allPass) {
   errors.push('windowsPlatformReady is true but not all scenarios have valid PASS evidence');
