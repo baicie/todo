@@ -18,9 +18,16 @@ For every scenario record:
 - screenshot or screen recording path; for cold start, include the process
   start time and the task that opened.
 
-Fill `manual-platform.json` in the run artifact. Do not change `NOT_RUN` to
-`PASS` without real desktop evidence; do not paste tokens, emails in full, or
-real user task content into committed evidence.
+Fill `manual-platform.json` in the run artifact. Schema v2 requires `observed`,
+one or more evidence objects (`path`, `sha256`, `kind`), and matching `runId`,
+`headSha`, app/installer hashes and timestamps for `PASS`. The evidence file
+must live under the run artifact root; traversal, symlinks and hash mismatches
+are rejected. `NOT_RUN` may keep null observation/evidence.
+
+Do not change `NOT_RUN` to `PASS` without real desktop evidence; do not paste
+tokens, emails in full, or real user task content into committed evidence.
+The UIA driver's invoke alone is only PARTIAL until `toast-e2e.mjs` observes the
+expected task detail in the WebView.
 
 ## Scenarios
 

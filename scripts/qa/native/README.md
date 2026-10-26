@@ -105,18 +105,35 @@ labels do not enter these jobs.
 - `screenshots/` — real WebView screenshots.
 - `summary.md` — human-readable result.
 - `fault-evidence.jsonl` — only when a QA fault config was armed.
-- `manual-platform.json` — a template for real desktop evidence; every scenario
-  starts as `NOT_RUN` and must be filled only after actual interaction.
+- `manual-platform.json` — schema v2 evidence record; every scenario starts as
+  `NOT_RUN`.
+- `platform-results.json` — per-platform gate summary (initially NOT_READY).
+- `evidence-index.json` / `sha256sums.txt` — archive file inventory and hashes.
 
 ## Real platform acceptance
 
-`manual-platform-acceptance.md` contains the M1–M8 real Toast/cold-start/
-wrong-account/rejection checklist and required evidence. The automated harness
-cannot click a real Windows Toast; unit/IPC harness results must not be promoted
-to platform PASS.
+`manual-platform-acceptance.md` contains the M1–M10 real Toast/cold-start/
+wrong-account/rejection checklist and required evidence. The canonical IDs live
+in `manual-scenarios.json`.
+
+Tools:
+
+- `windows-toast-driver.ps1 -Mode Probe|Click` — UI Automation driver that only
+  accepts a button inside a verified notification host and invokes it; it never
+  uses blind coordinates. A UIA invoke alone is `PARTIAL`, not PASS.
+- `toast-e2e.mjs` — creates a QA task/reminder, invokes the driver and verifies
+  the task detail actually opened. Only then may a scenario be PASS.
+- `credential-restart-e2e.mjs` — QA keyring write, real process restart, read and
+  remove; uses the QA credential service only.
+- `finalize-native-qa-evidence.mjs` / `verify-native-qa-evidence.mjs` — rebuild
+  checksums/index and verify schema, hashes, run/HEAD binding and evidence.
+- `check-manual-scenarios.mjs --artifact-root ...` — PASS requires nonempty
+  observation plus a real, hashed evidence file under the artifact root.
+
+IPC/harness success is never promoted to real Toast PASS.
 
 ## Current limits
 
-- Real toast click routing and wrong-account notification rejection need two interactive desktop cloud accounts and visible toasts. They are left NOT_RUN unless a future fixture performs that flow on Windows.
+- Real toast click routing and wrong-account notification rejection remain NOT_RUN; the UIA driver and task/reminder fixture exist, but a real Toast was not observed in this environment.
 - A Windows toast action can be reported only while the process's action listener is alive; cold-start activation from Action Center is not claimed as PASS.
 - macOS/Linux/Android/iOS builds are compile/unit-test evidence only unless a real device/runner result is recorded.

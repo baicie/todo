@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "runId": "rc2d-20261026T022050Z",
+  "headSha": "41901d49d6cb85a68941017752cf72b596961f00",
+  "appExeSha256": "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+  "installerSha256": "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+  "windowsPlatformReady": false,
+  "otherDesktopPlatformReady": false,
+  "mobilePlatformReady": false,
+  "platformReleaseReady": false,
+  "generatedAt": "2026-10-26T02:22:52.929Z",
+  "scenarios": [
+    {
+      "id": "running-app-activation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "cold-start-activation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "wrong-account-rejection",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "switch-race-rejection",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "deleted-task-rejection",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "pre-listener-multi-pending",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "pre-listener-multi-rejection",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "target-db-corrupt",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "kill-restart-notification",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "duplicate-toast-click",
+      "status": "NOT_RUN"
+    }
+  ]
+}

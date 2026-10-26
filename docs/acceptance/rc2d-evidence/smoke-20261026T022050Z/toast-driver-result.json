@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "mode": "Click",
+  "status": "NOT_RUN",
+  "startedAt": "2026-10-26T02:21:14.2014825Z",
+  "finishedAt": "2026-10-26T02:21:39.6562737Z",
+  "expectedText": "打开任务",
+  "desktopInteractive": true,
+  "wpnService": "Running",
+  "webView2": "155.0.4283.62",
+  "findings": [],
+  "screenshot": null,
+  "error": "no real Toast button \u0027打开任务\u0027 found in a notification host within 25 s",
+  "timeline": [
+    {
+      "at": "2026-10-26T02:21:14.2179552Z",
+      "name": "uia_loaded",
+      "detail": null
+    },
+    {
+      "at": "2026-10-26T02:21:39.6562737Z",
+      "name": "toast_not_found",
+      "detail": null
+    }
+  ]
+}

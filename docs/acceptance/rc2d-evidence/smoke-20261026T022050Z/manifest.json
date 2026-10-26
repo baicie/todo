@@ -1,14 +1,14 @@
-﻿{
-  "runId": "rc2d-20261025T153001Z",
-  "startedAt": "2026-10-25T15:30:01.1888458Z",
-  "finishedAt": "2026-10-25T15:30:19.7095926Z",
+{
+  "runId": "rc2d-20261026T022050Z",
+  "startedAt": "2026-10-26T02:20:50.1963267Z",
+  "finishedAt": "2026-10-26T02:21:05.2260922Z",
   "appExe": "<repo>\\apps\\native\\src-tauri\\target\\release\\todo-native.exe",
   "appExeSha256": "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
   "installer": "<repo>\\apps\\native\\src-tauri\\target\\release\\bundle\\nsis\\Shishi QA RC2D_1.0.0-rc2d_x64-setup.exe",
   "installerSha256": "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
   "faultConfig": "",
   "faultEvidencePresent": false,
-  "gitCommit": "deeb5a6e942d667e5510fde1251817f272a8cea2",
+  "gitCommit": "41901d49d6cb85a68941017752cf72b596961f00",
   "gitBranch": "feat/rc2d-native-hardening",
   "qaDataRoot": "<user>\\AppData\\Roaming\\app.shishi.todo.qa",
   "productionDataRootPresentAfter": false,
@@ -25,6 +25,15 @@
     "logs/build.log",
     "logs/app.stdout.log",
     "logs/app.stderr.log",
-    "logs/harness.log"
+    "logs/harness.log",
+    "platform-results.json",
+    "evidence-index.json",
+    "sha256sums.txt",
+    "credential-restart.json",
+    "logs/harness.jsonl",
+    "logs/launcher.log",
+    "platform-scenario.json",
+    "screenshots/qa-final.png",
+    "toast-driver-result.json"
   ]
 }
