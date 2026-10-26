@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "runId": "rc2d-20261026T055128Z",
-  "headSha": "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+  "runId": "rc2d-20261026T102113Z",
+  "headSha": "68b4d9e24fa3df1037c482b9ac298b62883bc9ea",
   "appExeSha256": "a9f8b19f2ed9da261783c06d528db31ff710948bd4546e0c6024b72a07d4d0f2",
   "installerSha256": "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
-  "generatedAt": "2026-10-26T05:51:58.1601339Z",
+  "generatedAt": "2026-10-26T10:21:42.5367902Z",
   "scenarios": [
     {
       "id": "running-app-activation",

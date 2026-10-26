@@ -1,11 +1,11 @@
 # RC2-D Evidence Index
 
-Committed excerpts from the local QA runs for the RC2-D.6 code gate `22382e3`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
+Committed excerpts from the local QA runs for the RC2-D.7 code gate `68b4d9e`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
 
 | Run                     | Kind                                 | Source commit | Status     | Tests                       |
 | ----------------------- | ------------------------------------ | ------------- | ---------- | --------------------------- |
-| `rc2d-20261026T055128Z` | QA release exe smoke                 | `22382e3`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
-| `rc2d-20261026T055353Z` | QA release exe fault run             | `22382e3`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
+| `rc2d-20261026T102113Z` | QA release exe smoke                 | `68b4d9e`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
+| `rc2d-20261026T102328Z` | QA release exe fault run             | `68b4d9e`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
 | `rc2d-20261025T075858Z` | 1k/10k/100k import benchmark (prior) | `749eb6c`     | BENCH_ONLY | 1 benchmark sample          |
 
 The benchmark is retained from an earlier code gate; RC2-D.5 changed QA/evidence tooling, not import production behavior.
@@ -26,7 +26,7 @@ Both committed runs pass:
 
 ```text
 node scripts/qa/native/verify-native-qa-evidence.mjs \
-  --artifact-root <dir> --expected-head 22382e3827d512ea722efa9ef1a6f79e6cf111f0
+  --artifact-root <dir> --expected-head 68b4d9e24fa3df1037c482b9ac298b62883bc9ea
 # ok: true, evidenceVerified: true, windowsPlatformReady: false
 ```
 
@@ -36,10 +36,13 @@ without observed evidence. `sha256sums.txt` covers the committed archive
 
 ## Real Toast attempt
 
-`rc2d-20261026T055128Z/platform-scenario.json` records an actual UIA attempt:
+`rc2d-20261026T102113Z/platform-scenario.json` records an actual UIA attempt:
 a QA task/reminder was created and scheduled with the runId marker,
-`windows-toast-driver.ps1` searched for a real `打开任务` button in a notification
-host for 25 seconds, found none, and recorded `NOT_RUN`.
+`windows-toast-driver.ps1` was started before the Toast fired, reached READY at
+`10:21:53.816Z` (7 ms before scheduling at `10:21:53.823Z`), then searched for a
+same-card `打开任务` button with the run marker for 40 seconds. It found zero
+action buttons (`actionButtons: 0`) and zero marker elements and recorded
+`NOT_RUN`.
 
 `notification-platform.json` shows Windows itself recorded the toast for
 `app.shishi.todo.qa` at the exact scheduled time. A read-only copy of
@@ -52,14 +55,14 @@ PASS; `platform-results.json` remains `windowsPlatformReady: false`.
 
 ## Credential restart
 
-`rc2d-20261026T055128Z/credential-restart.json` records a real QA Credential
+`rc2d-20261026T102113Z/credential-restart.json` records a real QA Credential
 Manager write, process termination, fresh process start, read-back and removal:
 `status: PASS`, `restartedRead: true`, QA namespace only. This is supplemental
 evidence; it is not one of the 10 public Toast scenarios.
 
 ## Fault evidence
 
-`fault-20261026T055353Z/fault-evidence.jsonl` contains a real injected
+`fault-20261026T102328Z/fault-evidence.jsonl` contains a real injected
 `switch_prepared_persisted` error in `PREPARED`, plus passed cleanup and
 credential points. No token or credential value is present.
 
