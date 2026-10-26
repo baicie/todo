@@ -1,0 +1,173 @@
+﻿{
+    "schemaVersion":  2,
+    "runId":  "rc2d-20261026T055353Z",
+    "gitCommit":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+    "appExe":  "<repo>\\apps\\native\\src-tauri\\target\\release\\todo-native.exe",
+    "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+    "installer":  "<repo>\\apps\\native\\src-tauri\\target\\release\\bundle\\nsis\\Shishi QA RC2D_1.0.0-rc2d_x64-setup.exe",
+    "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+    "environment":  "see environment.json",
+    "note":  "Fill observed results only after real desktop interaction; never mark a scenario PASS without evidence.",
+    "scenarios":  [
+                      {
+                          "id":  "running-app-activation",
+                          "status":  "NOT_RUN",
+                          "expected":  "Clicking 打开任务 while the app is running opens the target task exactly once",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "cold-start-activation",
+                          "status":  "NOT_RUN",
+                          "expected":  "Clicking a toast while the app is stopped cold-starts and opens the target task",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "wrong-account-rejection",
+                          "status":  "NOT_RUN",
+                          "expected":  "A toast for account A while B is active does not open A task and produces a rejection",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "switch-race-rejection",
+                          "status":  "NOT_RUN",
+                          "expected":  "Click during account switch is rejected without opening a wrong-account task",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "deleted-task-rejection",
+                          "status":  "NOT_RUN",
+                          "expected":  "A toast for a deleted task does not open any task and produces a rejection",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "pre-listener-multi-pending",
+                          "status":  "NOT_RUN",
+                          "expected":  "Multiple activations queued before the webview listener open in FIFO order",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "pre-listener-multi-rejection",
+                          "status":  "NOT_RUN",
+                          "expected":  "Multiple rejections queued before the listener are delivered once each in FIFO order",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "target-db-corrupt",
+                          "status":  "NOT_RUN",
+                          "expected":  "A damaged target database fails closed and keeps the source account active",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "kill-restart-notification",
+                          "status":  "NOT_RUN",
+                          "expected":  "After forced process kill/restart, queue behavior matches the documented fail-closed/at-most-once contract",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      },
+                      {
+                          "id":  "duplicate-toast-click",
+                          "status":  "NOT_RUN",
+                          "expected":  "Repeated click/activation opens a task at most once and does not duplicate toasts",
+                          "observed":  null,
+                          "evidence":  [
+
+                                       ],
+                          "reason":  null,
+                          "runId":  "rc2d-20261026T055353Z",
+                          "headSha":  "22382e3827d512ea722efa9ef1a6f79e6cf111f0",
+                          "appExeSha256":  "5b7cea327fe915b3036d93430bd02856efe8787eab23376a20d9db7904552424",
+                          "installerSha256":  "18a4804fd166c8c2b026aa1420cd4f8a52a41abe0cb20bb21191c728910ca7ce",
+                          "startedAt":  "2026-10-26T05:53:53.5029809Z",
+                          "finishedAt":  "2026-10-26T05:54:11.7530034Z"
+                      }
+                  ]
+}

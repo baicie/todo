@@ -1,0 +1,99 @@
+{
+  "scenarioId": "running-app-activation",
+  "status": "NOT_RUN",
+  "observed": null,
+  "reason": "no real Toast button '打开任务' with QA run marker 'rc2d-20261026T055128Z' found within 25 s; Windows platform recorded notification at 2026-10-26T05:52:09.2154823Z",
+  "error": null,
+  "taskId": "01a176c4-1c55-71c4-a623-513474b7aeed",
+  "taskTitle": "QA Toast rc2d-20261026T055128Z 1792993926202",
+  "platformDiagnostic": {
+    "schemaVersion": 1,
+    "identifier": "app.shishi.todo.qa",
+    "checkedAt": "2026-10-26T05:52:13.1382703Z",
+    "desktopInteractive": true,
+    "wpnService": "Running",
+    "settingsKeyPresent": true,
+    "lastNotificationAddedTime": "2026-10-26T05:52:09.2154823Z",
+    "periodicNotificationCount": 1,
+    "error": null
+  },
+  "driver": {
+    "schemaVersion": 1,
+    "mode": "Click",
+    "status": "NOT_RUN",
+    "startedAt": "2026-10-26T05:52:18.7737222Z",
+    "finishedAt": "2026-10-26T05:52:43.9015841Z",
+    "expectedText": "打开任务",
+    "desktopInteractive": true,
+    "wpnService": "Running",
+    "webView2": "155.0.4283.62",
+    "findings": [],
+    "screenshot": null,
+    "error": "no real Toast button '打开任务' with QA run marker 'rc2d-20261026T055128Z' found within 25 s",
+    "timeline": [
+      {
+        "at": "2026-10-26T05:52:18.7907198Z",
+        "name": "uia_loaded",
+        "detail": null
+      },
+      {
+        "at": "2026-10-26T05:52:43.9015841Z",
+        "name": "toast_not_found_or_ambiguous",
+        "detail": null
+      }
+    ]
+  },
+  "evidence": [],
+  "startedAt": "2026-10-26T05:51:59.091Z",
+  "finishedAt": "2026-10-26T05:52:44.000Z",
+  "timeline": [
+    {
+      "at": "2026-10-26T05:52:02.141Z",
+      "name": "qa_executable_verified",
+      "sha256": "a9f8b19f2ed9da261783c06d528db31ff710948bd4546e0c6024b72a07d4d0f2",
+      "productName": "Shishi QA RC2D"
+    },
+    {
+      "at": "2026-10-26T05:52:02.141Z",
+      "name": "starting_qa_app",
+      "appExe": "<user>\\AppData\\Local\\Shishi QA RC2D\\todo-native.exe"
+    },
+    {
+      "at": "2026-10-26T05:52:02.240Z",
+      "name": "started_qa_app",
+      "pid": 20196
+    },
+    {
+      "at": "2026-10-26T05:52:06.157Z",
+      "name": "qa_process_path_verified",
+      "pid": 20196
+    },
+    {
+      "at": "2026-10-26T05:52:06.157Z",
+      "name": "cdp_connected"
+    },
+    {
+      "at": "2026-10-26T05:52:06.639Z",
+      "name": "toast_scheduled",
+      "fireAtUtc": "2026-10-26T05:52:09.132Z",
+      "mode": "scheduled",
+      "taskId": "01a176c4-1c55-71c4-a623-513474b7aeed"
+    },
+    {
+      "at": "2026-10-26T05:52:13.286Z",
+      "name": "notification_platform_diagnostic",
+      "code": 0
+    },
+    {
+      "at": "2026-10-26T05:52:43.995Z",
+      "name": "toast_driver_exit",
+      "code": 0,
+      "error": null
+    },
+    {
+      "at": "2026-10-26T05:52:44.000Z",
+      "name": "qa_app_killed",
+      "pid": 20196
+    }
+  ]
+}
