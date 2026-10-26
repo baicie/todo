@@ -124,6 +124,8 @@ const result = {
   finishedAt: null,
 };
 let key;
+let invokeForCleanup;
+let phase = 'preflight';
 try {
   const verified = verifyQaExecutable({
     appExe,
@@ -132,17 +134,24 @@ try {
   });
   appExe = verified.realPath;
   event('qa_executable_verified', { sha256: verified.sha256, productName: verified.productName });
+  phase = 'start_first';
   const first = await start();
+  invokeForCleanup = first.invoke;
   result.accountId = first.accountId;
   result.credentialService = 'app.shishi.todo.rc2d-qa.secure-token';
   key = `cloud-refresh:${first.accountId}`;
   const value = `qa-restart-token-${Date.now()}`;
+  phase = 'write';
   first.unwrap(await first.invoke('secure_token_set', { key, value }), 'secure_token_set');
   event('credential_written');
+  phase = 'restart';
   await stop();
   event('first_process_stopped');
 
+  phase = 'start_second';
   const second = await start();
+  invokeForCleanup = second.invoke;
+  phase = 'readback';
   const read = second.unwrap(await second.invoke('secure_token_get', { key }), 'secure_token_get');
   if (read !== value) {
     result.status = 'FAIL';
@@ -153,6 +162,7 @@ try {
     result.reason = null;
     event('credential_restart_readback_ok');
   }
+  phase = 'cleanup';
   second.unwrap(await second.invoke('secure_token_remove', { key }), 'secure_token_remove');
   const removed = second.unwrap(
     await second.invoke('secure_token_get', { key }),
@@ -161,8 +171,16 @@ try {
   if (removed !== null) throw new Error('QA credential was not removed after restart test');
   await stop();
 } catch (error) {
-  result.status = 'NOT_RUN';
+  result.phase = phase;
+  result.status = ['preflight', 'start_first', 'start_second', 'restart'].includes(phase)
+    ? 'NOT_RUN'
+    : 'FAIL';
   result.reason = error instanceof Error ? error.message : String(error);
+  if (key && invokeForCleanup) {
+    try {
+      await invokeForCleanup('secure_token_remove', { key });
+    } catch {}
+  }
   try {
     if (child?.pid) process.kill(child.pid);
   } catch {}
