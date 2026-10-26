@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { validateManualEvidence } from './manual-evidence.mjs';
 
@@ -49,12 +49,27 @@ if (manifest && platform) {
   }
 }
 
+function walk(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full));
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
+}
+
 const sumsPath = join(artifactRoot, 'sha256sums.txt');
 const rootReal = realpathSync(artifactRoot);
+let listed = new Set();
 if (!existsSync(sumsPath)) {
   errors.push('sha256sums.txt missing');
 } else {
   const lines = readFileSync(sumsPath, 'utf8').split(/\r?\n/).filter(Boolean);
+  for (const line of lines) {
+    listed.add(line.replace(/^[0-9a-f]{64}  /i, ''));
+  }
+  if (listed.size !== lines.length) errors.push('sha256sums.txt contains duplicate paths');
   for (const line of lines) {
     const match = /^([0-9a-f]{64})  (.+)$/i.exec(line);
     if (!match) {
@@ -84,6 +99,26 @@ if (!existsSync(sumsPath)) {
     const actual = createHash('sha256').update(readFileSync(target)).digest('hex');
     if (actual !== expected.toLowerCase()) errors.push(`evidence hash mismatch: ${rel}`);
   }
+  for (const file of walk(rootReal)) {
+    const rel = relative(rootReal, file).replaceAll('\\', '/');
+    if (rel === 'manifest.json' || rel === 'sha256sums.txt') continue;
+    if (!listed.has(rel)) errors.push(`artifact not listed in sha256sums: ${rel}`);
+  }
+}
+
+let evidenceIndex;
+try {
+  evidenceIndex = readJson('evidence-index.json');
+  for (const rel of evidenceIndex.files ?? []) {
+    if (!listed.has(rel)) errors.push(`evidence-index file not checksumed: ${rel}`);
+  }
+  for (const rel of listed) {
+    if (!evidenceIndex.files?.includes(rel)) {
+      errors.push(`checksumed file missing from evidence-index: ${rel}`);
+    }
+  }
+} catch (error) {
+  errors.push(`evidence-index unreadable: ${error.message}`);
 }
 
 const allPass =

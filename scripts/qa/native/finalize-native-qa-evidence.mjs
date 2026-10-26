@@ -1,72 +1,94 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const rootIndex = process.argv.indexOf('--artifact-root');
-if (rootIndex < 0 || !process.argv[rootIndex + 1]) {
-  console.error('usage: finalize-native-qa-evidence --artifact-root <dir>');
-  process.exit(2);
+const SELF_EXCLUDED = new Set(['manifest.json', 'sha256sums.txt']);
+
+function readJson(root, name) {
+  return JSON.parse(readFileSync(join(root, name), 'utf8').replace(/^\uFEFF/, ''));
 }
-const root = process.argv[rootIndex + 1];
-const readJson = (name) =>
-  JSON.parse(readFileSync(join(root, name), 'utf8').replace(/^\uFEFF/, ''));
-const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-function walk(dir) {
+function sha256(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+function walk(root) {
   const out = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name);
     if (entry.isDirectory()) out.push(...walk(full));
     else if (entry.isFile()) out.push(full);
   }
   return out;
 }
 
-const manifest = readJson('manifest.json');
-const manual = readJson('manual-platform.json');
-const platform = readJson('platform-results.json');
-const files = walk(root)
-  .map((file) => ({ path: relative(root, file).replaceAll('\\', '/'), file }))
-  .filter(({ path: rel }) => rel !== 'manifest.json' && rel !== 'sha256sums.txt')
-  .sort((a, b) => a.path.localeCompare(b.path));
+function atomicWrite(path, content) {
+  const temp = `${path}.tmp-${process.pid}`;
+  writeFileSync(temp, content);
+  renameSync(temp, path);
+}
 
-platform.generatedAt = new Date().toISOString();
-writeFileSync(join(root, 'platform-results.json'), JSON.stringify(platform, null, 2));
+/**
+ * Finalize an artifact root idempotently.
+ *
+ * 1. business results (manual/platform) are already written;
+ * 2. evidence-index is written with a complete inventory (including itself);
+ * 3. sha256sums covers every file except manifest.json and itself;
+ * 4. manifest.files is updated last.
+ *
+ * The manifest and checksum file are explicit self-reference exclusions.
+ */
+export function finalizeEvidence(root) {
+  const manifest = readJson(root, 'manifest.json');
+  const manual = readJson(root, 'manual-platform.json');
+  const platform = readJson(root, 'platform-results.json');
+  const generatedAt = manifest.finishedAt ?? new Date().toISOString();
 
-const evidence = {
-  schemaVersion: 1,
-  runId: manifest.runId,
-  headSha: manifest.gitCommit,
-  appExeSha256: manifest.appExeSha256,
-  installerSha256: manifest.installerSha256 ?? null,
-  generatedAt: new Date().toISOString(),
-  scenarios: manual.scenarios.map((scenario) => ({
-    id: scenario.id,
-    status: scenario.status,
-    evidence: scenario.evidence ?? [],
-  })),
-  files: files.map(({ path: rel }) => rel),
-};
-writeFileSync(join(root, 'evidence-index.json'), JSON.stringify(evidence, null, 2));
+  platform.generatedAt = generatedAt;
+  atomicWrite(join(root, 'platform-results.json'), JSON.stringify(platform, null, 2));
 
-const sums = files.map(({ path: rel, file }) => `${sha256(file)}  ${rel}`);
-writeFileSync(join(root, 'sha256sums.txt'), `${sums.join('\n')}\n`);
+  const beforeIndex = walk(root)
+    .map((file) => relative(root, file).replaceAll('\\', '/'))
+    .filter((rel) => !SELF_EXCLUDED.has(rel))
+    .sort();
+  const inventory = Array.from(new Set([...beforeIndex, 'evidence-index.json'])).sort();
+  const evidence = {
+    schemaVersion: 1,
+    runId: manifest.runId,
+    headSha: manifest.gitCommit,
+    appExeSha256: manifest.appExeSha256,
+    installerSha256: manifest.installerSha256 ?? null,
+    generatedAt,
+    scenarios: manual.scenarios.map((scenario) => ({
+      id: scenario.id,
+      status: scenario.status,
+      evidence: scenario.evidence ?? [],
+    })),
+    files: inventory,
+  };
+  atomicWrite(join(root, 'evidence-index.json'), JSON.stringify(evidence, null, 2));
 
-manifest.files = Array.from(
-  new Set([...(manifest.files ?? []), ...files.map(({ path: rel }) => rel), 'sha256sums.txt']),
-);
-writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  const hashFiles = walk(root)
+    .map((file) => relative(root, file).replaceAll('\\', '/'))
+    .filter((rel) => !SELF_EXCLUDED.has(rel))
+    .sort();
+  const sums = hashFiles.map((rel) => `${sha256(join(root, rel))}  ${rel}`);
+  atomicWrite(join(root, 'sha256sums.txt'), `${sums.join('\n')}\n`);
 
-console.log(
-  JSON.stringify(
-    {
-      ok: true,
-      runId: manifest.runId,
-      files: files.length,
-      scenarios: manual.scenarios.length,
-    },
-    null,
-    2,
-  ),
-);
+  manifest.files = Array.from(new Set([...(manifest.files ?? []), ...hashFiles, 'sha256sums.txt']));
+  atomicWrite(join(root, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+  return { ok: true, runId: manifest.runId, inventory, files: hashFiles.length };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  const rootIndex = process.argv.indexOf('--artifact-root');
+  if (rootIndex < 0 || !process.argv[rootIndex + 1]) {
+    console.error('usage: finalize-native-qa-evidence --artifact-root <dir>');
+    process.exit(2);
+  }
+  const result = finalizeEvidence(process.argv[rootIndex + 1]);
+  console.log(JSON.stringify(result, null, 2));
+}

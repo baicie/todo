@@ -333,18 +333,8 @@ try {
     })
   }
   Write-Json (Join-Path $ArtifactRoot "platform-results.json") $platformResults
-  $evidenceIndex = [ordered]@{
-    schemaVersion = 1
-    runId = $RunId
-    headSha = $manifest.gitCommit
-    appExeSha256 = $manifest.appExeSha256
-    installerSha256 = $installerHash
-    generatedAt = (Get-Date).ToUniversalTime().ToString("o")
-    scenarios = @($manual.scenarios | ForEach-Object {
-      [ordered]@{ id = $_.id; status = $_.status; evidence = $_.evidence }
-    })
-  }
-  Write-Json (Join-Path $ArtifactRoot "evidence-index.json") $evidenceIndex
+  & node (Join-Path $PSScriptRoot "finalize-native-qa-evidence.mjs") --artifact-root $ArtifactRoot
+  if ($LASTEXITCODE -ne 0) { throw "native QA evidence finalization failed" }
 
   Write-Log (Join-Path $LogDir "launcher.log") "QA harness completed: $ArtifactRoot status=$testStatus"
 
