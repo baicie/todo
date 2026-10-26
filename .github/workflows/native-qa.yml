@@ -65,6 +65,8 @@ jobs:
           workspaces: apps/native/src-tauri
       - name: Verify manual platform scenario inventory
         run: node scripts/qa/native/check-manual-scenarios.mjs
+      - name: Test manual evidence validator
+        run: node --test scripts/qa/native/manual-evidence.test.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @todo/app build
       - name: Rust QA tests
