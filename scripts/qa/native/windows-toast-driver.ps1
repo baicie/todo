@@ -18,6 +18,7 @@ if ([string]::IsNullOrWhiteSpace($ExpectedText)) {
 }
 $started = (Get-Date).ToUniversalTime()
 $timeline = New-Object System.Collections.Generic.List[object]
+$script:scanSamples = New-Object System.Collections.Generic.List[object]
 function Add-Timeline([string]$name, $detail = $null) {
   $timeline.Add([ordered]@{
     at = (Get-Date).ToUniversalTime().ToString("o")
@@ -81,7 +82,7 @@ function Get-CommonAncestor($left, $right) {
   foreach ($node in $leftAncestors) {
     foreach ($candidate in $rightAncestors) {
       try {
-        if ($node.Equals($candidate)) { return $node }
+        if ([System.Windows.Automation.Automation]::Compare($node, $candidate)) { return $node }
       } catch {}
     }
   }
@@ -135,6 +136,7 @@ function Find-ToastButton([string]$expected, [string]$marker, [int]$seconds) {
     [System.Windows.Automation.AutomationElement]::NameProperty,
     $expected
   )
+  $lastSample = Get-Date
   while ((Get-Date) -lt $deadline) {
     $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
       [System.Windows.Automation.TreeScope]::Children,
@@ -169,6 +171,17 @@ function Find-ToastButton([string]$expected, [string]$marker, [int]$seconds) {
       return [ordered]@{ ambiguous = $true; count = $candidates.Count }
     }
     if ($candidates.Count -eq 1) { return $candidates[0] }
+    if (((Get-Date) - $lastSample).TotalSeconds -ge 4 -and $script:scanSamples.Count -lt 10) {
+      $lastSample = Get-Date
+      $sample = Get-ToastDiagnostics $expected $marker
+      $script:scanSamples.Add([ordered]@{
+        at = (Get-Date).ToUniversalTime().ToString("o")
+        hostWindows = $sample.hostWindows
+        actionButtons = $sample.actionButtons
+        markerElements = $sample.markerElements
+        topLevelWindows = $sample.topLevelWindows
+      })
+    }
     Start-Sleep -Milliseconds 200
   }
   return $null
@@ -262,6 +275,7 @@ $result = [ordered]@{
   screenshot = $null
   error = $null
   diagnostics = $null
+  samples = $script:scanSamples
   timeline = $timeline
 }
 
@@ -347,9 +361,16 @@ try {
     }
   }
 } catch {
-  $result.status = "FAIL"
-  $result.error = $_.Exception.Message
-  Add-Timeline "driver_error" $result.error
+  $message = $_.Exception.Message
+  if ($message -match "no longer available|stale|ElementNotAvailable|parent window has closed") {
+    $result.status = "NOT_RUN"
+    $result.error = "UIA_STALE_TARGET: $message"
+    Add-Timeline "uia_stale_target" $message
+  } else {
+    $result.status = "FAIL"
+    $result.error = $message
+    Add-Timeline "driver_error" $message
+  }
 } finally {
   $result.finishedAt = (Get-Date).ToUniversalTime().ToString("o")
   Write-Result $result | Out-Host

@@ -70,6 +70,9 @@ jobs:
       - name: Test PowerShell 5.1 marker compatibility
         shell: powershell
         run: powershell.exe -NoProfile -File scripts/qa/native/windows-toast-marker.tests.ps1
+      - name: Test positive UIA fixture
+        shell: powershell
+        run: powershell.exe -NoProfile -File scripts/qa/native/uia-fixture.tests.ps1
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @todo/app build
       - name: Rust QA tests
