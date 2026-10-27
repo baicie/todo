@@ -4,8 +4,8 @@ Committed excerpts from the local QA runs for the RC2-D.8 code gate `4ee640b`. F
 
 | Run                     | Kind                                 | Source commit | Status     | Tests                       |
 | ----------------------- | ------------------------------------ | ------------- | ---------- | --------------------------- |
-| `rc2d-20261027T033747Z` | QA release exe smoke                 | `4ee640b`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
-| `rc2d-20261027T034442Z` | QA release exe fault run             | `4ee640b`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
+| `rc2d-20261027T041821Z` | QA release exe smoke                 | `4ee640b`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
+| `rc2d-20261027T041950Z` | QA release exe fault run             | `4ee640b`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
 | `rc2d-20261025T075858Z` | 1k/10k/100k import benchmark (prior) | `749eb6c`     | BENCH_ONLY | 1 benchmark sample          |
 
 The benchmark is retained from an earlier code gate; RC2-D.5 changed QA/evidence tooling, not import production behavior.
@@ -36,10 +36,10 @@ without observed evidence. `sha256sums.txt` covers the committed archive
 
 ## Real Toast attempt
 
-`rc2d-20261027T033747Z/platform-scenario.json` records an actual UIA attempt:
+`rc2d-20261027T041821Z/platform-scenario.json` records an actual UIA attempt:
 a QA task/reminder was created and scheduled with the runId marker,
 `windows-toast-driver.ps1` was started before the Toast fired, reached READY at
-`03:43:40.717Z` (7 ms before scheduling at `03:43:40.722Z`), then searched for a
+`04:18:49.977Z` (7 ms before scheduling at `04:18:49.983Z`), then searched for a
 same-card `打开任务` button with the run marker for 40 seconds. It found zero
 action buttons (`actionButtons: 0`) and zero marker elements and recorded
 `NOT_RUN`.
@@ -55,7 +55,7 @@ PASS; `platform-results.json` remains `windowsPlatformReady: false`.
 
 ## Credential restart
 
-`rc2d-20261027T033747Z/credential-restart.json` records a real QA Credential
+`rc2d-20261027T041821Z/credential-restart.json` records a real QA Credential
 Manager write, process termination, fresh process start, read-back and removal:
 `status: PASS`, `restartedRead: true`, QA namespace only. This is supplemental
 evidence; it is not one of the 10 public Toast scenarios.
