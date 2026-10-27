@@ -59,9 +59,18 @@ try {
         evidencePath,
         credentialBackend: 'os',
         rules: [
-          { point: 'CREDENTIAL_SET', action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected set failure' } },
-          { point: 'CREDENTIAL_GET', action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected get failure' } },
-          { point: 'CREDENTIAL_DELETE', action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected delete failure' } },
+          {
+            point: 'CREDENTIAL_SET',
+            action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected set failure' },
+          },
+          {
+            point: 'CREDENTIAL_GET',
+            action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected get failure' },
+          },
+          {
+            point: 'CREDENTIAL_DELETE',
+            action: { type: 'error', code: 'QA_CRED_FAIL', message: 'injected delete failure' },
+          },
         ],
       },
       null,
@@ -144,7 +153,8 @@ try {
     fs.existsSync(evidencePath)
       ? 'PASS'
       : 'FAIL';
-  result.reason = result.status === 'PASS' ? null : 'injected credential errors or account ACL did not match';
+  result.reason =
+    result.status === 'PASS' ? null : 'injected credential errors or account ACL did not match';
   event('checks_completed');
 } catch (error) {
   result.status = 'NOT_RUN';
