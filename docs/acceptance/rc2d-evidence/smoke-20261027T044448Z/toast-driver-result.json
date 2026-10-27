@@ -2,12 +2,12 @@
     "schemaVersion":  2,
     "mode":  "Click",
     "status":  "NOT_RUN",
-    "runMarker":  "rc2d-20261027T041821Z",
-    "startedAt":  "2026-10-27T04:18:49.8545237Z",
-    "driverReadyAt":  "2026-10-27T04:18:49.9026840Z",
+    "runMarker":  "rc2d-20261027T044448Z",
+    "startedAt":  "2026-10-27T04:45:16.3385615Z",
+    "driverReadyAt":  "2026-10-27T04:45:16.3902328Z",
     "notificationObservedAt":  null,
     "invokeAt":  null,
-    "finishedAt":  "2026-10-27T04:19:30.1829996Z",
+    "finishedAt":  "2026-10-27T04:45:56.7230496Z",
     "expectedText":  "打开任务",
     "desktopInteractive":  true,
     "wpnService":  "Running",
@@ -16,7 +16,7 @@
 
                  ],
     "screenshot":  null,
-    "error":  "no unique Toast card with action \u0027打开任务\u0027 and marker \u0027rc2d-20261027T041821Z\u0027 within 40 s",
+    "error":  "no unique Toast card with action \u0027打开任务\u0027 and marker \u0027rc2d-20261027T044448Z\u0027 within 40 s",
     "diagnostics":  {
                         "hostWindows":  1,
                         "actionButtons":  0,
@@ -25,42 +25,42 @@
                     },
     "samples":  [
                     {
-                        "at":  "2026-10-27T04:19:11.0486679Z",
+                        "at":  "2026-10-27T04:45:37.5484095Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:19:12.5779215Z",
+                        "at":  "2026-10-27T04:45:38.6889012Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:19:16.6650872Z",
+                        "at":  "2026-10-27T04:45:42.9292235Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:19:20.9904755Z",
+                        "at":  "2026-10-27T04:45:47.0872077Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:19:25.2591638Z",
+                        "at":  "2026-10-27T04:45:51.2762828Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:19:29.3350597Z",
+                        "at":  "2026-10-27T04:45:55.5139353Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
@@ -69,17 +69,17 @@
                 ],
     "timeline":  [
                      {
-                         "at":  "2026-10-27T04:18:49.8714976Z",
+                         "at":  "2026-10-27T04:45:16.3546988Z",
                          "name":  "uia_loaded",
                          "detail":  null
                      },
                      {
-                         "at":  "2026-10-27T04:18:49.9026840Z",
+                         "at":  "2026-10-27T04:45:16.3902328Z",
                          "name":  "driver_ready",
                          "detail":  null
                      },
                      {
-                         "at":  "2026-10-27T04:19:30.1829996Z",
+                         "at":  "2026-10-27T04:45:56.7230496Z",
                          "name":  "toast_not_found_or_ambiguous",
                          "detail":  {
                                         "hostWindows":  1,

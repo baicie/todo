@@ -1,7 +1,7 @@
 ﻿{
     "schemaVersion":  2,
-    "runId":  "rc2d-20261027T041821Z",
-    "gitCommit":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+    "runId":  "rc2d-20261027T044448Z",
+    "gitCommit":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
     "appExe":  "<user>\\AppData\\Local\\Shishi QA RC2D\\todo-native.exe",
     "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
     "installer":  "<repo>\\apps\\native\\src-tauri\\target\\release\\bundle\\nsis\\Shishi QA RC2D_1.0.0-rc2d_x64-setup.exe",
@@ -18,12 +18,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "cold-start-activation",
@@ -34,12 +34,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "wrong-account-rejection",
@@ -50,12 +50,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "switch-race-rejection",
@@ -66,12 +66,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "deleted-task-rejection",
@@ -82,12 +82,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "pre-listener-multi-pending",
@@ -98,12 +98,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "pre-listener-multi-rejection",
@@ -114,12 +114,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "target-db-corrupt",
@@ -130,12 +130,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "kill-restart-notification",
@@ -146,12 +146,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       },
                       {
                           "id":  "duplicate-toast-click",
@@ -162,12 +162,12 @@
 
                                        ],
                           "reason":  null,
-                          "runId":  "rc2d-20261027T041821Z",
-                          "headSha":  "6d7ad8b9895f3971d043a3a68cf2612788ed27a2",
+                          "runId":  "rc2d-20261027T044448Z",
+                          "headSha":  "58bc7fd80e455da41ab1fdf8378ee28b03cae6ec",
                           "appExeSha256":  "bb6af7274d4951bb3cc0b2efadc5188ce15e8a6b8d270a92c58c8c1ca00b6a65",
                           "installerSha256":  "637eba2f5c93f0b96e6ce82e417901234c89c3d8a10e8487e3d4099c7bcabe63",
-                          "startedAt":  "2026-10-27T04:18:21.6677074Z",
-                          "finishedAt":  "2026-10-27T04:18:38.2980931Z"
+                          "startedAt":  "2026-10-27T04:44:48.1186404Z",
+                          "finishedAt":  "2026-10-27T04:45:04.3395249Z"
                       }
                   ]
 }
