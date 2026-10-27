@@ -19,7 +19,7 @@ Observed in this session:
 - `MddBootstrapInitialize2` returns `0`;
 - `AppNotificationManager.Default` is constructed successfully;
 - `manager.Register()` throws `COMException HRESULT 0x80040154
-  (REGDB_E_CLASSNOTREG)`.
+(REGDB_E_CLASSNOTREG)`.
 
 The failing call is now isolated to `Register()`, not bootstrap or projection
 construction. The POC remains BLOCKED for OS activation.
