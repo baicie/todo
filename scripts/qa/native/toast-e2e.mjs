@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { verifyQaExecutable, verifyRunningProcess } from './qa-executable.mjs';
+import { classifyDriverResult } from './toast-result.mjs';
 
 function arg(name, required = true) {
   const index = process.argv.indexOf(`--${name}`);
@@ -46,6 +47,7 @@ let result = {
   taskId: null,
   taskTitle: null,
   driver: null,
+  driverStatus: null,
   driverReadyAt: null,
   notificationScheduledAt: null,
   notificationObservedAt: null,
@@ -219,6 +221,8 @@ try {
       throw new Error(`Toast driver produced no result (exit ${driverExitCode})`);
     }
     result.driver = readJson(driverResultPath);
+    const driverOutcome = classifyDriverResult(result.driver);
+    result.driverStatus = driverOutcome.status;
     result.notificationObservedAt = result.driver.notificationObservedAt ?? null;
     result.invokeAt = result.driver.invokeAt ?? null;
 
@@ -240,11 +244,15 @@ try {
     if (fs.existsSync(platformDiagnosticPath)) {
       result.platformDiagnostic = readJson(platformDiagnosticPath);
     }
-    if (result.driver.status !== 'PARTIAL') {
+    if (driverOutcome.kind === 'fail') {
+      result.status = 'FAIL';
+      result.reason = driverOutcome.reason;
+      result.error = driverOutcome.reason;
+    } else if (driverOutcome.kind === 'not_run') {
       result.status = 'NOT_RUN';
       const added = result.platformDiagnostic?.lastNotificationAddedTime;
       result.reason =
-        (result.driver.error ?? `driver status ${result.driver.status}`) +
+        driverOutcome.reason +
         (added
           ? `; Windows platform recorded notification at ${added}`
           : '; Windows platform timestamp unavailable');
@@ -315,6 +323,7 @@ const scenarioRecord = {
   notificationObservedAt: result.notificationObservedAt,
   invokeAt: result.invokeAt,
   taskOpenedAt: result.taskOpenedAt,
+  driverStatus: result.driverStatus,
   driver: result.driver,
   evidence: result.evidence,
   startedAt: startedAt.toISOString(),
