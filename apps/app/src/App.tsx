@@ -493,16 +493,24 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     void refreshReminders();
     void startNotificationActivationBridge(
       {
-        openTask: async (taskId) => {
-          if (notificationAbort.signal.aborted) return false;
+        openTask: async (taskId, signal) => {
+          if (signal.aborted || notificationAbort.signal.aborted) return false;
           try {
             const task = await props.platform.repository.getTask(taskId);
-            if (!task || notificationAbort.signal.aborted) return false;
-            // Resolve the detail before ACKing opened; setSelectedId alone only
-            // starts an asynchronous load and can race a reload/account switch.
+            if (!task || signal.aborted || notificationAbort.signal.aborted) return false;
+            // Commit only after the detail is actually rendered. setSelectedId
+            // alone starts an async load and may race a reload/account switch.
             setSelectedTask(task);
             setSelectedId(taskId);
-            return selectedTask()?.id === taskId;
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              if (signal.aborted || notificationAbort.signal.aborted) return false;
+              const title = document
+                .querySelector('aside.detail .detail__title')
+                ?.textContent?.trim();
+              if (selectedTask()?.id === taskId && title === task.title) return true;
+            }
+            return false;
           } catch {
             return false;
           }

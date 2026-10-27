@@ -4,6 +4,7 @@ export interface NotificationTargetV1 {
   accountId: string;
   taskId: string;
   sourceVersion: 1;
+  notificationId?: string;
 }
 
 export interface NotificationActivation {
@@ -50,7 +51,7 @@ function abortError(): Error {
  */
 export async function startNotificationActivationBridge(
   options: {
-    openTask: (taskId: string) => Promise<boolean> | boolean;
+    openTask: (taskId: string, signal: AbortSignal) => Promise<boolean> | boolean;
     notify: (message: string, tone: 'danger' | 'success') => void;
   },
   signal?: AbortSignal,
@@ -96,6 +97,7 @@ export async function startNotificationActivationBridge(
 
     const sessionId = newSessionId();
     const seen = new Set<string>();
+    let activeOpenController: AbortController | null = null;
     const acknowledge = async (activationId: string, outcome: string) => {
       try {
         await invoke('native_ack_notification_activation', {
@@ -118,15 +120,23 @@ export async function startNotificationActivationBridge(
         await acknowledge(activation.activationId, 'rejected');
         return;
       }
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const controller = new AbortController();
+      activeOpenController?.abort();
+      activeOpenController = controller;
+      const timeout = setTimeout(() => controller.abort(), OPEN_TASK_TIMEOUT_MS);
       try {
         const opened = await Promise.race([
-          Promise.resolve(options.openTask(activation.target.taskId)),
+          Promise.resolve(options.openTask(activation.target.taskId, controller.signal)),
           new Promise<boolean>((resolve) => {
-            timeout = setTimeout(() => resolve(false), OPEN_TASK_TIMEOUT_MS);
+            controller.signal.addEventListener('abort', () => resolve(false), { once: true });
           }),
         ]);
-        if (!opened) {
+        if (disposed || signal?.aborted) {
+          // The listener/session is gone. Do not commit a late result; Native
+          // will requeue the activation for the next session.
+          return;
+        }
+        if (!opened || controller.signal.aborted) {
           await acknowledge(activation.activationId, 'rejected');
           options.notify('暂时无法打开提醒对应的任务', 'danger');
           return;
@@ -136,7 +146,8 @@ export async function startNotificationActivationBridge(
         await acknowledge(activation.activationId, 'rejected');
         options.notify('暂时无法打开提醒对应的任务', 'danger');
       } finally {
-        if (timeout) clearTimeout(timeout);
+        clearTimeout(timeout);
+        if (activeOpenController === controller) activeOpenController = null;
       }
     };
 

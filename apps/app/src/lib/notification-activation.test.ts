@@ -101,6 +101,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   localStorage.clear();
   vi.restoreAllMocks();
@@ -113,7 +114,10 @@ describe('notification activation bridge activation drain', () => {
 
     const stop = await startNotificationActivationBridge(options);
 
-    expect(options.openTask.mock.calls).toEqual([['task-a1'], ['task-a2']]);
+    expect(options.openTask.mock.calls).toEqual([
+      ['task-a1', expect.any(AbortSignal)],
+      ['task-a2', expect.any(AbortSignal)],
+    ]);
     expect(commandCalls('native_take_notification_activation')).toBe(3);
     stop();
   });
@@ -194,6 +198,43 @@ describe('notification activation bridge activation drain', () => {
     stop();
   });
 
+  it('aborts a timed-out openTask and ignores its late result', async () => {
+    vi.useFakeTimers();
+    activationQueue.push(activation('a1'), null);
+    let resolveTask!: (value: boolean) => void;
+    let aborted = false;
+    const acks: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') {
+        acks.push(args ?? {});
+        return true;
+      }
+      if (command === 'native_take_notification_activation') return activationQueue.shift() ?? null;
+      if (command === 'native_take_notification_rejection') return null;
+      return null;
+    });
+    const options = defaultOptions();
+    options.openTask = vi.fn((_taskId: string, signal: AbortSignal) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+      });
+      return new Promise<boolean>((resolve) => {
+        resolveTask = resolve;
+      });
+    });
+    const start = startNotificationActivationBridge(options);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(6000);
+    const stop = await start;
+    expect(aborted).toBe(true);
+    expect(acks).toEqual([expect.objectContaining({ activationId: 'a1', outcome: 'rejected' })]);
+    resolveTask(true);
+    await Promise.resolve();
+    expect(acks.filter((ack) => ack.outcome === 'opened')).toHaveLength(0);
+    stop();
+  });
+
   it('does not ACK opened when navigation throws', async () => {
     activationQueue.push(activation('a1'), null);
     const acks: Array<Record<string, unknown>> = [];
@@ -254,7 +295,7 @@ describe('notification activation bridge activation drain', () => {
     });
     const options = defaultOptions();
     const stop = await startNotificationActivationBridge(options);
-    expect(options.openTask).toHaveBeenCalledWith('task-a1');
+    expect(options.openTask).toHaveBeenCalledWith('task-a1', expect.any(AbortSignal));
     expect(acks).toEqual([
       expect.objectContaining({
         activationId: 'a1',
@@ -406,7 +447,7 @@ describe('notification rejection queue drain', () => {
 
     const stop = await startNotificationActivationBridge(options);
 
-    expect(options.openTask.mock.calls).toEqual([['task-a1']]);
+    expect(options.openTask.mock.calls).toEqual([['task-a1', expect.any(AbortSignal)]]);
     expect(options.notify.mock.calls).toEqual([['r1', 'danger']]);
     stop();
   });
@@ -418,7 +459,7 @@ describe('notification rejection queue drain', () => {
 
     const stop = await startNotificationActivationBridge(options);
 
-    expect(options.openTask).toHaveBeenCalledWith('task-a1');
+    expect(options.openTask).toHaveBeenCalledWith('task-a1', expect.any(AbortSignal));
     expect(options.notify).not.toHaveBeenCalled();
     stop();
   });
@@ -574,7 +615,7 @@ describe('notification activation bridge abort lifecycle', () => {
     const options = defaultOptions();
 
     const stop = await startNotificationActivationBridge(options);
-    expect(options.openTask).toHaveBeenCalledWith('task-a1');
+    expect(options.openTask).toHaveBeenCalledWith('task-a1', expect.any(AbortSignal));
     stop();
     expect(unlistenOpen).toHaveBeenCalledTimes(1);
     expect(unlistenRejected).toHaveBeenCalledTimes(1);
