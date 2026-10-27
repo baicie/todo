@@ -229,10 +229,10 @@ impl NotificationActivationState {
                     if delivery.session_id.as_deref() != Some(session_id)
                         || delivery.in_flight.is_some()
                     {
-                        if let Ok(mut pending) = self.pending.lock() {
-                            if pending.len() < 8 {
-                                pending.push_front(activation);
-                            }
+                        if let Ok(mut pending) = self.pending.lock()
+                            && pending.len() < 8
+                        {
+                            pending.push_front(activation);
                         }
                         return None;
                     }
