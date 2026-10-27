@@ -85,6 +85,8 @@ beforeEach(() => {
     },
   );
   invokeMock.mockImplementation(async (command: string) => {
+    if (command === 'native_notification_listener_ready') return true;
+    if (command === 'native_ack_notification_activation') return true;
     if (command === 'native_take_notification_activation') {
       if (failActivations) throw new Error('native activation unavailable');
       return activationQueue.shift() ?? null;
@@ -171,10 +173,87 @@ describe('notification activation bridge activation drain', () => {
     stop();
   });
 
+  it('registers a listener session before the first drain', async () => {
+    let readyCall = -1;
+    let takeCall = -1;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'native_notification_listener_ready') {
+        readyCall = invokeMock.mock.calls.length;
+        return true;
+      }
+      if (command === 'native_take_notification_activation') {
+        takeCall = invokeMock.mock.calls.length;
+        return null;
+      }
+      if (command === 'native_take_notification_rejection') return null;
+      return true;
+    });
+    const stop = await startNotificationActivationBridge(defaultOptions());
+    expect(readyCall).toBeGreaterThan(0);
+    expect(takeCall).toBeGreaterThan(readyCall);
+    stop();
+  });
+
+  it('ACKs opened only after the task opener succeeds', async () => {
+    activationQueue.push(activation('a1'), null);
+    const acks: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') {
+        acks.push(args ?? {});
+        return true;
+      }
+      if (command === 'native_take_notification_activation') {
+        return activationQueue.shift() ?? null;
+      }
+      if (command === 'native_take_notification_rejection') return null;
+      return null;
+    });
+    const options = defaultOptions();
+    const stop = await startNotificationActivationBridge(options);
+    expect(options.openTask).toHaveBeenCalledWith('task-a1');
+    expect(acks).toEqual([
+      expect.objectContaining({
+        activationId: 'a1',
+        outcome: 'opened',
+        sessionId: expect.any(String),
+      }),
+    ]);
+    stop();
+  });
+
+  it('ACKs rejected without opening another account target', async () => {
+    activationQueue.push(activation('a1', 'other'), null);
+    const acks: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') {
+        acks.push(args ?? {});
+        return true;
+      }
+      if (command === 'native_take_notification_activation') return activationQueue.shift() ?? null;
+      if (command === 'native_take_notification_rejection') return null;
+      return null;
+    });
+    const options = defaultOptions();
+    const stop = await startNotificationActivationBridge(options);
+    expect(options.openTask).not.toHaveBeenCalled();
+    expect(acks).toEqual([
+      expect.objectContaining({
+        activationId: 'a1',
+        outcome: 'rejected',
+        sessionId: expect.any(String),
+      }),
+    ]);
+    stop();
+  });
+
   it('serializes a wake event behind the in-flight drain', async () => {
     const first = deferred<NotificationActivation | null>();
     let activationCalls = 0;
     invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') return true;
       if (command === 'native_take_notification_rejection') return null;
       activationCalls += 1;
       return activationCalls === 1 ? first.promise : null;
@@ -319,6 +398,8 @@ describe('notification rejection queue drain', () => {
   it('does not show a rejection when cleanup happens during its invoke', async () => {
     const take = deferred<RejectedNotificationActivation | null>();
     invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') return true;
       if (command === 'native_take_notification_activation') return null;
       return take.promise;
     });
@@ -408,6 +489,8 @@ describe('notification activation bridge abort lifecycle', () => {
   it('does not deliver a pending activation when cleanup happens during the initial drain', async () => {
     const take = deferred<NotificationActivation | null>();
     invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') return true;
       if (command === 'native_take_notification_rejection') return null;
       return take.promise;
     });

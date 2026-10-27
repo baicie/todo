@@ -91,8 +91,27 @@ pub struct Activation {
 }
 
 #[derive(Default)]
+struct DeliveryMeta {
+    session_id: Option<String>,
+    in_flight: Option<InFlightActivation>,
+    completed: VecDeque<CompletedActivation>,
+    requeue_used: bool,
+}
+
+struct InFlightActivation {
+    activation: Activation,
+    session_id: String,
+}
+
+struct CompletedActivation {
+    activation_id: String,
+    target_key: String,
+}
+
+#[derive(Default)]
 pub struct NotificationActivationState {
     pending: Mutex<VecDeque<Activation>>,
+    delivery: Mutex<DeliveryMeta>,
     rejections: Mutex<VecDeque<RejectedActivation>>,
     sequence: AtomicU64,
 }
@@ -139,6 +158,144 @@ impl NotificationActivationState {
             .ok()
             .and_then(|mut rejections| rejections.pop_front())
     }
+
+    /// Register the WebView listener session. A reload with a different session
+    /// may have left an activation in flight; requeue it once at the front so a
+    /// lost ACK does not lose the click. A second reload drops it (bounded
+    /// recovery), which is surfaced as no delivery rather than a synthetic open.
+    pub fn listener_ready(&self, session_id: &str) -> bool {
+        if !valid_component(session_id) {
+            return false;
+        }
+        let Ok(mut delivery) = self.delivery.lock() else {
+            return false;
+        };
+        let is_new_session = delivery.session_id.as_deref() != Some(session_id);
+        if is_new_session && let Some(in_flight) = delivery.in_flight.take() {
+            if delivery.requeue_used {
+                self.put_rejection(RejectedActivation::from_code(
+                    RejectionCode::ActivationExpired,
+                ));
+            } else {
+                delivery.requeue_used = true;
+                if let Ok(mut pending) = self.pending.lock() {
+                    if pending.len() >= 8 {
+                        pending.pop_back();
+                    }
+                    pending.push_front(in_flight.activation);
+                }
+            }
+        }
+        delivery.session_id = Some(session_id.to_owned());
+        true
+    }
+
+    /// Take one valid activation for a specific listener session. The activation
+    /// remains in flight until the WebView acknowledges the business outcome.
+    fn take_for_listener<F, R>(
+        &self,
+        session_id: &str,
+        mut validate: F,
+        mut reject: R,
+    ) -> Option<Activation>
+    where
+        F: FnMut(&Activation) -> Result<String, RejectionCode>,
+        R: FnMut(RejectionCode),
+    {
+        {
+            let Ok(delivery) = self.delivery.lock() else {
+                return None;
+            };
+            if delivery.session_id.as_deref() != Some(session_id) || delivery.in_flight.is_some() {
+                return None;
+            }
+        }
+        for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
+            let activation = self.take()?;
+            if self.completed_target(&activation.target) {
+                // A duplicate click of a target that already opened must not open
+                // it again.
+                continue;
+            }
+            match validate(&activation) {
+                Ok(task_title) => {
+                    let activation = Activation {
+                        task_title,
+                        ..activation
+                    };
+                    let Ok(mut delivery) = self.delivery.lock() else {
+                        return None;
+                    };
+                    if delivery.session_id.as_deref() != Some(session_id)
+                        || delivery.in_flight.is_some()
+                    {
+                        if let Ok(mut pending) = self.pending.lock() {
+                            if pending.len() < 8 {
+                                pending.push_front(activation);
+                            }
+                        }
+                        return None;
+                    }
+                    delivery.in_flight = Some(InFlightActivation {
+                        activation: activation.clone(),
+                        session_id: session_id.to_owned(),
+                    });
+                    return Some(activation);
+                }
+                Err(code) => reject(code),
+            }
+        }
+        None
+    }
+
+    fn completed_target(&self, target: &NotificationTargetV1) -> bool {
+        let key = target_key(target);
+        self.delivery
+            .lock()
+            .map(|delivery| {
+                delivery
+                    .completed
+                    .iter()
+                    .any(|completed| completed.target_key == key)
+            })
+            .unwrap_or(true)
+    }
+
+    /// Acknowledge the delivery outcome. Duplicate ACKs are idempotent; unknown
+    /// ids or unknown outcomes fail closed.
+    pub fn acknowledge(&self, session_id: &str, activation_id: &str, outcome: &str) -> bool {
+        if !matches!(outcome, "opened" | "rejected" | "expired" | "duplicate") {
+            return false;
+        }
+        let Ok(mut delivery) = self.delivery.lock() else {
+            return false;
+        };
+        if let Some(in_flight) = delivery.in_flight.take() {
+            if in_flight.activation.activation_id != activation_id
+                || in_flight.session_id != session_id
+            {
+                delivery.in_flight = Some(in_flight);
+                return false;
+            }
+            delivery.completed.push_back(CompletedActivation {
+                activation_id: in_flight.activation.activation_id,
+                target_key: target_key(&in_flight.activation.target),
+            });
+            delivery.requeue_used = false;
+            while delivery.completed.len() > 32 {
+                delivery.completed.pop_front();
+            }
+            return true;
+        }
+        delivery
+            .completed
+            .iter()
+            .any(|completed| completed.activation_id == activation_id)
+    }
+}
+
+fn target_key(target: &NotificationTargetV1) -> String {
+    format!("{}:{}", target.account_id, target.task_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +308,7 @@ enum RejectionCode {
     AccountSwitchInProgress,
     TaskNotFound,
     TaskReadFailed,
+    ActivationExpired,
 }
 
 impl RejectionCode {
@@ -164,6 +322,7 @@ impl RejectionCode {
             Self::AccountSwitchInProgress => "ACCOUNT_SWITCH_IN_PROGRESS",
             Self::TaskNotFound => "TASK_NOT_FOUND",
             Self::TaskReadFailed => "TASK_READ_FAILED",
+            Self::ActivationExpired => "ACTIVATION_EXPIRED",
         }
     }
 
@@ -180,6 +339,7 @@ impl RejectionCode {
             Self::AccountSwitchInProgress => "账号切换进行中，请稍后重试",
             Self::TaskNotFound => "提醒对应的任务已删除或不可见",
             Self::TaskReadFailed => "暂时无法读取提醒对应的任务",
+            Self::ActivationExpired => "提醒已过期，请重新打开任务",
         }
     }
 }
@@ -293,6 +453,7 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
 /// command call so the WebView does not have to poll once per stale click.
 const MAX_ACTIVATION_DRAIN_ATTEMPTS: usize = 8;
 
+#[cfg(test)]
 fn take_valid_activation<F, R>(
     state: &NotificationActivationState,
     mut validate: F,
@@ -318,13 +479,22 @@ where
 }
 
 #[tauri::command]
+pub fn native_notification_listener_ready(
+    activation_state: State<'_, NotificationActivationState>,
+    session_id: String,
+) -> bool {
+    activation_state.listener_ready(&session_id)
+}
+
+#[tauri::command]
 pub fn native_take_notification_activation(
     app: AppHandle,
     activation_state: State<'_, NotificationActivationState>,
     app_state: State<'_, AppState>,
+    session_id: String,
 ) -> Option<Activation> {
-    take_valid_activation(
-        &activation_state,
+    activation_state.take_for_listener(
+        &session_id,
         |activation| validate_target(&app, &app_state, &activation.target),
         |code| {
             // The account can switch after the notification was clicked but
@@ -333,6 +503,16 @@ pub fn native_take_notification_activation(
             reject(&app, code);
         },
     )
+}
+
+#[tauri::command]
+pub fn native_ack_notification_activation(
+    activation_state: State<'_, NotificationActivationState>,
+    session_id: String,
+    activation_id: String,
+    outcome: String,
+) -> bool {
+    activation_state.acknowledge(&session_id, &activation_id, &outcome)
 }
 
 #[tauri::command]
@@ -554,6 +734,7 @@ mod tests {
             ),
             (RejectionCode::TaskNotFound, "TASK_NOT_FOUND"),
             (RejectionCode::TaskReadFailed, "TASK_READ_FAILED"),
+            (RejectionCode::ActivationExpired, "ACTIVATION_EXPIRED"),
         ] {
             assert_eq!(code.as_str(), expected);
             let rejection = RejectedActivation::from_code(code);
@@ -575,6 +756,174 @@ mod tests {
         assert_eq!(state.take().expect("activation").activation_id, "valid");
         assert_eq!(
             state.take_rejection().expect("rejection").code,
+            "TASK_NOT_FOUND"
+        );
+    }
+
+    fn activation(id: &str, task: &str) -> Activation {
+        Activation {
+            activation_id: id.to_owned(),
+            target: NotificationTargetV1::new("default", task).expect("target"),
+            task_title: "task".to_owned(),
+        }
+    }
+
+    #[test]
+    fn delivery_requires_ready_session_and_ack() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        state.put(activation("a2", "task-2"));
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_none()
+        );
+        assert!(state.listener_ready("s1"));
+        let first = state
+            .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+            .expect("first");
+        assert_eq!(first.activation_id, "a1");
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_none(),
+            "in-flight activation must not be concurrently redelivered"
+        );
+        assert!(state.acknowledge("s1", "a1", "opened"));
+        let second = state
+            .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+            .expect("second");
+        assert_eq!(second.activation_id, "a2");
+        assert!(state.acknowledge("s1", "a2", "opened"));
+    }
+
+    #[test]
+    fn listener_reload_requeues_inflight_once() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        assert!(state.listener_ready("s1"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .expect("first")
+                .activation_id,
+            "a1"
+        );
+        assert!(state.listener_ready("s2"));
+        assert_eq!(
+            state
+                .take_for_listener("s2", |_| Ok("task".to_owned()), |_| {})
+                .expect("requeued")
+                .activation_id,
+            "a1"
+        );
+        assert!(state.acknowledge("s2", "a1", "opened"));
+    }
+
+    #[test]
+    fn second_listener_reload_expires_inflight_without_redelivery() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        assert!(state.listener_ready("s1"));
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_some()
+        );
+        assert!(state.listener_ready("s2"));
+        assert!(
+            state
+                .take_for_listener("s2", |_| Ok("task".to_owned()), |_| {})
+                .is_some()
+        );
+        assert!(state.listener_ready("s3"));
+        assert!(
+            state
+                .take_for_listener("s3", |_| Ok("task".to_owned()), |_| {})
+                .is_none()
+        );
+        assert_eq!(
+            state.take_rejection().expect("expired").code,
+            "ACTIVATION_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn invalid_listener_session_is_rejected() {
+        let state = NotificationActivationState::default();
+        assert!(!state.listener_ready(""));
+        assert!(!state.listener_ready("bad session/with/slash"));
+        assert!(state.listener_ready("session-1"));
+    }
+
+    #[test]
+    fn duplicate_target_is_delivered_once() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        state.put(activation("a2", "task-1"));
+        assert!(state.listener_ready("s1"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .expect("first")
+                .activation_id,
+            "a1"
+        );
+        assert!(state.acknowledge("s1", "a1", "opened"));
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_none(),
+            "completed target must be deduplicated"
+        );
+    }
+
+    #[test]
+    fn invalid_activation_is_rejected_before_valid_delivery() {
+        let state = NotificationActivationState::default();
+        state.put(activation("stale", "deleted-task"));
+        state.put(activation("valid", "task-ok"));
+        assert!(state.listener_ready("s1"));
+        let mut rejected = Vec::new();
+        let delivered = state
+            .take_for_listener(
+                "s1",
+                |item| {
+                    if item.target.task_id == "deleted-task" {
+                        Err(RejectionCode::TaskNotFound)
+                    } else {
+                        Ok("live".to_owned())
+                    }
+                },
+                |code| rejected.push(code.as_str()),
+            )
+            .expect("valid");
+        assert_eq!(delivered.activation_id, "valid");
+        assert_eq!(rejected, vec!["TASK_NOT_FOUND"]);
+    }
+
+    #[test]
+    fn ack_is_idempotent_and_session_bound() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        assert!(state.listener_ready("s1"));
+        let delivered = state
+            .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+            .expect("delivery");
+        assert!(!state.acknowledge("s2", &delivered.activation_id, "opened"));
+        assert!(state.acknowledge("s1", &delivered.activation_id, "opened"));
+        assert!(state.acknowledge("s1", &delivered.activation_id, "opened"));
+        assert!(!state.acknowledge("s1", "unknown", "opened"));
+        assert!(!state.acknowledge("s1", &delivered.activation_id, "bogus"));
+    }
+
+    #[test]
+    fn pre_listener_rejection_is_queued_without_activation() {
+        let state = NotificationActivationState::default();
+        state.put_rejection(RejectedActivation::from_code(RejectionCode::TaskNotFound));
+        assert!(state.take().is_none());
+        assert_eq!(
+            state.take_rejection().expect("pre-listener rejection").code,
             "TASK_NOT_FOUND"
         );
     }

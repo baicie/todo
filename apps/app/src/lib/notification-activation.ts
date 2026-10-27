@@ -27,6 +27,11 @@ function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+function newSessionId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function abortError(): Error {
   const error = new Error('notification activation bridge aborted');
   error.name = 'AbortError';
@@ -88,19 +93,37 @@ export async function startNotificationActivationBridge(
     ]);
     ensureActive();
 
+    const sessionId = newSessionId();
     const seen = new Set<string>();
-    const handleOpen = (activation: NotificationActivation) => {
+    const acknowledge = async (activationId: string, outcome: string) => {
+      try {
+        await invoke('native_ack_notification_activation', {
+          sessionId,
+          activationId,
+          outcome,
+        });
+      } catch {
+        // A failed ACK leaves the activation in flight in Native. The next
+        // listener session requeues it once rather than opening twice.
+      }
+    };
+    const handleOpen = async (activation: NotificationActivation) => {
       if (disposed || signal?.aborted) return;
       if (!activation?.activationId || seen.has(activation.activationId)) return;
       if (seen.size > 64) seen.clear();
       seen.add(activation.activationId);
       if (activation.target.accountId !== activeAccountId()) {
         options.notify('该提醒属于另一个账号，请先切换账号', 'danger');
+        await acknowledge(activation.activationId, 'rejected');
         return;
       }
-      // Native's take command is pop-on-read: taking the activation is the
-      // delivery commitment. There is no second ACK mutation to fail.
-      options.openTask(activation.target.taskId);
+      try {
+        options.openTask(activation.target.taskId);
+        await acknowledge(activation.activationId, 'opened');
+      } catch {
+        await acknowledge(activation.activationId, 'rejected');
+        options.notify('暂时无法打开提醒对应的任务', 'danger');
+      }
     };
 
     const drainActivations = async () => {
@@ -110,6 +133,7 @@ export async function startNotificationActivationBridge(
         try {
           pending = await invoke<NotificationActivation | null>(
             'native_take_notification_activation',
+            { sessionId },
           );
         } catch {
           // A failed Native call ends this cycle; the next event may retry.
@@ -117,7 +141,7 @@ export async function startNotificationActivationBridge(
         }
         if (disposed || signal?.aborted) return;
         if (!pending) return;
-        handleOpen(pending);
+        await handleOpen(pending);
       }
     };
 
@@ -202,7 +226,12 @@ export async function startNotificationActivationBridge(
     }
 
     // Listeners are installed before this drain, so a rejection produced by a
-    // cold-start notification is replayed from the Native queue.
+    // cold-start notification is replayed from the Native queue. The ready call
+    // creates a listener session; Native requeues an unacknowledged in-flight
+    // activation from a previous session exactly once.
+    const ready = await invoke<boolean>('native_notification_listener_ready', { sessionId });
+    if (!ready) throw new Error('Native notification listener session was rejected');
+    ensureActive();
     activationRequested = true;
     rejectionRequested = true;
     await requestDrain();
