@@ -214,6 +214,7 @@ fn permission_label(result: Result<PermissionState, tauri_plugin_notification::E
 
 #[cfg(desktop)]
 fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
+    let mut notification_sequence = 0u64;
     loop {
         let due = wait_for_due(&queue);
         if let Some(reminder) = due {
@@ -224,9 +225,16 @@ fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
                     } else {
                         reminder.body.as_str()
                     };
-                    let target = crate::notification_activation::target_from_reminder_id(
-                        &reminder.reminder_id,
+                    notification_sequence = notification_sequence.wrapping_add(1);
+                    let notification_id = format!(
+                        "{}-{notification_sequence}",
+                        chrono::Utc::now().timestamp_millis()
                     );
+                    let target =
+                        crate::notification_activation::target_from_reminder_id_with_notification(
+                            &reminder.reminder_id,
+                            &notification_id,
+                        );
                     let mut builder = app
                         .notification()
                         .builder()

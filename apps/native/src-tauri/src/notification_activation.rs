@@ -34,6 +34,11 @@ pub struct NotificationTargetV1 {
     pub account_id: String,
     pub task_id: String,
     pub source_version: u32,
+    /// Per-notification instance. Legacy/action tokens without this field retain
+    /// target-key deduplication; new reminders get a fresh instance id so two
+    /// legitimate reminders for the same task are not collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_id: Option<String>,
 }
 
 impl NotificationTargetV1 {
@@ -42,6 +47,21 @@ impl NotificationTargetV1 {
             account_id: account_id.into(),
             task_id: task_id.into(),
             source_version: 1,
+            notification_id: None,
+        };
+        target.is_valid().then_some(target)
+    }
+
+    pub fn new_with_notification(
+        account_id: impl Into<String>,
+        task_id: impl Into<String>,
+        notification_id: impl Into<String>,
+    ) -> Option<Self> {
+        let target = Self {
+            account_id: account_id.into(),
+            task_id: task_id.into(),
+            source_version: 1,
+            notification_id: Some(notification_id.into()),
         };
         target.is_valid().then_some(target)
     }
@@ -50,17 +70,34 @@ impl NotificationTargetV1 {
         self.source_version == 1
             && valid_component(&self.account_id)
             && valid_component(&self.task_id)
+            && self.notification_id.as_deref().is_none_or(valid_component)
             && self.account_id != self.task_id
     }
 
     pub fn encode_action_id(&self) -> String {
-        format!("{ACTION_PREFIX}{}:{}", self.account_id, self.task_id)
+        match &self.notification_id {
+            Some(notification_id) => format!(
+                "{ACTION_PREFIX}{}:{}:{}",
+                self.account_id, self.task_id, notification_id
+            ),
+            None => format!("{ACTION_PREFIX}{}:{}", self.account_id, self.task_id),
+        }
     }
 
     pub fn parse_action_id(value: &str) -> Option<Self> {
         let rest = value.strip_prefix(ACTION_PREFIX)?;
-        let (account_id, task_id) = rest.split_once(':')?;
-        Self::new(account_id, task_id)
+        let mut parts = rest.splitn(3, ':');
+        let account_id = parts.next()?;
+        let task_id = parts.next()?;
+        if task_id.contains(':') {
+            return None;
+        }
+        match parts.next() {
+            Some(notification_id) => {
+                Self::new_with_notification(account_id, task_id, notification_id)
+            }
+            None => Self::new(account_id, task_id),
+        }
     }
 }
 
@@ -74,6 +111,7 @@ fn valid_component(value: &str) -> bool {
 
 /// Reminder IDs are `account:<account-id>:<task-id>`. Legacy unscoped entries
 /// are not routable and must never be interpreted as a current-account task.
+#[cfg(test)]
 pub fn target_from_reminder_id(reminder_id: &str) -> Option<NotificationTargetV1> {
     let rest = reminder_id.strip_prefix("account:")?;
     let (account_id, task_id) = rest.split_once(':')?;
@@ -81,6 +119,18 @@ pub fn target_from_reminder_id(reminder_id: &str) -> Option<NotificationTargetV1
         return None;
     }
     NotificationTargetV1::new(account_id, task_id)
+}
+
+pub fn target_from_reminder_id_with_notification(
+    reminder_id: &str,
+    notification_id: &str,
+) -> Option<NotificationTargetV1> {
+    let rest = reminder_id.strip_prefix("account:")?;
+    let (account_id, task_id) = rest.split_once(':')?;
+    if task_id.contains(':') {
+        return None;
+    }
+    NotificationTargetV1::new_with_notification(account_id, task_id, notification_id)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,7 +373,13 @@ impl NotificationActivationState {
 }
 
 fn target_key(target: &NotificationTargetV1) -> String {
-    format!("{}:{}", target.account_id, target.task_id)
+    match &target.notification_id {
+        Some(notification_id) => format!(
+            "{}:{}:{}",
+            target.account_id, target.task_id, notification_id
+        ),
+        None => format!("{}:{}", target.account_id, target.task_id),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -586,7 +642,7 @@ mod tests {
             "shishi.task.v1:",
             "shishi.task.v1:account",
             "shishi.task.v1:account:",
-            "shishi.task.v1:account:task:extra",
+            "shishi.task.v1:account:task:../escape",
             "shishi.task.v1:../escape:task",
             "shishi.task.v1:account:task/with/slash",
         ] {
@@ -595,6 +651,27 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn notification_instance_round_trips_and_distinguishes_targets() {
+        let first = NotificationTargetV1::new_with_notification("default", "task-1", "instance-1")
+            .expect("first target");
+        let second = NotificationTargetV1::new_with_notification("default", "task-1", "instance-2")
+            .expect("second target");
+        assert_ne!(target_key(&first), target_key(&second));
+        assert_eq!(
+            NotificationTargetV1::parse_action_id(&first.encode_action_id()),
+            Some(first)
+        );
+        assert_eq!(
+            NotificationTargetV1::parse_action_id(&second.encode_action_id()),
+            Some(second)
+        );
+        let scoped =
+            target_from_reminder_id_with_notification("account:default:task-1", "instance-1")
+                .expect("scoped instance");
+        assert_eq!(scoped.notification_id.as_deref(), Some("instance-1"));
     }
 
     #[test]
@@ -794,6 +871,34 @@ mod tests {
             target: NotificationTargetV1::new("default", task).expect("target"),
             task_title: "task".to_owned(),
         }
+    }
+
+    #[test]
+    fn distinct_notification_instances_for_same_task_are_both_delivered() {
+        let state = NotificationActivationState::default();
+        for (activation_id, notification_id) in [("a1", "instance-1"), ("a2", "instance-2")] {
+            state.put(Activation {
+                activation_id: activation_id.to_owned(),
+                target: NotificationTargetV1::new_with_notification(
+                    "default",
+                    "task-1",
+                    notification_id,
+                )
+                .expect("target"),
+                task_title: "task".to_owned(),
+            });
+        }
+        assert!(state.listener_ready("s1"));
+        let first = state
+            .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+            .expect("first");
+        assert_eq!(first.activation_id, "a1");
+        assert!(state.acknowledge("s1", "a1", "opened"));
+        let second = state
+            .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+            .expect("second legitimate reminder");
+        assert_eq!(second.activation_id, "a2");
+        assert!(state.acknowledge("s1", "a2", "opened"));
     }
 
     #[test]
