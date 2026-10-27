@@ -39,6 +39,7 @@
     "platform-scenario.json",
     "screenshots/qa-final.png",
     "toast-driver-ready.txt",
-    "toast-driver-result.json"
+    "toast-driver-result.json",
+    "direct-toast-probe.json"
   ]
 }

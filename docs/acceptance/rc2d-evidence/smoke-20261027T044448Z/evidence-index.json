@@ -62,6 +62,7 @@
     "credential-fault-config.json",
     "credential-fault-evidence.jsonl",
     "credential-restart.json",
+    "direct-toast-probe.json",
     "evidence-index.json",
     "manual-platform.json",
     "notification-platform.json",

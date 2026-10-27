@@ -45,6 +45,11 @@ same-card `打开任务` button with the run marker for 40 seconds. It found zer
 action buttons (`actionButtons: 0`) and zero marker elements and recorded
 `NOT_RUN`.
 
+`direct-toast-probe.json` records a separate QA-only WinRT
+`ToastNotificationManager` toast with the same QA AUMID: the Windows registry
+timestamp advanced, but no banner was observed by the harness. This rules out a
+notify-rust-only scheduling defect in this environment.
+
 `notification-platform.json` shows Windows itself recorded the toast for
 `app.shishi.todo.qa` at the exact scheduled time. A read-only copy of
 `wpndatabase.db` was inspected separately and contained the toast title, body and
