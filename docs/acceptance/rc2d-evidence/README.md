@@ -7,7 +7,7 @@ Committed excerpts from the local QA runs for the RC2-D.8 code gate `4ee640b`. F
 | `rc2d-20261027T044448Z` | QA release exe smoke                 | `4ee640b`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
 | `rc2d-20261027T044701Z` | QA release exe fault run             | `4ee640b`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
 | `rc2d-20261025T075858Z` | 1k/10k/100k import benchmark (prior) | `749eb6c`     | BENCH_ONLY | 3 runs                      |
-| `rc2d-20261027T051914Z` | 1k/10k/100k import benchmark (D8)   | `58bc7fd`     | BENCH_ONLY | 100k=83.17s, 1202 tasks/s   |
+| `rc2d-20261027T051914Z` | 1k/10k/100k import benchmark (D8)    | `58bc7fd`     | BENCH_ONLY | 100k=83.17s, 1202 tasks/s   |
 
 The benchmark is retained from an earlier code gate; RC2-D.5 changed QA/evidence tooling, not import production behavior.
 
