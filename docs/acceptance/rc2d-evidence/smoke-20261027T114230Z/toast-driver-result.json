@@ -2,12 +2,12 @@
     "schemaVersion":  2,
     "mode":  "Click",
     "status":  "NOT_RUN",
-    "runMarker":  "rc2d-20261027T044448Z",
-    "startedAt":  "2026-10-27T04:45:16.3385615Z",
-    "driverReadyAt":  "2026-10-27T04:45:16.3902328Z",
+    "runMarker":  "rc2d-20261027T114230Z",
+    "startedAt":  "2026-10-27T11:47:55.3816048Z",
+    "driverReadyAt":  "2026-10-27T11:47:55.4478799Z",
     "notificationObservedAt":  null,
     "invokeAt":  null,
-    "finishedAt":  "2026-10-27T04:45:56.7230496Z",
+    "finishedAt":  "2026-10-27T11:48:35.6750568Z",
     "expectedText":  "打开任务",
     "desktopInteractive":  true,
     "wpnService":  "Running",
@@ -16,7 +16,7 @@
 
                  ],
     "screenshot":  null,
-    "error":  "no unique Toast card with action \u0027打开任务\u0027 and marker \u0027rc2d-20261027T044448Z\u0027 within 40 s",
+    "error":  "no unique Toast card with action \u0027打开任务\u0027 and marker \u0027rc2d-20261027T114230Z\u0027 within 40 s",
     "diagnostics":  {
                         "hostWindows":  1,
                         "actionButtons":  0,
@@ -25,42 +25,35 @@
                     },
     "samples":  [
                     {
-                        "at":  "2026-10-27T04:45:37.5484095Z",
+                        "at":  "2026-10-27T11:48:15.8621369Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:45:38.6889012Z",
+                        "at":  "2026-10-27T11:48:19.7166378Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:45:42.9292235Z",
+                        "at":  "2026-10-27T11:48:23.9214043Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:45:47.0872077Z",
+                        "at":  "2026-10-27T11:48:27.9329780Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
                         "topLevelWindows":  11
                     },
                     {
-                        "at":  "2026-10-27T04:45:51.2762828Z",
-                        "hostWindows":  1,
-                        "actionButtons":  0,
-                        "markerElements":  0,
-                        "topLevelWindows":  11
-                    },
-                    {
-                        "at":  "2026-10-27T04:45:55.5139353Z",
+                        "at":  "2026-10-27T11:48:32.2621702Z",
                         "hostWindows":  1,
                         "actionButtons":  0,
                         "markerElements":  0,
@@ -69,17 +62,17 @@
                 ],
     "timeline":  [
                      {
-                         "at":  "2026-10-27T04:45:16.3546988Z",
+                         "at":  "2026-10-27T11:47:55.4135292Z",
                          "name":  "uia_loaded",
                          "detail":  null
                      },
                      {
-                         "at":  "2026-10-27T04:45:16.3902328Z",
+                         "at":  "2026-10-27T11:47:55.4478799Z",
                          "name":  "driver_ready",
                          "detail":  null
                      },
                      {
-                         "at":  "2026-10-27T04:45:56.7230496Z",
+                         "at":  "2026-10-27T11:48:35.6750568Z",
                          "name":  "toast_not_found_or_ambiguous",
                          "detail":  {
                                         "hostWindows":  1,
