@@ -11,6 +11,7 @@ use std::{
         Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -90,11 +91,16 @@ pub struct Activation {
     pub task_title: String,
 }
 
+const DUPLICATE_TARGET_TTL: Duration = Duration::from_secs(300);
+const COMPLETED_TARGET_CAPACITY: usize = 32;
+const ACKED_ID_CAPACITY: usize = 32;
+
 #[derive(Default)]
 struct DeliveryMeta {
     session_id: Option<String>,
     in_flight: Option<InFlightActivation>,
     completed: VecDeque<CompletedActivation>,
+    acked: VecDeque<AckedActivation>,
     requeue_used: bool,
 }
 
@@ -104,8 +110,12 @@ struct InFlightActivation {
 }
 
 struct CompletedActivation {
-    activation_id: String,
     target_key: String,
+    opened_at: Instant,
+}
+
+struct AckedActivation {
+    activation_id: String,
 }
 
 #[derive(Default)]
@@ -249,10 +259,17 @@ impl NotificationActivationState {
     }
 
     fn completed_target(&self, target: &NotificationTargetV1) -> bool {
+        self.completed_target_at(target, Instant::now())
+    }
+
+    fn completed_target_at(&self, target: &NotificationTargetV1, now: Instant) -> bool {
         let key = target_key(target);
         self.delivery
             .lock()
-            .map(|delivery| {
+            .map(|mut delivery| {
+                delivery.completed.retain(|completed| {
+                    now.saturating_duration_since(completed.opened_at) < DUPLICATE_TARGET_TTL
+                });
                 delivery
                     .completed
                     .iter()
@@ -277,20 +294,31 @@ impl NotificationActivationState {
                 delivery.in_flight = Some(in_flight);
                 return false;
             }
-            delivery.completed.push_back(CompletedActivation {
-                activation_id: in_flight.activation.activation_id,
-                target_key: target_key(&in_flight.activation.target),
-            });
-            delivery.requeue_used = false;
-            while delivery.completed.len() > 32 {
-                delivery.completed.pop_front();
+            let activation_id = in_flight.activation.activation_id;
+            // Only a true opened business result suppresses future clicks of the
+            // same target. rejected/expired/duplicate must not poison the target.
+            if outcome == "opened" {
+                delivery.completed.push_back(CompletedActivation {
+                    target_key: target_key(&in_flight.activation.target),
+                    opened_at: Instant::now(),
+                });
+                while delivery.completed.len() > COMPLETED_TARGET_CAPACITY {
+                    delivery.completed.pop_front();
+                }
             }
+            delivery.acked.push_back(AckedActivation {
+                activation_id: activation_id.clone(),
+            });
+            while delivery.acked.len() > ACKED_ID_CAPACITY {
+                delivery.acked.pop_front();
+            }
+            delivery.requeue_used = false;
             return true;
         }
         delivery
-            .completed
+            .acked
             .iter()
-            .any(|completed| completed.activation_id == activation_id)
+            .any(|acked| acked.activation_id == activation_id)
     }
 }
 
@@ -810,6 +838,10 @@ mod tests {
             "a1"
         );
         assert!(state.listener_ready("s2"));
+        assert!(
+            !state.acknowledge("s1", "a1", "opened"),
+            "old session must not ACK a requeued activation"
+        );
         assert_eq!(
             state
                 .take_for_listener("s2", |_| Ok("task".to_owned()), |_| {})
@@ -817,7 +849,105 @@ mod tests {
                 .activation_id,
             "a1"
         );
+        assert!(
+            !state.acknowledge("s1", "a1", "opened"),
+            "old session must not ACK the new in-flight delivery"
+        );
         assert!(state.acknowledge("s2", "a1", "opened"));
+    }
+
+    #[test]
+    fn rejected_or_expired_ack_does_not_block_same_target() {
+        for outcome in ["rejected", "expired"] {
+            let state = NotificationActivationState::default();
+            state.put(activation("a1", "task-1"));
+            assert!(state.listener_ready("s1"));
+            assert!(
+                state
+                    .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                    .is_some()
+            );
+            assert!(state.acknowledge("s1", "a1", outcome));
+            state.put(activation("a2", "task-1"));
+            assert_eq!(
+                state
+                    .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                    .expect("legitimate later activation")
+                    .activation_id,
+                "a2",
+                "{outcome} must not poison target"
+            );
+        }
+    }
+
+    #[test]
+    fn opened_target_is_suppressed_only_within_ttl() {
+        let state = NotificationActivationState::default();
+        let target = NotificationTargetV1::new("default", "task-1").expect("target");
+        state.put(Activation {
+            activation_id: "a1".to_owned(),
+            target: target.clone(),
+            task_title: "task".to_owned(),
+        });
+        assert!(state.listener_ready("s1"));
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_some()
+        );
+        assert!(state.acknowledge("s1", "a1", "opened"));
+        assert!(state.completed_target(&target));
+        assert!(
+            !state.completed_target_at(
+                &target,
+                Instant::now() + DUPLICATE_TARGET_TTL + Duration::from_secs(1)
+            ),
+            "target suppression must expire"
+        );
+    }
+
+    #[test]
+    fn identical_target_distinct_legitimate_reminders_after_rejection() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a1", "task-1"));
+        state.put(activation("a2", "task-1"));
+        assert!(state.listener_ready("s1"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .expect("first")
+                .activation_id,
+            "a1"
+        );
+        assert!(state.acknowledge("s1", "a1", "rejected"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .expect("second")
+                .activation_id,
+            "a2"
+        );
+    }
+
+    #[test]
+    fn delivery_queue_drops_oldest_and_drains_fifo() {
+        let state = NotificationActivationState::default();
+        for index in 0..10 {
+            state.put(activation(&format!("a{index}"), &format!("task-{index}")));
+        }
+        assert!(state.listener_ready("s1"));
+        for index in 2..10 {
+            let delivered = state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .expect("queued");
+            assert_eq!(delivered.activation_id, format!("a{index}"));
+            assert!(state.acknowledge("s1", &delivered.activation_id, "opened"));
+        }
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
+                .is_none()
+        );
     }
 
     #[test]
