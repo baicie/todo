@@ -10,6 +10,7 @@
     <EnableMsixTooling>false</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <DefineConstants Condition="'$(PocNoBootstrap)' == 'true'">$(DefineConstants);POC_NO_BOOTSTRAP</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250907003" />

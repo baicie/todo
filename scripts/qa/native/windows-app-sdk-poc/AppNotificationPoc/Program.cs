@@ -26,6 +26,9 @@ internal static class Program
     [DllImport("Microsoft.WindowsAppRuntime.Bootstrap.dll")]
     private static extern void MddBootstrapShutdown();
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
     private static readonly string LogPath =
         Path.Combine(AppContext.BaseDirectory, "poc-log.txt");
 
@@ -37,6 +40,9 @@ internal static class Program
         try
         {
             Log("start");
+            var aumidHr = SetCurrentProcessExplicitAppUserModelID("app.shishi.todo.qa.poc");
+            Log("aumid_hr=" + aumidHr);
+#if !POC_NO_BOOTSTRAP
             var bootstrapHr = MddBootstrapInitialize2(0x00010008, null, new PackageVersion(), 0);
             Log("bootstrap_hr=" + bootstrapHr);
             if (bootstrapHr < 0)
@@ -45,6 +51,10 @@ internal static class Program
                 Environment.ExitCode = 3;
                 return;
             }
+#else
+            Log("bootstrap=skipped");
+#endif
+            Log("manager_supported=" + AppNotificationManager.IsSupported());
             Log("manager_default_begin");
             var manager = AppNotificationManager.Default;
             Log("manager_default_ok");
@@ -69,7 +79,9 @@ internal static class Program
             Log("shown");
             Thread.Sleep(4000);
             manager.Unregister();
+#if !POC_NO_BOOTSTRAP
             MddBootstrapShutdown();
+#endif
             Log("unregistered");
             Console.WriteLine("POC_STATUS=REGISTERED_SHOWN_UNREGISTERED");
         }

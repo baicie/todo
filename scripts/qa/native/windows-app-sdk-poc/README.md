@@ -2,27 +2,23 @@
 
 Official .NET 8 + Windows App SDK project (not naked csc/WinMD):
 
-- `AppNotificationPoc/AppNotificationPoc.csproj` — `Microsoft.WindowsAppSDK` 1.8.250907003,
-  `net8.0-windows10.0.19041.0`, x64, `WindowsPackageType=None`, explicit
-  `MddBootstrapInitialize2`.
-- `build-poc.ps1` — restore, build and run; writes build/run log.
-- `csc-fallback/` — previous csc/WinMD diagnostic retained as historical fallback only;
-  it is not the formal POC.
+- `AppNotificationPoc/` — `Microsoft.WindowsAppSDK` 1.8.250907003,
+  `net8.0-windows10.0.19041.0`, x64, `WindowsPackageType=None`.
+- `build-poc.ps1` — build and run one variant.
+- `build-matrix.ps1` — four deployment variants (framework/self-contained ×
+  auto/explicit bootstrap), logs and `matrix.json`.
+- `csc-fallback/` — previous csc/WinMD diagnostic retained as historical fallback only.
 
-```powershell
-powershell.exe -NoProfile -File scripts/qa/native/windows-app-sdk-poc/build-poc.ps1 -OutDir artifacts/app-sdk-poc
-```
+Current result:
 
-Observed in this session:
+| Variant | Build | Default | Register |
+| --- | --- | --- | --- |
+| A framework + auto bootstrap | PASS | OK | 0x80040154 |
+| B framework + explicit bootstrap | PASS | OK | 0x80040154 |
+| C self-contained + explicit bootstrap | PASS | OK | 0x80040154 |
+| D self-contained + no bootstrap | PASS | 0x80040154 | not reached |
 
-- official project **restore/build PASS**;
-- `MddBootstrapInitialize2` returns `0`;
-- `AppNotificationManager.Default` is constructed successfully;
-- `manager.Register()` throws `COMException HRESULT 0x80040154
-(REGDB_E_CLASSNOTREG)`.
-
-The failing call is now isolated to `Register()`, not bootstrap or projection
-construction. The POC remains BLOCKED for OS activation.
-
-This is a concrete registration/runtime blocker, not a fake pass. The app SDK
-build is not a real OS activation PASS.
+Bootstrap + AUMID set (`app.shishi.todo.qa.poc`) still fails at
+`Register()` with `REGDB_E_CLASSNOTREG`. This is not a deployment-mode-only
+defect; the exact CLSID is not exposed by the managed exception. The POC remains
+BLOCKED for OS activation and does not replace the production backend.
