@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-10-26T10:21:41.993Z",
+  "generatedAt": "2026-10-27T03:44:58.721Z",
   "status": "PARTIAL",
   "counts": {
-    "PASS": 7,
+    "PASS": 9,
     "FAIL": 0,
-    "NOT_RUN": 4
+    "NOT_RUN": 2
   },
   "tests": [
     {
@@ -20,7 +20,7 @@
     {
       "name": "qa_boot_context",
       "status": "PASS",
-      "durationMs": 11,
+      "durationMs": 9,
       "detail": {
         "accountId": "default",
         "kind": "anonymous",
@@ -31,11 +31,11 @@
     {
       "name": "qa_storage_roundtrip",
       "status": "PASS",
-      "durationMs": 1100,
+      "durationMs": 1253,
       "detail": {
-        "taskId": "01a177ba-eb62-7073-b13d-4432b457a694",
-        "allCount": 100051,
-        "title": "QA roundtrip 1793010101060"
+        "taskId": "01a17b76-120a-74cd-8539-0a6576672e33",
+        "allCount": 100062,
+        "title": "QA roundtrip 1793072697827"
       }
     },
     {
@@ -49,16 +49,16 @@
     {
       "name": "qa_reminder_schedule_cancel",
       "status": "PASS",
-      "durationMs": 15,
+      "durationMs": 16,
       "detail": {
-        "reminderId": "qa-reminder-1793010101787",
+        "reminderId": "qa-reminder-1793072698475",
         "mode": "scheduled"
       }
     },
     {
       "name": "qa_credential_namespace",
       "status": "PASS",
-      "durationMs": 36,
+      "durationMs": 35,
       "detail": {
         "service": "app.shishi.todo.rc2d-qa.secure-token",
         "rejectedKey": "cross-account key",
@@ -68,7 +68,7 @@
     {
       "name": "qa_invalid_switch_does_not_change_active_account",
       "status": "PASS",
-      "durationMs": 11,
+      "durationMs": 10,
       "detail": {
         "error": "invalid account registry: target account 01a1673d-1000-7000-8000-deadbeef0000 is not registered",
         "activeAccountId": "default"
@@ -88,15 +88,36 @@
     },
     {
       "name": "qa_fault_injection_prepared_recovery",
-      "status": "NOT_RUN",
-      "durationMs": 0,
-      "detail": "no fault config was armed"
+      "status": "PASS",
+      "durationMs": 35,
+      "detail": {
+        "faultPoint": "switch_prepared_persisted",
+        "error": "injected fault: QA_INJECTED_SWITCH_PREPARE: QA injected failure after switch journal PREPARED",
+        "journalPhaseAfterRecovery": null,
+        "accountId": "01a17b76-14a6-76cd-a4c9-a4a11351371a"
+      }
     },
     {
       "name": "qa_fault_evidence",
-      "status": "NOT_RUN",
-      "durationMs": 0,
-      "detail": "no --rc2d-fault-config run was requested"
+      "status": "PASS",
+      "durationMs": 3,
+      "detail": {
+        "evidenceFile": "fault-evidence.jsonl",
+        "records": 9,
+        "configuredPoints": [
+          "switch_prepared_persisted"
+        ],
+        "observedPoints": [
+          "target_database_before_open",
+          "sqlite_busy",
+          "target_database_after_open",
+          "credential_set",
+          "credential_get",
+          "credential_delete",
+          "switch_prepared_persisted",
+          "switch_journal_before_cleanup"
+        ]
+      }
     }
   ]
 }

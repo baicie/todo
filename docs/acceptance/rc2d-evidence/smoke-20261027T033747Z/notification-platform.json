@@ -1,0 +1,18 @@
+{
+    "schemaVersion":  1,
+    "identifier":  "app.shishi.todo.qa",
+    "checkedAt":  "2026-10-27T03:44:23.9287860Z",
+    "desktopInteractive":  true,
+    "sessionId":  1,
+    "windowsCaption":  "Microsoft Windows 11 Pro",
+    "windowsVersion":  "10.0.26200",
+    "windowsBuild":  "26200",
+    "explorerRunning":  true,
+    "startMenuShortcut":  true,
+    "globalToastEnabled":  null,
+    "wpnService":  "Running",
+    "settingsKeyPresent":  true,
+    "lastNotificationAddedTime":  "2026-10-27T03:43:41.9543899Z",
+    "periodicNotificationCount":  6,
+    "error":  null
+}
