@@ -61,7 +61,7 @@ function setTauriRuntime(): void {
 }
 
 function defaultOptions() {
-  return { openTask: vi.fn(), notify: vi.fn() };
+  return { openTask: vi.fn(async () => true), notify: vi.fn() };
 }
 
 async function waitForInvoke(): Promise<void> {
@@ -170,6 +170,49 @@ describe('notification activation bridge activation drain', () => {
 
     expect(commandCalls('native_take_notification_activation')).toBe(8);
     expect(options.openTask).toHaveBeenCalledTimes(8);
+    stop();
+  });
+
+  it('does not ACK opened when the task detail cannot be resolved', async () => {
+    activationQueue.push(activation('a1'), null);
+    const acks: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') {
+        acks.push(args ?? {});
+        return true;
+      }
+      if (command === 'native_take_notification_activation') return activationQueue.shift() ?? null;
+      if (command === 'native_take_notification_rejection') return null;
+      return null;
+    });
+    const options = defaultOptions();
+    options.openTask = vi.fn(async () => false);
+    const stop = await startNotificationActivationBridge(options);
+    expect(acks).toEqual([expect.objectContaining({ activationId: 'a1', outcome: 'rejected' })]);
+    expect(options.notify).toHaveBeenCalled();
+    stop();
+  });
+
+  it('does not ACK opened when navigation throws', async () => {
+    activationQueue.push(activation('a1'), null);
+    const acks: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'native_notification_listener_ready') return true;
+      if (command === 'native_ack_notification_activation') {
+        acks.push(args ?? {});
+        return true;
+      }
+      if (command === 'native_take_notification_activation') return activationQueue.shift() ?? null;
+      if (command === 'native_take_notification_rejection') return null;
+      return null;
+    });
+    const options = defaultOptions();
+    options.openTask = vi.fn(async () => {
+      throw new Error('navigation failed');
+    });
+    const stop = await startNotificationActivationBridge(options);
+    expect(acks).toEqual([expect.objectContaining({ activationId: 'a1', outcome: 'rejected' })]);
     stop();
   });
 

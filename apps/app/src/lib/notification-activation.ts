@@ -22,6 +22,7 @@ const EVENT_REJECTED = 'native-notification-rejected';
 
 /** Native keeps at most 8 pending activations and 8 pending rejections. */
 const MAX_DRAIN_PER_CYCLE = 8;
+const OPEN_TASK_TIMEOUT_MS = 5000;
 
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -49,7 +50,7 @@ function abortError(): Error {
  */
 export async function startNotificationActivationBridge(
   options: {
-    openTask: (taskId: string) => void;
+    openTask: (taskId: string) => Promise<boolean> | boolean;
     notify: (message: string, tone: 'danger' | 'success') => void;
   },
   signal?: AbortSignal,
@@ -117,12 +118,25 @@ export async function startNotificationActivationBridge(
         await acknowledge(activation.activationId, 'rejected');
         return;
       }
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        options.openTask(activation.target.taskId);
+        const opened = await Promise.race([
+          Promise.resolve(options.openTask(activation.target.taskId)),
+          new Promise<boolean>((resolve) => {
+            timeout = setTimeout(() => resolve(false), OPEN_TASK_TIMEOUT_MS);
+          }),
+        ]);
+        if (!opened) {
+          await acknowledge(activation.activationId, 'rejected');
+          options.notify('暂时无法打开提醒对应的任务', 'danger');
+          return;
+        }
         await acknowledge(activation.activationId, 'opened');
       } catch {
         await acknowledge(activation.activationId, 'rejected');
         options.notify('暂时无法打开提醒对应的任务', 'danger');
+      } finally {
+        if (timeout) clearTimeout(timeout);
       }
     };
 
