@@ -45,7 +45,9 @@ internal static class Program
                 Environment.ExitCode = 3;
                 return;
             }
+            Log("manager_default_begin");
             var manager = AppNotificationManager.Default;
+            Log("manager_default_ok");
             // Subscribe before Register: activation can arrive immediately after
             // registration (including a cold-start activation from a previous run).
             manager.NotificationInvoked += (_, args) =>
@@ -53,6 +55,7 @@ internal static class Program
                 Log("notification_invoked argument=" + args.Argument + " inputCount=" + args.UserInput.Count);
                 Environment.ExitCode = 0;
             };
+            Log("register_begin");
             manager.Register();
             Log("registered");
             var toast = new AppNotificationBuilder()

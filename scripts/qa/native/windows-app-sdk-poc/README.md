@@ -17,8 +17,12 @@ Observed in this session:
 
 - official project **restore/build PASS**;
 - `MddBootstrapInitialize2` returns `0`;
-- `AppNotificationManager.Default` throws `COMException HRESULT 0x80040154
-  (REGDB_E_CLASSNOTREG)` before `Register()`.
+- `AppNotificationManager.Default` is constructed successfully;
+- `manager.Register()` throws `COMException HRESULT 0x80040154
+  (REGDB_E_CLASSNOTREG)`.
+
+The failing call is now isolated to `Register()`, not bootstrap or projection
+construction. The POC remains BLOCKED for OS activation.
 
 This is a concrete registration/runtime blocker, not a fake pass. The app SDK
 build is not a real OS activation PASS.
