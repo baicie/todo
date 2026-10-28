@@ -74,7 +74,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build unsigned NSIS
         working-directory: apps/native/src-tauri
-        run: pnpm dlx @tauri-apps/cli@2.12.4 build
+        run: pnpm dlx @tauri-apps/cli@2.12.4 build --bundles nsis
       - name: Upload NSIS
         uses: actions/upload-artifact@v4
         with:
