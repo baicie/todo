@@ -134,6 +134,9 @@ IPC/harness success is never promoted to real Toast PASS.
 
 ## Current limits
 
+- Windows production builds gate notification actions off until the Windows
+  App SDK registration/activation path is verified; QA builds retain the
+  experimental path.
 - Real toast click routing and wrong-account notification rejection remain NOT_RUN; the UIA driver and task/reminder fixture exist, but a real Toast was not observed in this environment.
 - A Windows toast action can be reported only while the process's action listener is alive; cold-start activation from Action Center is not claimed as PASS.
 - macOS/Linux/Android/iOS builds are compile/unit-test evidence only unless a real device/runner result is recorded.
