@@ -82,9 +82,104 @@ jobs:
           path: apps/native/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
+  macos:
+    name: Build macOS DMG (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: arm64
+            target: aarch64-apple-darwin
+          - os: macos-14
+            label: x64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+          key: ${{ matrix.target }}
+      - run: pnpm install --frozen-lockfile
+      - name: Build DMG for ${{ matrix.label }}
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 build --target ${{ matrix.target }} --bundles dmg
+      - name: Normalize DMG name
+        shell: bash
+        run: |
+          mkdir -p release-macos
+          for file in apps/native/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            cp "$file" "release-macos/Shishi-${GITHUB_REF_NAME:-dev}-macos-${{ matrix.label }}.dmg"
+          done
+          shasum -a 256 release-macos/*.dmg > "release-macos/Shishi-${GITHUB_REF_NAME:-dev}-macos-${{ matrix.label }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.label }}
+          path: |
+            release-macos/*.dmg
+            release-macos/*.sha256
+          if-no-files-found: error
+
+  android:
+    name: Build Android APK/AAB (split per ABI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - run: pnpm install --frozen-lockfile
+      - name: Initialize Android project
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android init --ci
+      - name: Build split debug APK/AAB
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android build --debug --apk --aab --split-per-abi
+      - name: Collect Android artifacts
+        shell: bash
+        run: |
+          mkdir -p release-android
+          find apps/native/src-tauri/gen/android/app/build/outputs -type f \
+            \( -name '*.apk' -o -name '*.aab' \) -exec cp {} release-android/ \;
+          ls -lh release-android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release-android/*
+          if-no-files-found: error
+
   release:
-    name: Create GitHub dev pre-release
-    needs: [web, windows]
+    name: Create or update GitHub dev pre-release
+    needs: [web, windows, macos, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -95,6 +190,18 @@ jobs:
         with:
           name: release-windows
           path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: artifacts/macos-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-macos-x64
+          path: artifacts/macos-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-android
+          path: artifacts/android
       - name: Publish pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -105,11 +212,27 @@ jobs:
             VERSION="${GITHUB_REF_NAME}"
           fi
           echo "Publishing $VERSION from $GITHUB_SHA"
-          gh release create "$VERSION" \
-            --target "$GITHUB_SHA" \
-            --title "Shishi $VERSION" \
-            --prerelease \
-            --notes "Dev pre-release for $VERSION. Unsigned QA/dev artifacts; Windows notification actions remain gated and Windows platform is NOT_READY. This release does not merge PR #5 and is not a production release." \
-            artifacts/web/*.zip \
-            artifacts/web/*.txt \
-            artifacts/windows/*.exe
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" \
+              artifacts/web/*.zip \
+              artifacts/web/*.txt \
+              artifacts/windows/*.exe \
+              artifacts/macos-arm64/* \
+              artifacts/macos-x64/* \
+              artifacts/android/*.apk \
+              artifacts/android/*.aab \
+              --clobber
+          else
+            gh release create "$VERSION" \
+              --target "$GITHUB_SHA" \
+              --title "Shishi $VERSION" \
+              --prerelease \
+              --notes "Dev pre-release for $VERSION. Unsigned QA/dev artifacts; Windows notification actions remain gated and Windows platform is NOT_READY. This release does not merge PR #5 and is not a production release." \
+              artifacts/web/*.zip \
+              artifacts/web/*.txt \
+              artifacts/windows/*.exe \
+              artifacts/macos-arm64/* \
+              artifacts/macos-x64/* \
+              artifacts/android/*.apk \
+              artifacts/android/*.aab
+          fi
