@@ -295,6 +295,22 @@ mod tests {
     }
 
     #[test]
+    fn account_a_and_b_tokens_are_isolated() {
+        let backend = MemoryBackend::default();
+        let a = "01a1673d-1000-7000-8000-000000000001";
+        let b = "01a1673d-1000-7000-8000-000000000002";
+        let key_a = refresh_token_key(a).expect("a key");
+        let key_b = refresh_token_key(b).expect("b key");
+        backend.set(&key_a, "token-a").expect("set a");
+        backend.set(&key_b, "token-b").expect("set b");
+        assert_eq!(backend.get(&key_a).unwrap().as_deref(), Some("token-a"));
+        assert_eq!(backend.get(&key_b).unwrap().as_deref(), Some("token-b"));
+        backend.delete(&key_a).expect("delete a");
+        assert_eq!(backend.get(&key_a).unwrap(), None);
+        assert_eq!(backend.get(&key_b).unwrap().as_deref(), Some("token-b"));
+    }
+
+    #[test]
     fn legacy_migration_writes_then_removes() {
         let backend = seeded();
         migrate_with(&backend, ACCOUNT).expect("migration");

@@ -18,8 +18,10 @@ Current result:
 | C self-contained + explicit bootstrap | PASS  | OK         | 0x80040154  |
 | D self-contained + no bootstrap       | PASS  | 0x80040154 | not reached |
 
-Bootstrap + AUMID set (`app.shishi.todo.qa.poc`) still fails at
-`Register()` with `REGDB_E_CLASSNOTREG`. A Start Menu shortcut with
+Direct `PushNotifications_RegisterFullTrustApplication` returns `0` for the
+QA AUMID; `AppNotificationManager.Register()` still fails afterward with
+`REGDB_E_CLASSNOTREG`. The remaining failure is therefore in the
+Register/COM-server registration path, not the push registration call. A Start Menu shortcut with
 `System.AppUserModel.ID=app.shishi.todo.qa.poc` and a test
 `System.AppUserModel.ToastActivatorCLSID` was also created successfully via
 `create-aumid-shortcut.ps1`; `Register()` still returned 0x80040154. The

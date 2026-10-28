@@ -29,6 +29,9 @@ internal static class Program
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
+    [DllImport("Microsoft.Internal.FrameworkUdk.dll", CharSet = CharSet.Unicode)]
+    private static extern int PushNotifications_RegisterFullTrustApplication(string appId, Guid clsid);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetCurrentPackageFullName(ref int packageFullNameLength, System.Text.StringBuilder? packageFullName);
 
@@ -55,6 +58,16 @@ internal static class Program
             {
                 var aumidHr = SetCurrentProcessExplicitAppUserModelID("app.shishi.todo.qa.poc");
                 Log("aumid_hr=" + aumidHr);
+                try
+                {
+                    var pushHr = PushNotifications_RegisterFullTrustApplication(
+                        "app.shishi.todo.qa.poc", Guid.Empty);
+                    Log("push_register_hr=" + pushHr);
+                }
+                catch (Exception error)
+                {
+                    Log("push_register_exception=" + error.GetType().FullName + " hr=" + error.HResult);
+                }
 #if !POC_NO_BOOTSTRAP
                 var bootstrapHr = MddBootstrapInitialize2(0x00010008, null, new PackageVersion(), 0);
                 Log("bootstrap_hr=" + bootstrapHr);
