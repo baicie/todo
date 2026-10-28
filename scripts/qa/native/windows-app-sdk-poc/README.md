@@ -19,7 +19,10 @@ Current result:
 | D self-contained + no bootstrap       | PASS  | 0x80040154 | not reached |
 
 Bootstrap + AUMID set (`app.shishi.todo.qa.poc`) still fails at
-`Register()` with `REGDB_E_CLASSNOTREG`. This is not a deployment-mode-only
+`Register()` with `REGDB_E_CLASSNOTREG`. A Start Menu shortcut with
+`System.AppUserModel.ID=app.shishi.todo.qa.poc` was also created successfully
+via `create-aumid-shortcut.ps1`, and `Register()` still returned 0x80040154;
+the temporary shortcut was removed after the test. This is not a deployment-mode-only
 defect; the exact CLSID is not exposed by the managed exception.
 
 A packaged/MSIX control was also built (`MakeAppx` succeeded, `Windows.Desktop`
