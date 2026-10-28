@@ -1,11 +1,11 @@
 # RC2-D Evidence Index
 
-Committed excerpts from the local QA runs for the RC2-D.9 code gate `de735a7`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
+Committed excerpts from the local QA runs for the RC2-D.10 code gate `56ea18d`. Full logs, app binaries and ignored artifacts remain under `artifacts/native-qa/<run-id>/`; paths in committed copies are replaced with `<repo>` / `<user>`.
 
 | Run                     | Kind                                 | Source commit | Status     | Tests                       |
 | ----------------------- | ------------------------------------ | ------------- | ---------- | --------------------------- |
-| `rc2d-20261027T114230Z` | QA release exe smoke                 | `de735a7`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
-| `rc2d-20261027T114905Z` | QA release exe fault run             | `de735a7`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
+| `rc2d-20261027T161354Z` | QA release exe smoke                 | `56ea18d`     | PARTIAL    | 7 PASS / 0 FAIL / 4 NOT_RUN |
+| `rc2d-20261028T012345Z` | QA release exe fault run             | `56ea18d`     | PARTIAL    | 9 PASS / 0 FAIL / 2 NOT_RUN |
 | `rc2d-20261025T075858Z` | 1k/10k/100k import benchmark (prior) | `749eb6c`     | BENCH_ONLY | 3 runs                      |
 | `rc2d-20261027T051914Z` | 1k/10k/100k import benchmark (D8)    | `58bc7fd`     | BENCH_ONLY | 100k=83.17s, 1202 tasks/s   |
 
@@ -37,10 +37,10 @@ without observed evidence. `sha256sums.txt` covers the committed archive
 
 ## Real Toast attempt
 
-`rc2d-20261027T114230Z/platform-scenario.json` records an actual UIA attempt:
+`rc2d-20261027T161354Z/platform-scenario.json` records an actual UIA attempt:
 a QA task/reminder was created and scheduled with the runId marker,
 `windows-toast-driver.ps1` was started before the Toast fired, reached READY at
-`11:47:55.523Z` (7 ms before scheduling at `11:47:55.528Z`), then searched for a
+`01:21:50.348Z` (7 ms before scheduling at `01:21:50.354Z`), then searched for a
 same-card `打开任务` button with the run marker for 40 seconds. It found zero
 action buttons (`actionButtons: 0`) and zero marker elements and recorded
 `NOT_RUN`.
@@ -61,7 +61,7 @@ PASS; `platform-results.json` remains `windowsPlatformReady: false`.
 
 ## Credential restart
 
-`rc2d-20261027T114230Z/credential-restart.json` records a real QA Credential
+`rc2d-20261027T161354Z/credential-restart.json` records a real QA Credential
 Manager write, process termination, fresh process start, read-back and removal:
 `status: PASS`, `restartedRead: true`, QA namespace only. This is supplemental
 evidence; it is not one of the 10 public Toast scenarios.
