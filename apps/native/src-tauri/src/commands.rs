@@ -773,12 +773,19 @@ pub fn request_reminder_permission(state: State<'_, AppState>) -> Result<String,
         .map_err(CommandError::reminder)
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 pub fn set_badge_count(window: WebviewWindow, count: i64) -> Result<(), CommandError> {
     let count = if count > 0 { Some(count) } else { None };
     window
         .set_badge_count(count)
         .map_err(|error| CommandError::new("BADGE_UNSUPPORTED", error.to_string()))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn set_badge_count(_window: WebviewWindow, _count: i64) -> Result<(), CommandError> {
+    Ok(())
 }
 
 #[tauri::command]
