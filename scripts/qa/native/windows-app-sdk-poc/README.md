@@ -7,30 +7,27 @@ Official .NET 8 + Windows App SDK project (not naked csc/WinMD):
 - `build-poc.ps1` — build and run one variant.
 - `build-matrix.ps1` — four deployment variants (framework/self-contained ×
   auto/explicit bootstrap), logs and `matrix.json`.
-- `csc-fallback/` — previous csc/WinMD diagnostic retained as historical fallback only.
+- `AppxManifest.xml` / `create-msix.ps1` — reproducible packaged/MSIX control
+  build; no installation is performed.
+- `create-aumid-shortcut.ps1` — QA-only Start Menu shortcut with AUMID and
+  ToastActivatorCLSID controls.
+- `csc-fallback/` — historical csc/WinMD diagnostic only.
 
-Current result:
+Current results:
 
-| Variant                               | Build | Default    | Register    |
-| ------------------------------------- | ----- | ---------- | ----------- |
-| A framework + auto bootstrap          | PASS  | OK         | 0x80040154  |
-| B framework + explicit bootstrap      | PASS  | OK         | 0x80040154  |
-| C self-contained + explicit bootstrap | PASS  | OK         | 0x80040154  |
-| D self-contained + no bootstrap       | PASS  | 0x80040154 | not reached |
+| Variant | Build | Default | Register |
+| --- | --- | --- | --- |
+| A framework + auto | PASS | OK | 0x80040154 |
+| B framework + explicit | PASS | OK | 0x80040154 |
+| C self-contained + explicit | PASS | OK | 0x80040154 |
+| D self-contained + no bootstrap | PASS | 0x80040154 | not reached |
 
-Direct `PushNotifications_RegisterFullTrustApplication` returns `0` for the
-QA AUMID; `AppNotificationManager.Register()` still fails afterward with
-`REGDB_E_CLASSNOTREG`. The remaining failure is therefore in the
-Register/COM-server registration path, not the push registration call. A Start Menu shortcut with
-`System.AppUserModel.ID=app.shishi.todo.qa.poc` and a test
-`System.AppUserModel.ToastActivatorCLSID` was also created successfully via
-`create-aumid-shortcut.ps1`; `Register()` still returned 0x80040154. The
-temporary shortcut was removed after the test. This is not a deployment-mode-only
-defect; the exact CLSID is not exposed by the managed exception.
+Direct `PushNotifications_RegisterFullTrustApplication` returns `0`; the
+remaining failure is in `Register()`'s COM server registration path. A Start
+Menu shortcut with AUMID/ToastActivatorCLSID and a built MSIX control did not
+produce a successful Register: MSIX installation requires developer/sideload
+policy and a trusted signing root (no elevation in this session). The
+packaged/MSIX control remains **BLOCKED**; no package was installed and the
+temporary certificate/shortcut was removed.
 
-A packaged/MSIX control was also built (`MakeAppx` succeeded, `Windows.Desktop`
-target) but could not be installed in this session: the self-signed package
-requires a trusted root certificate (no elevation) and the machine has no
-developer/sideload policy (`0x80073CFF`). No package was installed; the temporary
-test certificate was removed. This control remains **BLOCKED** and is not a
-production migration decision.
+This POC is not a production backend and does not provide a real activation PASS.
