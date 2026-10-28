@@ -38,5 +38,11 @@
       "register": "NOT_REACHED"
     }
   ],
-  "conclusion": "All deployment modes fail at AppNotificationManager.Register (or constructor without explicit bootstrap); deployment-mode conflict is excluded as the sole cause. Exact CLSID is not exposed by managed exception; classification UNKNOWN_WITH_DIAGNOSTICS / COM_REGISTRATION_MISSING candidate."
+  "conclusion": "All deployment modes fail at AppNotificationManager.Register (or constructor without explicit bootstrap); deployment-mode conflict is excluded as the sole cause. Exact CLSID is not exposed by managed exception; classification UNKNOWN_WITH_DIAGNOSTICS / COM_REGISTRATION_MISSING candidate.",
+  "packagedControl": {
+    "packageBuilt": true,
+    "install": "BLOCKED",
+    "hr": "0x80073CFF",
+    "reason": "no developer/sideload policy; self-signed root not trusted without elevation"
+  }
 }

@@ -29,8 +29,19 @@ internal static class Program
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
-    private static readonly string LogPath =
-        Path.Combine(AppContext.BaseDirectory, "poc-log.txt");
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetCurrentPackageFullName(ref int packageFullNameLength, System.Text.StringBuilder? packageFullName);
+
+    private static bool IsPackaged()
+    {
+        var length = 256;
+        var name = new System.Text.StringBuilder(length);
+        return GetCurrentPackageFullName(ref length, name) == 0;
+    }
+
+    private static readonly string LogPath = IsPackaged()
+        ? Path.Combine(Path.GetTempPath(), "shishi-app-sdk-poc.log")
+        : Path.Combine(AppContext.BaseDirectory, "poc-log.txt");
 
     private static void Log(string message) =>
         File.AppendAllText(LogPath, DateTimeOffset.UtcNow.ToString("o") + " " + message + Environment.NewLine);
@@ -39,21 +50,28 @@ internal static class Program
     {
         try
         {
-            Log("start");
-            var aumidHr = SetCurrentProcessExplicitAppUserModelID("app.shishi.todo.qa.poc");
-            Log("aumid_hr=" + aumidHr);
-#if !POC_NO_BOOTSTRAP
-            var bootstrapHr = MddBootstrapInitialize2(0x00010008, null, new PackageVersion(), 0);
-            Log("bootstrap_hr=" + bootstrapHr);
-            if (bootstrapHr < 0)
+            Log("start packaged=" + IsPackaged());
+            if (!IsPackaged())
             {
-                Console.WriteLine("POC_STATUS=BOOTSTRAP_FAILED");
-                Environment.ExitCode = 3;
-                return;
-            }
+                var aumidHr = SetCurrentProcessExplicitAppUserModelID("app.shishi.todo.qa.poc");
+                Log("aumid_hr=" + aumidHr);
+#if !POC_NO_BOOTSTRAP
+                var bootstrapHr = MddBootstrapInitialize2(0x00010008, null, new PackageVersion(), 0);
+                Log("bootstrap_hr=" + bootstrapHr);
+                if (bootstrapHr < 0)
+                {
+                    Console.WriteLine("POC_STATUS=BOOTSTRAP_FAILED");
+                    Environment.ExitCode = 3;
+                    return;
+                }
 #else
-            Log("bootstrap=skipped");
+                Log("bootstrap=skipped");
 #endif
+            }
+            else
+            {
+                Log("bootstrap=packaged-skip");
+            }
             Log("manager_supported=" + AppNotificationManager.IsSupported());
             Log("manager_default_begin");
             var manager = AppNotificationManager.Default;
@@ -80,7 +98,7 @@ internal static class Program
             Thread.Sleep(4000);
             manager.Unregister();
 #if !POC_NO_BOOTSTRAP
-            MddBootstrapShutdown();
+            if (!IsPackaged()) MddBootstrapShutdown();
 #endif
             Log("unregistered");
             Console.WriteLine("POC_STATUS=REGISTERED_SHOWN_UNREGISTERED");

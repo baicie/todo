@@ -20,5 +20,11 @@ Current result:
 
 Bootstrap + AUMID set (`app.shishi.todo.qa.poc`) still fails at
 `Register()` with `REGDB_E_CLASSNOTREG`. This is not a deployment-mode-only
-defect; the exact CLSID is not exposed by the managed exception. The POC remains
-BLOCKED for OS activation and does not replace the production backend.
+defect; the exact CLSID is not exposed by the managed exception.
+
+A packaged/MSIX control was also built (`MakeAppx` succeeded, `Windows.Desktop`
+target) but could not be installed in this session: the self-signed package
+requires a trusted root certificate (no elevation) and the machine has no
+developer/sideload policy (`0x80073CFF`). No package was installed; the temporary
+test certificate was removed. This control remains **BLOCKED** and is not a
+production migration decision.
