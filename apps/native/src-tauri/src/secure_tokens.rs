@@ -226,6 +226,10 @@ mod tests {
     const TARGET: &str = "cloud-refresh:01a1673d-1000-7000-8000-0000000000aa";
 
     use super::*;
+    use todo_native_accounts::{
+        SwitchPhase, create_pending_cloud_account, ensure_active_account, prepare_account_switch,
+        recover_pending_switch, switch_status,
+    };
 
     #[derive(Default)]
     struct MemoryBackend {
@@ -292,6 +296,49 @@ mod tests {
             refresh_token_key(b).expect("b")
         );
         assert!(refresh_token_key("../escape").is_err());
+    }
+
+    #[test]
+    fn credential_failure_during_prepared_switch_keeps_journal_recoverable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        ensure_active_account(root).expect("active source");
+        let target = create_pending_cloud_account(
+            root,
+            "credential-journal@example.test",
+            "https://qa.example.test",
+        )
+        .expect("target account");
+        prepare_account_switch(root, &target.id).expect("prepared switch");
+        assert_eq!(
+            switch_status(root).expect("status").phase,
+            Some(SwitchPhase::Prepared)
+        );
+
+        let backend = seeded();
+        *backend.fail_set.lock().expect("flag") = true;
+        let error = migrate_with(&backend, &target.id).expect_err("credential failure");
+        assert!(error.contains("simulated set failure"));
+        assert_eq!(
+            switch_status(root)
+                .expect("status after credential failure")
+                .phase,
+            Some(SwitchPhase::Prepared),
+            "credential failure must not advance or corrupt the switch journal"
+        );
+        let values = backend.values.lock().expect("values");
+        assert_eq!(
+            values.get(LEGACY_REFRESH_TOKEN_KEY).map(String::as_str),
+            Some("legacy-token")
+        );
+        assert!(!values.contains_key(&refresh_token_key(&target.id).expect("target key")));
+        drop(values);
+
+        recover_pending_switch(root).expect("recover prepared journal");
+        assert_eq!(
+            switch_status(root).expect("status after recovery").phase,
+            None
+        );
     }
 
     #[test]
