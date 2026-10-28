@@ -1,7 +1,8 @@
 ﻿param(
   [string]$Exe,
   [string]$ShortcutPath,
-  [string]$AppUserModelId = "app.shishi.todo.qa.poc"
+  [string]$AppUserModelId = "app.shishi.todo.qa.poc",
+  [string]$ToastActivatorClsid = "{11111111-2222-3333-4444-555555555555}"
 )
 $ErrorActionPreference = "Stop"
 if (-not (Test-Path $Exe)) { throw "missing exe: $Exe" }
@@ -53,17 +54,29 @@ public static class ShellShortcutAumid {
   }
   [DllImport("ole32.dll")]
   static extern int PropVariantClear(ref PROPVARIANT pv);
-  public static void Create(string exe, string shortcut, string aumid) {
+  public static void Create(string exe, string shortcut, string aumid, string activatorClsid) {
     var link = (IShellLinkW)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
     link.SetPath(exe); link.SetWorkingDirectory(System.IO.Path.GetDirectoryName(exe));
     var store = (IPropertyStore)link;
     var key = new PROPERTYKEY(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);
     var pv = new PROPVARIANT { vt = 31, pointer = Marshal.StringToCoTaskMemUni(aumid) };
-    try { store.SetValue(ref key, ref pv); store.Commit(); } finally { PropVariantClear(ref pv); }
+    var activatorKey = new PROPERTYKEY(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 26);
+    var activatorGuid = Guid.Parse(activatorClsid);
+    var activatorPtr = Marshal.AllocCoTaskMem(16);
+    Marshal.StructureToPtr(activatorGuid, activatorPtr, false);
+    var activatorPv = new PROPVARIANT { vt = 72, pointer = activatorPtr };
+    try {
+      store.SetValue(ref key, ref pv);
+      store.SetValue(ref activatorKey, ref activatorPv);
+      store.Commit();
+    } finally {
+      PropVariantClear(ref pv);
+      PropVariantClear(ref activatorPv);
+    }
     ((IPersistFile)link).Save(shortcut, true);
   }
 }
 "@
 Add-Type -TypeDefinition $code
-[ShellShortcutAumid]::Create((Resolve-Path $Exe).Path, $ShortcutPath, $AppUserModelId)
+[ShellShortcutAumid]::Create((Resolve-Path $Exe).Path, $ShortcutPath, $AppUserModelId, $ToastActivatorClsid)
 Write-Output "shortcut=$ShortcutPath aumid=$AppUserModelId"
