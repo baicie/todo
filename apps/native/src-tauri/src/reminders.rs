@@ -212,6 +212,15 @@ fn permission_label(result: Result<PermissionState, tauri_plugin_notification::E
     .to_owned()
 }
 
+/// Windows notification action routing is experimental until the Windows App
+/// SDK registration/activation path is accepted on a real interactive desktop.
+/// Production Windows builds therefore show the reminder body but do not expose
+/// the "打开任务" action; QA builds retain it for the isolated harness.
+#[cfg(all(windows, not(feature = "native-qa")))]
+const NOTIFICATION_ACTIONS_ENABLED: bool = false;
+#[cfg(any(not(windows), feature = "native-qa"))]
+const NOTIFICATION_ACTIONS_ENABLED: bool = true;
+
 #[cfg(desktop)]
 fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
     let mut notification_sequence = 0u64;
@@ -240,7 +249,12 @@ fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
                         .builder()
                         .title(reminder.title)
                         .body(body);
-                    if let Some(target) = target {
+                    if !NOTIFICATION_ACTIONS_ENABLED && target.is_some() {
+                        eprintln!(
+                            "shishi: Windows notification actions are disabled until platform verification"
+                        );
+                    }
+                    if let Some(target) = target.filter(|_| NOTIFICATION_ACTIONS_ENABLED) {
                         use tauri_plugin_notification::{Action, ActionType};
                         let action_type =
                             ActionType::builder(crate::notification_activation::ACTION_TYPE_ID)
@@ -391,5 +405,16 @@ impl ReminderAdapter for MobileReminderAdapter {
 
     fn request_permission(&self) -> Result<String, String> {
         self.app.shishi_reminder().request_permission()
+    }
+}
+
+#[cfg(all(test, windows, not(feature = "native-qa")))]
+mod tests {
+    #[test]
+    fn windows_production_notification_actions_are_disabled() {
+        assert!(
+            !super::NOTIFICATION_ACTIONS_ENABLED,
+            "Windows production actions must stay disabled until platform verification"
+        );
     }
 }
