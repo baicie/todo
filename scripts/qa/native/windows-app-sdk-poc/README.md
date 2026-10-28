@@ -11,12 +11,12 @@ Official .NET 8 + Windows App SDK project (not naked csc/WinMD):
 
 Current result:
 
-| Variant | Build | Default | Register |
-| --- | --- | --- | --- |
-| A framework + auto bootstrap | PASS | OK | 0x80040154 |
-| B framework + explicit bootstrap | PASS | OK | 0x80040154 |
-| C self-contained + explicit bootstrap | PASS | OK | 0x80040154 |
-| D self-contained + no bootstrap | PASS | 0x80040154 | not reached |
+| Variant                               | Build | Default    | Register    |
+| ------------------------------------- | ----- | ---------- | ----------- |
+| A framework + auto bootstrap          | PASS  | OK         | 0x80040154  |
+| B framework + explicit bootstrap      | PASS  | OK         | 0x80040154  |
+| C self-contained + explicit bootstrap | PASS  | OK         | 0x80040154  |
+| D self-contained + no bootstrap       | PASS  | 0x80040154 | not reached |
 
 Bootstrap + AUMID set (`app.shishi.todo.qa.poc`) still fails at
 `Register()` with `REGDB_E_CLASSNOTREG`. This is not a deployment-mode-only

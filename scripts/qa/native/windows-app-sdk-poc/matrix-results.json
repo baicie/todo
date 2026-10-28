@@ -5,10 +5,38 @@
   "appSdkVersion": "1.8.250907003",
   "runtimeArchitecture": "x64",
   "variants": [
-    {"name":"A-framework-auto","selfContained":false,"noBootstrap":true,"build":true,"default":"OK","register":"0x80040154"},
-    {"name":"B-framework-explicit","selfContained":false,"noBootstrap":false,"build":true,"default":"OK","register":"0x80040154"},
-    {"name":"C-selfcontained-explicit","selfContained":true,"noBootstrap":false,"build":true,"default":"OK","register":"0x80040154"},
-    {"name":"D-selfcontained-auto","selfContained":true,"noBootstrap":true,"build":true,"default":"0x80040154","register":"NOT_REACHED"}
+    {
+      "name": "A-framework-auto",
+      "selfContained": false,
+      "noBootstrap": true,
+      "build": true,
+      "default": "OK",
+      "register": "0x80040154"
+    },
+    {
+      "name": "B-framework-explicit",
+      "selfContained": false,
+      "noBootstrap": false,
+      "build": true,
+      "default": "OK",
+      "register": "0x80040154"
+    },
+    {
+      "name": "C-selfcontained-explicit",
+      "selfContained": true,
+      "noBootstrap": false,
+      "build": true,
+      "default": "OK",
+      "register": "0x80040154"
+    },
+    {
+      "name": "D-selfcontained-auto",
+      "selfContained": true,
+      "noBootstrap": true,
+      "build": true,
+      "default": "0x80040154",
+      "register": "NOT_REACHED"
+    }
   ],
   "conclusion": "All deployment modes fail at AppNotificationManager.Register (or constructor without explicit bootstrap); deployment-mode conflict is excluded as the sole cause. Exact CLSID is not exposed by managed exception; classification UNKNOWN_WITH_DIAGNOSTICS / COM_REGISTRATION_MISSING candidate."
 }
