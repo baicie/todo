@@ -15,15 +15,18 @@ Official .NET 8 + Windows App SDK project (not naked csc/WinMD):
 
 Current results:
 
-| Variant | Build | Default | Register |
-| --- | --- | --- | --- |
-| A framework + auto | PASS | OK | 0x80040154 |
-| B framework + explicit | PASS | OK | 0x80040154 |
-| C self-contained + explicit | PASS | OK | 0x80040154 |
-| D self-contained + no bootstrap | PASS | 0x80040154 | not reached |
+| Variant                         | Build | Default    | Register    |
+| ------------------------------- | ----- | ---------- | ----------- |
+| A framework + auto              | PASS  | OK         | 0x80040154  |
+| B framework + explicit          | PASS  | OK         | 0x80040154  |
+| C self-contained + explicit     | PASS  | OK         | 0x80040154  |
+| D self-contained + no bootstrap | PASS  | 0x80040154 | not reached |
 
 Direct `PushNotifications_RegisterFullTrustApplication` returns `0`; the
-remaining failure is in `Register()`'s COM server registration path. A Start
+remaining failure is in `Register()`'s COM server registration path. An explicit
+`CoInitializeEx(COINIT_APARTMENTTHREADED)` returns `0x80010106`
+(`RPC_E_CHANGED_MODE`) because the .NET/WinRT thread is already MTA, so COM
+apartment initialization is not the missing step. A Start
 Menu shortcut with AUMID/ToastActivatorCLSID and a built MSIX control did not
 produce a successful Register: MSIX installation requires developer/sideload
 policy and a trusted signing root (no elevation in this session). The

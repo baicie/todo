@@ -29,6 +29,12 @@ internal static class Program
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
+    [DllImport("ole32.dll")]
+    private static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+    [DllImport("ole32.dll")]
+    private static extern void CoUninitialize();
+
     [DllImport("Microsoft.Internal.FrameworkUdk.dll", CharSet = CharSet.Unicode)]
     private static extern int PushNotifications_RegisterFullTrustApplication(string appId, Guid clsid);
 
@@ -53,6 +59,8 @@ internal static class Program
     {
         try
         {
+            var comHr = CoInitializeEx(IntPtr.Zero, 2);
+            Log("com_initialize_hr=" + comHr);
             Log("start packaged=" + IsPackaged());
             if (!IsPackaged())
             {
@@ -114,6 +122,7 @@ internal static class Program
             if (!IsPackaged()) MddBootstrapShutdown();
 #endif
             Log("unregistered");
+            CoUninitialize();
             Console.WriteLine("POC_STATUS=REGISTERED_SHOWN_UNREGISTERED");
         }
         catch (Exception error)
