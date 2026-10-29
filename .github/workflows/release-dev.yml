@@ -197,7 +197,8 @@ jobs:
           done
           for aab in release-android/*.aab; do
             name=$(basename "$aab")
-            abi=${expected[$name/.aab/.apk]:-}
+            base="${name%.aab}.apk"
+            abi=${expected[$base]:-}
             if [ -z "$abi" ]; then echo "unexpected AAB: $name" >&2; exit 1; fi
             unzip -l "$aab" | grep -q "base/lib/$abi/" || { echo "AAB $name lacks $abi" >&2; exit 1; }
             echo "verified AAB $name -> $abi"
