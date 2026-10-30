@@ -24,6 +24,20 @@
 //!
 //! The retry budget lives on the activation itself, so one activation can never
 //! spend another's reload retry.
+//!
+//! # Clock boundary
+//!
+//! Every state boundary samples the monotonic clock itself - reserve, commit,
+//! restore, reload-requeue and acknowledge. Validation touches the account
+//! registry and SQLite and can outlast the remaining TTL, so a commit that
+//! reused the pre-validation reading could deliver an activation that had
+//! already expired. A commit that finds the activation expired therefore has a
+//! distinct outcome, `ACTIVATION_EXPIRED_DURING_VALIDATION`.
+//!
+//! Each transition also records one bounded, redacted `ActivationDiagnostic`, so
+//! a production rejection can be correlated back to its activation, its
+//! notification instance, the listener session that was delivering and the
+//! attempt number.
 
 use std::{
     collections::VecDeque,
@@ -242,6 +256,204 @@ fn is_accepted_ack_outcome(outcome: &str) -> bool {
     ACCEPTED_ACK_OUTCOMES.contains(&outcome)
 }
 
+/// The one place the delivery state machine reads the monotonic clock.
+///
+/// Every state boundary calls `now` for itself, so no reading is ever carried
+/// across the account/SQLite validation in between. Production compiles this to
+/// `Instant::now()`; a test pins a reading and moves it explicitly, which is why
+/// no TTL case needs a sleep and no test has to subtract from an `Instant`.
+#[derive(Default)]
+struct Clock {
+    #[cfg(test)]
+    pinned: Mutex<Option<Instant>>,
+}
+
+impl Clock {
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(at) = *self.pinned.lock().expect("clock pin") {
+            return at;
+        }
+        Instant::now()
+    }
+
+    #[cfg(test)]
+    fn pin(&self, at: Instant) {
+        *self.pinned.lock().expect("clock pin") = Some(at);
+    }
+}
+
+/// Fixed capacity of the activation diagnostic window. Bounded memory only: the
+/// state machine never writes diagnostics to disk.
+const ACTIVATION_DIAGNOSTIC_CAPACITY: usize = 64;
+
+/// Evidence older than this is dropped, on read and on write.
+const ACTIVATION_DIAGNOSTIC_TTL: Duration = Duration::from_secs(300);
+
+const TERMINAL_ACKED: &str = "acked";
+const TERMINAL_REJECTED: &str = "rejected";
+
+/// The transition an `ActivationDiagnostic` describes. `Acked` and `Rejected` are
+/// the only terminal ones, and an activation owns at most one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationDiagnosticEvent {
+    Delivered,
+    Requeued,
+    Rejected,
+    Acked,
+    DuplicateAck,
+}
+
+impl ActivationDiagnosticEvent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delivered => "delivered",
+            Self::Requeued => "requeued",
+            Self::Rejected => "rejected",
+            Self::Acked => "acked",
+            Self::DuplicateAck => "duplicate_ack",
+        }
+    }
+
+    const fn terminal_outcome(self) -> Option<&'static str> {
+        match self {
+            Self::Rejected => Some(TERMINAL_REJECTED),
+            Self::Acked => Some(TERMINAL_ACKED),
+            Self::Delivered | Self::Requeued | Self::DuplicateAck => None,
+        }
+    }
+}
+
+/// Stable, short fingerprint of a listener session: FNV-1a over the session id.
+/// Correlation needs stability, not secrecy - but the raw session string never
+/// leaves the state machine, so support bundles stay free of it.
+fn session_correlation(session_id: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in session_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// One activation outcome, redacted for production support.
+///
+/// This field set is the whole contract. It deliberately cannot carry a task
+/// title, a task id, task content, an account id, an account email, a refresh
+/// token, raw notification text or any path: a bundle built from these records
+/// must stay a correlation aid and never become a data-leak channel.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationDiagnostic {
+    pub activation_id: String,
+    /// The notification instance the click came from, when the target has one.
+    pub notification_instance_id: Option<String>,
+    pub event_type: &'static str,
+    pub rejection_code: Option<&'static str>,
+    /// `acked` or `rejected` for a terminal record, `None` for every other event.
+    pub terminal_outcome: Option<&'static str>,
+    pub delivery_attempt: u32,
+    /// Fingerprint of the listener session that produced this record.
+    pub session_correlation: String,
+    /// Monotonic milliseconds since the window was created.
+    pub timestamp_millis: u64,
+}
+
+impl ActivationDiagnostic {
+    fn from_activation(
+        activation: &Activation,
+        event: ActivationDiagnosticEvent,
+        session_id: &str,
+        rejection_code: Option<RejectionCode>,
+    ) -> Self {
+        Self {
+            activation_id: activation.activation_id.clone(),
+            notification_instance_id: activation.target.notification_id.clone(),
+            event_type: event.as_str(),
+            rejection_code: rejection_code.map(RejectionCode::as_str),
+            terminal_outcome: event.terminal_outcome(),
+            delivery_attempt: activation.meta.attempts,
+            session_correlation: session_correlation(session_id),
+            timestamp_millis: 0,
+        }
+    }
+
+    fn duplicate_ack(acked: &AckedActivation, session_id: &str) -> Self {
+        Self {
+            activation_id: acked.activation_id.clone(),
+            notification_instance_id: acked.notification_instance_id.clone(),
+            event_type: ActivationDiagnosticEvent::DuplicateAck.as_str(),
+            rejection_code: None,
+            terminal_outcome: None,
+            delivery_attempt: acked.delivery_attempt,
+            session_correlation: session_correlation(session_id),
+            timestamp_millis: 0,
+        }
+    }
+}
+
+/// Bounded ring of activation evidence: fixed capacity, fixed TTL, pruned on
+/// read and on write, never persisted. Recording is best effort by
+/// construction - it returns nothing and cannot change a delivery outcome.
+#[derive(Default)]
+struct ActivationDiagnostics {
+    entries: VecDeque<ActivationDiagnostic>,
+    /// Origin of the monotonic `timestamp_millis` column.
+    origin: Option<Instant>,
+}
+
+impl ActivationDiagnostics {
+    fn record(
+        &mut self,
+        activation: &Activation,
+        event: ActivationDiagnosticEvent,
+        session_id: &str,
+        rejection_code: Option<RejectionCode>,
+        now: Instant,
+    ) {
+        let diagnostic =
+            ActivationDiagnostic::from_activation(activation, event, session_id, rejection_code);
+        self.push(diagnostic, now);
+    }
+
+    fn record_duplicate_ack(&mut self, acked: &AckedActivation, session_id: &str, now: Instant) {
+        self.push(ActivationDiagnostic::duplicate_ack(acked, session_id), now);
+    }
+
+    /// Stamp, prune, then apply the capacity bound: expired evidence must never
+    /// evict fresh evidence.
+    fn push(&mut self, mut diagnostic: ActivationDiagnostic, now: Instant) {
+        diagnostic.timestamp_millis = self.stamp(now);
+        self.prune(now);
+        while self.entries.len() >= ACTIVATION_DIAGNOSTIC_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(diagnostic);
+    }
+
+    fn stamp(&mut self, now: Instant) -> u64 {
+        let origin = *self.origin.get_or_insert(now);
+        u64::try_from(now.saturating_duration_since(origin).as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn prune(&mut self, now: Instant) {
+        let Some(origin) = self.origin else {
+            return;
+        };
+        let ttl = u64::try_from(ACTIVATION_DIAGNOSTIC_TTL.as_millis()).unwrap_or(u64::MAX);
+        let age =
+            u64::try_from(now.saturating_duration_since(origin).as_millis()).unwrap_or(u64::MAX);
+        self.entries
+            .retain(|entry| age.saturating_sub(entry.timestamp_millis) < ttl);
+    }
+
+    /// Read side of the prune: a snapshot never contains expired evidence.
+    fn snapshot(&mut self, now: Instant) -> Vec<ActivationDiagnostic> {
+        self.prune(now);
+        self.entries.iter().cloned().collect()
+    }
+}
+
 struct ReservedActivation {
     /// Reservation identity. A commit or restore only applies to the reservation
     /// it owns, so a stale holder can neither commit nor displace another one.
@@ -260,8 +472,13 @@ struct CompletedActivation {
     opened_at: Instant,
 }
 
+/// Terminal ACK record. It carries the handful of redacted fields a duplicate
+/// ACK needs to correlate itself to the activation that already ended.
+#[derive(Clone)]
 struct AckedActivation {
     activation_id: String,
+    notification_instance_id: Option<String>,
+    delivery_attempt: u32,
 }
 
 /// Everything the delivery state machine owns, behind one lock.
@@ -274,6 +491,7 @@ struct DeliveryState {
     completed: VecDeque<CompletedActivation>,
     acked: VecDeque<AckedActivation>,
     rejections: VecDeque<RejectedActivation>,
+    diagnostics: ActivationDiagnostics,
     next_ticket: u64,
     #[cfg(test)]
     audit: AuditLedger,
@@ -300,47 +518,78 @@ impl DeliveryState {
 
     /// Terminal outcome: the activation was delivered and acknowledged. The
     /// bounded ACK record makes a duplicate ACK idempotent.
-    fn terminate_acked(&mut self, activation_id: &str) {
+    fn terminate_acked(&mut self, activation: &Activation, session_id: &str, now: Instant) {
         self.acked.push_back(AckedActivation {
-            activation_id: activation_id.to_owned(),
+            activation_id: activation.activation_id.clone(),
+            notification_instance_id: activation.target.notification_id.clone(),
+            delivery_attempt: activation.meta.attempts,
         });
         while self.acked.len() > ACKED_ID_CAPACITY {
             self.acked.pop_front();
         }
+        self.diagnostics.record(
+            activation,
+            ActivationDiagnosticEvent::Acked,
+            session_id,
+            None,
+            now,
+        );
         #[cfg(test)]
-        self.audit.terminate(activation_id, Terminal::Acked);
+        self.audit
+            .terminate(&activation.activation_id, Terminal::Acked);
     }
 
     /// Terminal outcome: the activation will never be delivered, and the reason
     /// is observable through the bounded rejection queue.
-    fn terminate_rejected(&mut self, _activation_id: &str, code: RejectionCode) {
-        // The id is consumed by the test-only accounting audit; the bounded
-        // rejection is the production evidence the WebView needs.
+    fn terminate_rejected(
+        &mut self,
+        activation: &Activation,
+        code: RejectionCode,
+        session_id: &str,
+        now: Instant,
+    ) {
+        // The bounded rejection is what the WebView shows; the redacted
+        // diagnostic is what lets production correlate it to the activation.
         self.push_rejection(RejectedActivation::from_code(code));
+        self.diagnostics.record(
+            activation,
+            ActivationDiagnosticEvent::Rejected,
+            session_id,
+            Some(code),
+            now,
+        );
         #[cfg(test)]
-        self.audit.terminate(_activation_id, Terminal::Rejected);
+        self.audit
+            .terminate(&activation.activation_id, Terminal::Rejected);
     }
 
     /// Admit a new activation. Capacity counts every held activation, and a
     /// displacement is always observable: reserved and in-flight slots belong to
     /// a delivery in progress and are never touched here.
-    fn admit(&mut self, activation: Activation) {
+    fn admit(&mut self, activation: Activation, now: Instant) {
         #[cfg(test)]
         self.audit.admit(&activation.activation_id);
+        // A displaced activation is attributed to the listener session that
+        // would have received it, if one is registered.
+        let session_id = self.session_id.clone().unwrap_or_default();
         if self.live_count() >= ACTIVATION_CAPACITY
             && let Some(victim) = self.pending.pop_front()
         {
             self.terminate_rejected(
-                &victim.activation_id,
+                &victim,
                 RejectionCode::ActivationQueueOverflow,
+                &session_id,
+                now,
             );
         }
         if self.live_count() >= ACTIVATION_CAPACITY {
             // Unreachable while the cap exceeds the reserved/in-flight slots, so
             // the arrival itself is rejected rather than admitted over the cap.
             self.terminate_rejected(
-                &activation.activation_id,
+                &activation,
                 RejectionCode::ActivationQueueOverflow,
+                &session_id,
+                now,
             );
             return;
         }
@@ -391,12 +640,25 @@ impl DeliveryState {
                     self.completed.pop_front();
                 }
             }
-            self.terminate_acked(&in_flight.activation.activation_id);
+            self.terminate_acked(&in_flight.activation, session_id, now);
             return true;
         }
-        self.acked
+        // A duplicate ACK is idempotent. It gets a non-terminal record so the
+        // same activation can be correlated to both the ACK and its repeat
+        // without owning two contradictory terminals.
+        let duplicate = self
+            .acked
             .iter()
-            .any(|acked| acked.activation_id == activation_id)
+            .find(|acked| acked.activation_id == activation_id)
+            .cloned();
+        match duplicate {
+            Some(acked) => {
+                self.diagnostics
+                    .record_duplicate_ack(&acked, session_id, now);
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -417,6 +679,9 @@ enum CommitOutcome {
     Committed(Activation),
     /// The activation reached a terminal state (expiry) with evidence recorded.
     Expired,
+    /// The reserve boundary accepted the activation, but validation outlived the
+    /// remaining TTL and the commit boundary found it expired.
+    ExpiredDuringValidation,
     /// The reservation was restored to the queue or was no longer ours.
     Relinquished,
     Poisoned,
@@ -429,7 +694,6 @@ enum CommitOutcome {
 struct ReservationGuard<'a> {
     state: &'a NotificationActivationState,
     ticket: u64,
-    now: Instant,
     resolved: bool,
 }
 
@@ -442,7 +706,9 @@ impl ReservationGuard<'_> {
 impl Drop for ReservationGuard<'_> {
     fn drop(&mut self) {
         if !self.resolved {
-            self.state.restore_reservation(self.ticket, self.now);
+            // The restore boundary takes its own reading: a panic during a slow
+            // validation must not resurrect a stale instant.
+            self.state.restore_reservation(self.ticket);
         }
     }
 }
@@ -451,6 +717,8 @@ impl Drop for ReservationGuard<'_> {
 pub struct NotificationActivationState {
     state: Mutex<DeliveryState>,
     sequence: AtomicU64,
+    /// Every state boundary samples this; see `Clock`.
+    clock: Clock,
 }
 
 impl NotificationActivationState {
@@ -469,13 +737,21 @@ impl NotificationActivationState {
         }
     }
 
+    /// Admit boundary: the admission instant is sampled here.
     fn put(&self, activation: Activation) {
-        self.put_at(activation, Instant::now());
+        self.admit_at(activation, self.clock.now());
     }
 
-    fn put_at(&self, mut activation: Activation, now: Instant) {
+    fn admit_at(&self, mut activation: Activation, now: Instant) {
         activation.meta = ActivationMeta::admitted_at(now);
-        let _ = self.with_state(|state| state.admit(activation));
+        let _ = self.with_state(|state| state.admit(activation, now));
+    }
+
+    /// Test entry point: run the admit boundary as if the clock reads `now`.
+    #[cfg(test)]
+    fn put_at(&self, activation: Activation, now: Instant) {
+        self.clock.pin(now);
+        self.put(activation);
     }
 
     /// Test-only raw pop. Bypasses delivery accounting, so tests that audit the
@@ -499,10 +775,9 @@ impl NotificationActivationState {
     /// lose the click. The retry budget belongs to that activation: its second
     /// reload expires it instead of delivering it a third time.
     pub fn listener_ready(&self, session_id: &str) -> bool {
-        self.listener_ready_at(session_id, Instant::now())
-    }
-
-    fn listener_ready_at(&self, session_id: &str, now: Instant) -> bool {
+        // Reload-requeue boundary: the requeue-versus-expire decision samples
+        // the clock here, never at the caller.
+        let now = self.clock.now();
         if !valid_component(session_id) {
             return false;
         }
@@ -514,11 +789,20 @@ impl NotificationActivationState {
                     || activation.is_expired(now)
                 {
                     state.terminate_rejected(
-                        &activation.activation_id,
+                        &activation,
                         RejectionCode::ActivationExpired,
+                        &in_flight.session_id,
+                        now,
                     );
                 } else {
                     activation.meta.requeues_used = activation.meta.requeues_used.saturating_add(1);
+                    state.diagnostics.record(
+                        &activation,
+                        ActivationDiagnosticEvent::Requeued,
+                        &in_flight.session_id,
+                        None,
+                        now,
+                    );
                     // Ownership transfer inside one critical section: the slot is
                     // already accounted for, so capacity policy does not apply.
                     state.pending.push_front(activation);
@@ -529,9 +813,18 @@ impl NotificationActivationState {
         .is_some()
     }
 
+    /// Test entry point: run the reload boundary as if the clock reads `now`.
+    #[cfg(test)]
+    fn listener_ready_at(&self, session_id: &str, now: Instant) -> bool {
+        self.clock.pin(now);
+        self.listener_ready(session_id)
+    }
+
     /// Reserve the front activation for a session - one critical section, no
     /// window in which the activation is accounted for nowhere.
-    fn reserve_for_session(&self, session_id: &str, now: Instant) -> ReserveOutcome {
+    fn reserve_for_session(&self, session_id: &str) -> ReserveOutcome {
+        // Reserve boundary.
+        let now = self.clock.now();
         self.with_state(|state| {
             if state.session_id.as_deref() != Some(session_id)
                 || state.in_flight.is_some()
@@ -545,13 +838,15 @@ impl NotificationActivationState {
             if state.completed_target_at(&activation.target, now) {
                 // A duplicate click of a target that already opened must not open
                 // it again; its terminal evidence is the bounded ACK record.
-                state.terminate_acked(&activation.activation_id);
+                state.terminate_acked(&activation, session_id, now);
                 return ReserveOutcome::Drained;
             }
             if activation.is_expired(now) {
                 state.terminate_rejected(
-                    &activation.activation_id,
+                    &activation,
                     RejectionCode::ActivationExpired,
+                    session_id,
+                    now,
                 );
                 return ReserveOutcome::Drained;
             }
@@ -568,13 +863,11 @@ impl NotificationActivationState {
     }
 
     /// Promote our reservation to the in-flight slot, or hand it back / reject it.
-    fn commit_reservation(
-        &self,
-        ticket: u64,
-        session_id: &str,
-        task_title: &str,
-        now: Instant,
-    ) -> CommitOutcome {
+    fn commit_reservation(&self, ticket: u64, session_id: &str, task_title: &str) -> CommitOutcome {
+        // Commit boundary. Validation (account registry + SQLite) ran since the
+        // reserve boundary and may have spent the whole remaining TTL, so this
+        // reading is the only one that may decide expiry.
+        let now = self.clock.now();
         self.with_state(|state| {
             let Some(reserved) = state.reserved.take() else {
                 return CommitOutcome::Relinquished;
@@ -589,10 +882,23 @@ impl NotificationActivationState {
             }
             let mut activation = reserved.activation;
             activation.task_title = task_title.to_owned();
-            if activation.is_expired(now) || activation.meta.attempts >= MAX_DELIVERY_ATTEMPTS {
+            if activation.is_expired(now) {
+                // The reserve boundary already rejected anything stale, so
+                // reaching this branch means validation crossed the TTL.
                 state.terminate_rejected(
-                    &activation.activation_id,
+                    &activation,
+                    RejectionCode::ActivationExpiredDuringValidation,
+                    session_id,
+                    now,
+                );
+                return CommitOutcome::ExpiredDuringValidation;
+            }
+            if activation.meta.attempts >= MAX_DELIVERY_ATTEMPTS {
+                state.terminate_rejected(
+                    &activation,
                     RejectionCode::ActivationExpired,
+                    session_id,
+                    now,
                 );
                 return CommitOutcome::Expired;
             }
@@ -603,6 +909,13 @@ impl NotificationActivationState {
                 return CommitOutcome::Relinquished;
             }
             activation.meta.attempts = activation.meta.attempts.saturating_add(1);
+            state.diagnostics.record(
+                &activation,
+                ActivationDiagnosticEvent::Delivered,
+                session_id,
+                None,
+                now,
+            );
             let delivered = activation.clone();
             state.in_flight = Some(InFlightActivation {
                 activation,
@@ -615,6 +928,8 @@ impl NotificationActivationState {
 
     /// Terminal for a reservation whose validation failed.
     fn reject_reservation(&self, ticket: u64, code: RejectionCode) {
+        // Validation-failure boundary.
+        let now = self.clock.now();
         let _ = self.with_state(|state| {
             let Some(reserved) = state.reserved.take() else {
                 return;
@@ -623,14 +938,16 @@ impl NotificationActivationState {
                 state.reserved = Some(reserved);
                 return;
             }
-            state.terminate_rejected(&reserved.activation.activation_id, code);
+            state.terminate_rejected(&reserved.activation, code, &reserved.session_id, now);
         });
     }
 
     /// Hand an unresolved reservation back to the queue front (same position it
     /// was taken from). On a poisoned lock the slot simply stays accounted for in
     /// the reserved state, which is inspectable, rather than being lost.
-    fn restore_reservation(&self, ticket: u64, now: Instant) {
+    fn restore_reservation(&self, ticket: u64) {
+        // Restore boundary.
+        let now = self.clock.now();
         let _ = self.with_state(|state| {
             let Some(reserved) = state.reserved.take() else {
                 return;
@@ -641,8 +958,10 @@ impl NotificationActivationState {
             }
             if reserved.activation.is_expired(now) {
                 state.terminate_rejected(
-                    &reserved.activation.activation_id,
+                    &reserved.activation,
                     RejectionCode::ActivationExpired,
+                    &reserved.session_id,
+                    now,
                 );
                 return;
             }
@@ -655,20 +974,6 @@ impl NotificationActivationState {
     fn take_for_listener<F, R>(
         &self,
         session_id: &str,
-        validate: F,
-        reject: R,
-    ) -> Option<Activation>
-    where
-        F: FnMut(&Activation) -> Result<String, RejectionCode>,
-        R: FnMut(RejectionCode),
-    {
-        self.take_for_listener_at(session_id, Instant::now(), validate, reject)
-    }
-
-    fn take_for_listener_at<F, R>(
-        &self,
-        session_id: &str,
-        now: Instant,
         mut validate: F,
         mut reject: R,
     ) -> Option<Activation>
@@ -677,7 +982,10 @@ impl NotificationActivationState {
         R: FnMut(RejectionCode),
     {
         for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
-            let (ticket, activation) = match self.reserve_for_session(session_id, now) {
+            // Each boundary samples the clock for itself. A validation that
+            // outlives the remaining TTL is caught at commit instead of
+            // inheriting a reading taken before the account/SQLite work.
+            let (ticket, activation) = match self.reserve_for_session(session_id) {
                 ReserveOutcome::Reserved { ticket, activation } => (ticket, activation),
                 ReserveOutcome::Drained => continue,
                 ReserveOutcome::Unavailable => return None,
@@ -685,29 +993,26 @@ impl NotificationActivationState {
             let mut reservation = ReservationGuard {
                 state: self,
                 ticket,
-                now,
                 resolved: false,
             };
             // The account registry and SQLite are touched here: never hold the
             // state lock across validation.
             match validate(&activation) {
-                Ok(task_title) => {
-                    match self.commit_reservation(ticket, session_id, &task_title, now) {
-                        CommitOutcome::Committed(delivered) => {
-                            reservation.resolve();
-                            return Some(delivered);
-                        }
-                        CommitOutcome::Expired => {
-                            reservation.resolve();
-                            continue;
-                        }
-                        CommitOutcome::Relinquished => {
-                            reservation.resolve();
-                            return None;
-                        }
-                        CommitOutcome::Poisoned => return None,
+                Ok(task_title) => match self.commit_reservation(ticket, session_id, &task_title) {
+                    CommitOutcome::Committed(delivered) => {
+                        reservation.resolve();
+                        return Some(delivered);
                     }
-                }
+                    CommitOutcome::Expired | CommitOutcome::ExpiredDuringValidation => {
+                        reservation.resolve();
+                        continue;
+                    }
+                    CommitOutcome::Relinquished => {
+                        reservation.resolve();
+                        return None;
+                    }
+                    CommitOutcome::Poisoned => return None,
+                },
                 Err(code) => {
                     self.reject_reservation(ticket, code);
                     reservation.resolve();
@@ -719,16 +1024,42 @@ impl NotificationActivationState {
         None
     }
 
+    /// Test entry point: run the drain as if every boundary read `now` - unless
+    /// `validate` moves the clock, in which case commit sees the moved reading.
+    #[cfg(test)]
+    fn take_for_listener_at<F, R>(
+        &self,
+        session_id: &str,
+        now: Instant,
+        validate: F,
+        reject: R,
+    ) -> Option<Activation>
+    where
+        F: FnMut(&Activation) -> Result<String, RejectionCode>,
+        R: FnMut(RejectionCode),
+    {
+        self.clock.pin(now);
+        self.take_for_listener(session_id, validate, reject)
+    }
+
+    /// Read-only snapshot of the bounded, pruned activation diagnostic window.
+    pub fn activation_diagnostics(&self) -> Vec<ActivationDiagnostic> {
+        // Read boundary: stale evidence is dropped here.
+        let now = self.clock.now();
+        self.with_state(|state| state.diagnostics.snapshot(now))
+            .unwrap_or_default()
+    }
+
     /// Acknowledge the delivery outcome. Duplicate ACKs are idempotent; unknown
     /// ids or unknown outcomes fail closed.
     pub fn acknowledge(&self, session_id: &str, activation_id: &str, outcome: &str) -> bool {
         if !is_accepted_ack_outcome(outcome) {
             return false;
         }
-        self.with_state(|state| {
-            state.acknowledge(session_id, activation_id, outcome, Instant::now())
-        })
-        .unwrap_or(false)
+        // ACK boundary.
+        let now = self.clock.now();
+        self.with_state(|state| state.acknowledge(session_id, activation_id, outcome, now))
+            .unwrap_or(false)
     }
 }
 
@@ -778,6 +1109,7 @@ impl NotificationActivationState {
     }
 
     fn completed_target_at(&self, target: &NotificationTargetV1, now: Instant) -> bool {
+        self.clock.pin(now);
         self.with_state(|state| state.completed_target_at(target, now))
             .unwrap_or(true)
     }
@@ -874,6 +1206,11 @@ enum RejectionCode {
     TaskNotFound,
     TaskReadFailed,
     ActivationExpired,
+    /// The reserve boundary accepted the activation but validation outlived the
+    /// remaining TTL, so the commit boundary found it expired. Kept distinct
+    /// from a plain expiry so production can tell a slow validation apart from
+    /// a click that was already stale when it was picked up.
+    ActivationExpiredDuringValidation,
     ActivationQueueOverflow,
 }
 
@@ -889,6 +1226,7 @@ impl RejectionCode {
             Self::TaskNotFound => "TASK_NOT_FOUND",
             Self::TaskReadFailed => "TASK_READ_FAILED",
             Self::ActivationExpired => "ACTIVATION_EXPIRED",
+            Self::ActivationExpiredDuringValidation => "ACTIVATION_EXPIRED_DURING_VALIDATION",
             Self::ActivationQueueOverflow => "ACTIVATION_QUEUE_OVERFLOW",
         }
     }
@@ -906,7 +1244,9 @@ impl RejectionCode {
             Self::AccountSwitchInProgress => "账号切换进行中，请稍后重试",
             Self::TaskNotFound => "提醒对应的任务已删除或不可见",
             Self::TaskReadFailed => "暂时无法读取提醒对应的任务",
-            Self::ActivationExpired => "提醒已过期，请重新打开任务",
+            Self::ActivationExpired | Self::ActivationExpiredDuringValidation => {
+                "提醒已过期，请重新打开任务"
+            }
             Self::ActivationQueueOverflow => "提醒打开过于频繁，请稍后重新打开任务",
         }
     }
@@ -1363,6 +1703,10 @@ mod tests {
             (RejectionCode::TaskNotFound, "TASK_NOT_FOUND"),
             (RejectionCode::TaskReadFailed, "TASK_READ_FAILED"),
             (RejectionCode::ActivationExpired, "ACTIVATION_EXPIRED"),
+            (
+                RejectionCode::ActivationExpiredDuringValidation,
+                "ACTIVATION_EXPIRED_DURING_VALIDATION",
+            ),
             (
                 RejectionCode::ActivationQueueOverflow,
                 "ACTIVATION_QUEUE_OVERFLOW",
@@ -2355,5 +2699,752 @@ mod tests {
             state.assert_audit();
         }
         assert!(admitted > 0 && !delivered.is_empty());
+    }
+
+    // -- clock boundary: TTL is decided at the boundary that observes it ------
+
+    /// Admit at T0, reserve at T0+290s, let validation finish `validation_took`
+    /// later, and report (delivered, rejection code). Moving the injected clock
+    /// inside `validate` is how a test simulates a slow account/SQLite read
+    /// without sleeping.
+    fn deliver_after_slow_validation(validation_took: Duration) -> (bool, Option<String>) {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("slow", "task-slow"), t0);
+        let reserved_at = after(t0, Duration::from_secs(290));
+        assert!(state.listener_ready_at("s1", reserved_at));
+        let delivered = state.take_for_listener(
+            "s1",
+            |_| {
+                state.clock.pin(reserved_at + validation_took);
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        let code = state
+            .take_rejection()
+            .map(|rejection| rejection.code.to_owned());
+        state.assert_audit();
+        (delivered.is_some(), code)
+    }
+
+    #[test]
+    fn ttl_boundary_just_inside_the_budget_is_delivered() {
+        let (delivered, code) = deliver_after_slow_validation(Duration::from_micros(9_999_000));
+        assert!(delivered, "an age of 299.999s is still inside the TTL");
+        assert_eq!(code, None);
+    }
+
+    #[test]
+    fn ttl_boundary_exactly_at_the_budget_is_expired() {
+        // Boundary definition: the TTL is exclusive. An age of exactly 300s is
+        // already expired, which is the same `>=` rule `ActivationMeta` uses.
+        let (delivered, code) = deliver_after_slow_validation(Duration::from_secs(10));
+        assert!(!delivered, "an age of exactly 300s is expired");
+        assert_eq!(
+            code.as_deref(),
+            Some("ACTIVATION_EXPIRED_DURING_VALIDATION")
+        );
+    }
+
+    #[test]
+    fn ttl_boundary_just_past_the_budget_is_expired() {
+        let (delivered, code) = deliver_after_slow_validation(Duration::from_micros(10_001_000));
+        assert!(!delivered);
+        assert_eq!(
+            code.as_deref(),
+            Some("ACTIVATION_EXPIRED_DURING_VALIDATION")
+        );
+    }
+
+    #[test]
+    fn slow_validation_across_the_ttl_boundary_is_rejected_at_commit() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("slow", "task-slow"), t0);
+        // Reserve succeeds with 10s of TTL still left.
+        assert!(state.listener_ready_at("s1", after(t0, Duration::from_secs(290))));
+        let delivered = state.take_for_listener(
+            "s1",
+            |_| {
+                // Validation finishes 11s later: the commit boundary must judge
+                // expiry by its own reading, not by the reserve reading.
+                state.clock.pin(after(t0, Duration::from_secs(301)));
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        assert!(
+            delivered.is_none(),
+            "an activation that expired during validation must never be delivered"
+        );
+        assert_eq!(
+            state.take_rejection().expect("commit-time expiry").code,
+            "ACTIVATION_EXPIRED_DURING_VALIDATION"
+        );
+        assert!(state.take_rejection().is_none());
+        state.assert_audit();
+
+        let diagnostics = state.activation_diagnostics();
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "no delivery record for a rejected commit"
+        );
+        assert_eq!(diagnostics[0].activation_id, "slow");
+        assert_eq!(diagnostics[0].event_type, "rejected");
+        assert_eq!(diagnostics[0].terminal_outcome, Some("rejected"));
+        assert_eq!(
+            diagnostics[0].rejection_code,
+            Some("ACTIVATION_EXPIRED_DURING_VALIDATION")
+        );
+        assert_eq!(
+            diagnostics[0].session_correlation,
+            session_correlation("s1")
+        );
+        assert_eq!(diagnostics[0].delivery_attempt, 0);
+    }
+
+    #[test]
+    fn delayed_validation_inside_the_ttl_is_delivered() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("slow-ok", "task-ok"), t0);
+        assert!(state.listener_ready_at("s1", t0));
+        let delivered = state.take_for_listener(
+            "s1",
+            |_| {
+                // 299s of validation, still inside the TTL.
+                state.clock.pin(after(t0, Duration::from_secs(299)));
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        assert_eq!(
+            delivered.map(|activation| activation.activation_id),
+            Some("slow-ok".to_owned())
+        );
+        let diagnostics = state.activation_diagnostics();
+        let record = diagnostics.last().expect("delivery record");
+        assert_eq!(record.event_type, "delivered");
+        assert_eq!(record.delivery_attempt, 1);
+        assert_eq!(record.terminal_outcome, None);
+        state.assert_audit();
+    }
+
+    #[test]
+    fn reload_after_expiry_rejects_the_in_flight_activation() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(
+            activation_with_notification("stale", "task-1", "notif-1"),
+            t0,
+        );
+        assert!(state.listener_ready_at("s1", t0));
+        assert_eq!(deliver_at(&state, "s1", t0), Some("stale".to_owned()));
+        // The reload arrives past the TTL: the requeue boundary expires it.
+        assert!(
+            state.listener_ready_at("s2", after(t0, ACTIVATION_TTL + Duration::from_millis(1)))
+        );
+        assert_eq!(
+            state.take_rejection().expect("reload expiry").code,
+            "ACTIVATION_EXPIRED"
+        );
+        let diagnostics = state.activation_diagnostics();
+        let rejected = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.event_type == "rejected")
+            .expect("rejection record");
+        assert_eq!(rejected.activation_id, "stale");
+        assert_eq!(
+            rejected.notification_instance_id.as_deref(),
+            Some("notif-1")
+        );
+        assert_eq!(rejected.rejection_code, Some("ACTIVATION_EXPIRED"));
+        // The delivering session is the one that was holding it in flight.
+        assert_eq!(rejected.session_correlation, session_correlation("s1"));
+        assert_eq!(rejected.delivery_attempt, 1);
+        state.assert_audit();
+    }
+
+    #[test]
+    fn session_change_during_a_slow_validation_restores_instead_of_dropping() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("restored", "task-r"), t0);
+        assert!(state.listener_ready_at("s1", t0));
+        let delivered = state.take_for_listener(
+            "s1",
+            |_| {
+                // A slow validation that stays inside the TTL, during which the
+                // listener reloads and registers a different session.
+                state.clock.pin(after(t0, Duration::from_secs(5)));
+                assert!(state.listener_ready("s2"));
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        assert!(
+            delivered.is_none(),
+            "the replaced session must not receive the old session's activation"
+        );
+        assert!(
+            state.take_rejection().is_none(),
+            "a restore is not a rejection"
+        );
+        assert_eq!(
+            deliver_at(&state, "s2", after(t0, Duration::from_secs(6))),
+            Some("restored".to_owned()),
+            "the reserved activation is restored, not dropped"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn stale_ack_is_refused_after_a_reload_expiry() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("stale", "task-s"), t0);
+        assert!(state.listener_ready_at("s1", t0));
+        assert_eq!(deliver_at(&state, "s1", t0), Some("stale".to_owned()));
+        assert!(state.listener_ready_at("s2", after(t0, ACTIVATION_TTL + Duration::from_secs(1))));
+        assert_eq!(
+            state.take_rejection().expect("expiry").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(
+            !state.acknowledge("s1", "stale", "opened"),
+            "an ACK for an activation that already ended must fail closed"
+        );
+        let terminals = state
+            .activation_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| {
+                diagnostic.activation_id == "stale" && diagnostic.terminal_outcome.is_some()
+            })
+            .count();
+        assert_eq!(terminals, 1, "a refused ACK must not add a terminal record");
+        state.assert_audit();
+    }
+
+    #[test]
+    fn a_new_activation_after_a_commit_time_expiry_is_delivered() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        state.put_at(activation("crossed", "task-crossed"), t0);
+        assert!(state.listener_ready_at("s1", after(t0, Duration::from_secs(290))));
+        let mut advanced = false;
+        let first = state.take_for_listener(
+            "s1",
+            |_| {
+                if !advanced {
+                    advanced = true;
+                    state.clock.pin(after(t0, Duration::from_secs(301)));
+                }
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        assert!(first.is_none());
+        assert_eq!(
+            state.take_rejection().expect("crossed").code,
+            "ACTIVATION_EXPIRED_DURING_VALIDATION"
+        );
+        // The terminal failure must not poison the session or the queue.
+        state.put(activation("fresh", "task-fresh"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+                .map(|activation| activation.activation_id),
+            Some("fresh".to_owned())
+        );
+        state.assert_audit();
+    }
+
+    // -- activation diagnostics ----------------------------------------------
+
+    /// One rejected activation, which produces exactly one diagnostic record.
+    fn reject_activation(state: &NotificationActivationState, id: &str) {
+        state.put(activation(id, &format!("task-{id}")));
+        let taken = state.take_for_listener("s1", |_| Err(RejectionCode::TaskNotFound), |_| {});
+        assert!(taken.is_none(), "{id} must not be delivered");
+    }
+
+    fn event_types(diagnostics: &[ActivationDiagnostic]) -> Vec<&'static str> {
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.event_type)
+            .collect()
+    }
+
+    #[test]
+    fn activation_diagnostics_keep_fifo_order() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        for index in 1..=5 {
+            reject_activation(&state, &format!("d{index}"));
+        }
+        let diagnostics = state.activation_diagnostics();
+        let ids: Vec<&str> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.activation_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["d1", "d2", "d3", "d4", "d5"]);
+        assert!(
+            event_types(&diagnostics)
+                .iter()
+                .all(|event| *event == "rejected")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rejection_code == Some("TASK_NOT_FOUND"))
+        );
+        assert!(
+            diagnostics
+                .windows(2)
+                .all(|pair| pair[0].timestamp_millis <= pair[1].timestamp_millis),
+            "timestamps are monotonic within one producer"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn activation_diagnostics_evict_the_oldest_at_capacity() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        for index in 0..ACTIVATION_DIAGNOSTIC_CAPACITY + 1 {
+            reject_activation(&state, &format!("d{index}"));
+        }
+        let diagnostics = state.activation_diagnostics();
+        assert_eq!(diagnostics.len(), ACTIVATION_DIAGNOSTIC_CAPACITY);
+        assert_eq!(
+            diagnostics[0].activation_id, "d1",
+            "the 65th record evicts the oldest one"
+        );
+        assert_eq!(
+            diagnostics[ACTIVATION_DIAGNOSTIC_CAPACITY - 1].activation_id,
+            "d64"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn activation_diagnostics_prune_expired_evidence() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        assert!(state.listener_ready_at("s1", t0));
+        state.put_at(activation("old", "task-old"), t0);
+        let _ = state.take_for_listener_at("s1", t0, |_| Err(RejectionCode::TaskNotFound), |_| {});
+        assert_eq!(state.activation_diagnostics().len(), 1);
+
+        state.clock.pin(after(
+            t0,
+            ACTIVATION_DIAGNOSTIC_TTL - Duration::from_millis(1),
+        ));
+        assert_eq!(
+            state.activation_diagnostics().len(),
+            1,
+            "evidence just inside the window is still readable"
+        );
+        // Same exclusive rule as the activation TTL: an age of exactly 300s is
+        // already out of the window.
+        state.clock.pin(after(t0, ACTIVATION_DIAGNOSTIC_TTL));
+        assert!(
+            state.activation_diagnostics().is_empty(),
+            "expired evidence is pruned on read"
+        );
+    }
+
+    #[test]
+    fn activation_diagnostics_are_redacted() {
+        let state = NotificationActivationState::default();
+        let account = "secretaccount0042";
+        let task = "secrettask0042";
+        let title = "SECRET-TITLE-0042";
+        let session = "secretsession0042";
+        let other_session = "session0044";
+        let target =
+            NotificationTargetV1::new_with_notification(account, task, "notif-1").expect("target");
+        state.put(Activation::new(
+            "act-1".to_owned(),
+            target,
+            title.to_owned(),
+        ));
+        assert!(state.listener_ready(session));
+        let refused = state.take_for_listener(
+            session,
+            |_| Err(RejectionCode::AccountSwitchRequired),
+            |_| {},
+        );
+        assert!(refused.is_none());
+
+        let target =
+            NotificationTargetV1::new_with_notification(account, "secrettask0043", "notif-2")
+                .expect("target");
+        state.put(Activation::new(
+            "act-2".to_owned(),
+            target,
+            title.to_owned(),
+        ));
+        let delivered = state.take_for_listener(
+            session,
+            |activation| Ok(activation.task_title.clone()),
+            |_| {},
+        );
+        assert!(delivered.is_some());
+        // A reload requeues it, the redelivery is acknowledged, and the repeated
+        // ACK must correlate without adding a second terminal.
+        assert!(state.listener_ready(other_session));
+        let redelivered = state.take_for_listener(
+            other_session,
+            |activation| Ok(activation.task_title.clone()),
+            |_| {},
+        );
+        assert!(redelivered.is_some());
+        assert!(state.acknowledge(other_session, "act-2", "opened"));
+        assert!(state.acknowledge(other_session, "act-2", "opened"));
+
+        let diagnostics = state.activation_diagnostics();
+        let json = serde_json::to_string(&diagnostics).expect("serialize");
+        for forbidden in [
+            account,
+            task,
+            title,
+            session,
+            other_session,
+            "secret",
+            "SECRET",
+            "@",
+            "token",
+            "refresh",
+            ".json",
+            "\\",
+            "/",
+            "accountId",
+            "taskId",
+            "taskTitle",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "activation diagnostics must never carry {forbidden}: {json}"
+            );
+        }
+        for event in [
+            "delivered",
+            "requeued",
+            "rejected",
+            "acked",
+            "duplicate_ack",
+        ] {
+            assert!(
+                json.contains(event),
+                "the redaction test must cover the {event} record: {json}"
+            );
+        }
+        state.assert_audit();
+    }
+
+    #[test]
+    fn duplicate_ack_correlates_to_the_same_activation() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        assert!(state.listener_ready_at("s1", t0));
+        state.put_at(
+            activation_with_notification("dup", "task-dup", "notif-dup"),
+            t0,
+        );
+        assert_eq!(deliver_at(&state, "s1", t0), Some("dup".to_owned()));
+        assert!(state.acknowledge("s1", "dup", "opened"));
+        assert!(
+            state.acknowledge("s1", "dup", "opened"),
+            "a duplicate ACK stays idempotent"
+        );
+        let diagnostics = state.activation_diagnostics();
+        let acked: Vec<&ActivationDiagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.event_type == "acked")
+            .collect();
+        let duplicates: Vec<&ActivationDiagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.event_type == "duplicate_ack")
+            .collect();
+        assert_eq!(acked.len(), 1);
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].activation_id, "dup");
+        assert_eq!(
+            duplicates[0].notification_instance_id.as_deref(),
+            Some("notif-dup")
+        );
+        assert_eq!(duplicates[0].session_correlation, session_correlation("s1"));
+        assert_eq!(duplicates[0].delivery_attempt, 1);
+        assert_eq!(
+            duplicates[0].terminal_outcome, None,
+            "a duplicate ACK is not a second terminal"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn cross_account_rejection_correlates_to_the_activation() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        assert!(state.listener_ready_at("s1", t0));
+        state.put_at(activation_for("other-account", "cross", "task-cross"), t0);
+        let taken = state.take_for_listener_at(
+            "s1",
+            t0,
+            |_| Err(RejectionCode::AccountSwitchRequired),
+            |_| {},
+        );
+        assert!(taken.is_none());
+        assert_eq!(
+            state.take_rejection().expect("cross-account").code,
+            "ACCOUNT_SWITCH_REQUIRED"
+        );
+        let diagnostics = state.activation_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].activation_id, "cross");
+        assert_eq!(
+            diagnostics[0].rejection_code,
+            Some("ACCOUNT_SWITCH_REQUIRED")
+        );
+        assert_eq!(diagnostics[0].terminal_outcome, Some("rejected"));
+        assert_eq!(
+            diagnostics[0].session_correlation,
+            session_correlation("s1")
+        );
+        assert_eq!(diagnostics[0].delivery_attempt, 0);
+        assert!(
+            !serde_json::to_string(&diagnostics)
+                .expect("json")
+                .contains("other-account"),
+            "the account id must never reach a diagnostic"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn queue_overflow_correlates_to_the_evicted_activation() {
+        let state = NotificationActivationState::default();
+        let t0 = Instant::now();
+        assert!(state.listener_ready_at("s1", t0));
+        for index in 0..ACTIVATION_CAPACITY {
+            state.put_at(
+                activation(&format!("q{index}"), &format!("task-{index}")),
+                t0,
+            );
+        }
+        state.put_at(activation("q8", "task-8"), t0);
+        assert_eq!(
+            state.take_rejection().expect("overflow").code,
+            "ACTIVATION_QUEUE_OVERFLOW"
+        );
+        let diagnostics = state.activation_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].activation_id, "q0");
+        assert_eq!(
+            diagnostics[0].rejection_code,
+            Some("ACTIVATION_QUEUE_OVERFLOW")
+        );
+        assert_eq!(diagnostics[0].terminal_outcome, Some("rejected"));
+        assert_eq!(
+            diagnostics[0].session_correlation,
+            session_correlation("s1")
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn exactly_one_terminal_record_per_activation() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+
+        // delivered -> acked (twice, so a duplicate ACK exists too)
+        state.put(activation("acked", "task-a"));
+        assert_eq!(deliver(&state, "s1"), Some("acked".to_owned()));
+        assert!(state.acknowledge("s1", "acked", "opened"));
+        assert!(state.acknowledge("s1", "acked", "opened"));
+
+        // delivered -> requeued -> delivered -> requeue budget spent
+        state.put(activation("requeued", "task-q"));
+        assert_eq!(deliver(&state, "s1"), Some("requeued".to_owned()));
+        assert!(state.listener_ready("s2"));
+        assert_eq!(deliver(&state, "s2"), Some("requeued".to_owned()));
+        assert!(state.listener_ready("s3"));
+        assert_eq!(
+            state.take_rejection().expect("requeue budget").code,
+            "ACTIVATION_EXPIRED"
+        );
+
+        // refused during validation
+        state.put(activation("refused", "task-r"));
+        let taken = state.take_for_listener("s3", |_| Err(RejectionCode::TaskNotFound), |_| {});
+        assert!(taken.is_none());
+        assert_eq!(
+            state.take_rejection().expect("validation refusal").code,
+            "TASK_NOT_FOUND"
+        );
+
+        // a second activation acknowledged with a business rejection outcome
+        state.put(activation("second", "task-s"));
+        assert_eq!(deliver(&state, "s3"), Some("second".to_owned()));
+        assert!(state.acknowledge("s3", "second", "rejected"));
+        state.assert_audit();
+
+        let diagnostics = state.activation_diagnostics();
+        for activation_id in ["acked", "requeued", "refused", "second"] {
+            let terminals: Vec<&ActivationDiagnostic> = diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.activation_id == activation_id
+                        && diagnostic.terminal_outcome.is_some()
+                })
+                .collect();
+            assert_eq!(
+                terminals.len(),
+                1,
+                "activation {activation_id} must own exactly one terminal record: {diagnostics:?}"
+            );
+        }
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.activation_id == "requeued"
+                    && diagnostic.terminal_outcome == Some("acked")),
+            "an expired activation must never also be acked"
+        );
+        assert_eq!(
+            event_types(&diagnostics)
+                .iter()
+                .filter(|event| **event == "duplicate_ack")
+                .count(),
+            1,
+            "the duplicate ACK is correlated but never terminal"
+        );
+    }
+
+    #[test]
+    fn concurrent_producers_keep_the_diagnostic_window_bounded() {
+        let state = Arc::new(NotificationActivationState::default());
+        assert!(state.listener_ready("s1"));
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let state = Arc::clone(&state);
+                scope.spawn(move || {
+                    for index in 0..40 {
+                        let id = format!("w{worker}-{index}");
+                        state.put(activation(&id, &format!("task-{id}")));
+                        let _ = state.take_for_listener(
+                            "s1",
+                            |_| Err(RejectionCode::TaskNotFound),
+                            |_| {},
+                        );
+                    }
+                });
+            }
+        });
+        let diagnostics = state.activation_diagnostics();
+        assert!(
+            diagnostics.len() <= ACTIVATION_DIAGNOSTIC_CAPACITY,
+            "the window stayed bounded: {}",
+            diagnostics.len()
+        );
+        assert!(!diagnostics.is_empty());
+        // Under contention a worker may reserve another worker's activation, and
+        // the queue cap may displace one, so both refusal codes are legitimate -
+        // anything else would mean a record that no transition produced.
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.event_type == "rejected"
+                    && matches!(
+                        diagnostic.rejection_code,
+                        Some("TASK_NOT_FOUND") | Some("ACTIVATION_QUEUE_OVERFLOW")
+                    )),
+            "every record is one refused activation: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.session_correlation == session_correlation("s1")),
+            "every record correlates to the delivering session"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn diagnostic_recording_never_changes_a_delivery_outcome() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        // Fill the window to capacity: the eviction a delivery causes must not
+        // perturb that delivery.
+        for index in 0..ACTIVATION_DIAGNOSTIC_CAPACITY {
+            reject_activation(&state, &format!("f{index}"));
+        }
+        assert_eq!(
+            state.activation_diagnostics().len(),
+            ACTIVATION_DIAGNOSTIC_CAPACITY
+        );
+        state.put(activation("live", "task-live"));
+        assert_eq!(
+            state
+                .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+                .map(|activation| activation.activation_id),
+            Some("live".to_owned())
+        );
+        assert!(state.acknowledge("s1", "live", "opened"));
+        let diagnostics = state.activation_diagnostics();
+        assert_eq!(
+            diagnostics.len(),
+            ACTIVATION_DIAGNOSTIC_CAPACITY,
+            "capacity still bounds the window"
+        );
+        assert_eq!(
+            diagnostics.last().map(|diagnostic| diagnostic.event_type),
+            Some("acked")
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn activation_diagnostics_export_through_the_diagnostics_bundle() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path();
+        todo_native_accounts::ensure_active_account(root).expect("fresh install");
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put(activation_with_notification(
+            "exported",
+            "task-exported",
+            "notif-exported",
+        ));
+        let refused =
+            state.take_for_listener("s1", |_| Err(RejectionCode::AccountSwitchRequired), |_| {});
+        assert!(refused.is_none());
+
+        let report = crate::diagnostics::collect(
+            root,
+            todo_native_accounts::DEFAULT_ACCOUNT_ID,
+            state.activation_diagnostics(),
+        )
+        .expect("diagnostics bundle");
+        assert_eq!(report.activation_diagnostics.len(), 1);
+        assert_eq!(report.activation_diagnostics[0].activation_id, "exported");
+        assert_eq!(
+            report.activation_diagnostics[0]
+                .notification_instance_id
+                .as_deref(),
+            Some("notif-exported")
+        );
+        let json = serde_json::to_string(&report).expect("json");
+        assert!(json.contains("activationDiagnostics"));
+        assert!(json.contains("ACCOUNT_SWITCH_REQUIRED"));
+        assert!(
+            !json.contains("task-exported"),
+            "the task id must never reach the bundle"
+        );
+        assert!(!json.contains("token"));
+        state.assert_audit();
     }
 }

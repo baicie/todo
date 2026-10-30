@@ -16,7 +16,11 @@ use todo_native_accounts::{
     migration_state_read_only, switch_status_read_only, verify_integrity,
 };
 
-use crate::{commands::CommandError, db::AppState};
+use crate::{
+    commands::CommandError,
+    db::AppState,
+    notification_activation::{ActivationDiagnostic, NotificationActivationState},
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +67,9 @@ pub struct DiagnosticSwitch {
     pub pending_outbox: i64,
 }
 
+/// The read-only bundle. Its `activation_diagnostics` section is read from the
+/// bounded, redacted diagnostic window of the delivery state machine, so no task
+/// title, task id, account id, session string, token or path can reach it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryDiagnostics {
@@ -81,6 +88,15 @@ pub struct RecoveryDiagnostics {
     pub backups: Vec<DiagnosticBackup>,
     pub conflict_reasons: Vec<String>,
     pub warnings: Vec<String>,
+    pub activation_diagnostics: Vec<ActivationDiagnostic>,
+}
+
+/// Read the activation diagnostic window out of the managed delivery state. An
+/// unregistered state simply reports no activation evidence.
+pub fn activation_diagnostics(app: &AppHandle) -> Vec<ActivationDiagnostic> {
+    app.try_state::<NotificationActivationState>()
+        .map(|state| state.activation_diagnostics())
+        .unwrap_or_default()
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
@@ -89,7 +105,11 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
         .map_err(|error| CommandError::new("DIAGNOSTICS", format!("无法定位应用数据目录: {error}")))
 }
 
-pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnostics, String> {
+pub fn collect(
+    root: &Path,
+    active_account_id: &str,
+    activation_diagnostics: Vec<ActivationDiagnostic>,
+) -> Result<RecoveryDiagnostics, String> {
     let registry = AccountRegistry::load(root).map_err(|error| error.to_string())?;
     let migration = migration_state_read_only(root).map_err(|error| error.to_string())?;
     let legacy_review = legacy_review_report(root).map_err(|error| error.to_string())?;
@@ -193,6 +213,7 @@ pub fn collect(root: &Path, active_account_id: &str) -> Result<RecoveryDiagnosti
         backups,
         conflict_reasons,
         warnings,
+        activation_diagnostics,
     })
 }
 
@@ -202,8 +223,12 @@ pub fn native_recovery_diagnostics(
     state: State<'_, AppState>,
 ) -> Result<RecoveryDiagnostics, CommandError> {
     let root = data_dir(&app)?;
-    collect(&root, &state.account.account_id)
-        .map_err(|error| CommandError::new("DIAGNOSTICS", error))
+    collect(
+        &root,
+        &state.account.account_id,
+        activation_diagnostics(&app),
+    )
+    .map_err(|error| CommandError::new("DIAGNOSTICS", error))
 }
 
 /// Writes only a redacted snapshot under the app data root. The caller cannot
@@ -214,8 +239,12 @@ pub fn native_export_recovery_diagnostics(
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
     let root = data_dir(&app)?;
-    let diagnostics = collect(&root, &state.account.account_id)
-        .map_err(|error| CommandError::new("DIAGNOSTICS", error))?;
+    let diagnostics = collect(
+        &root,
+        &state.account.account_id,
+        activation_diagnostics(&app),
+    )
+    .map_err(|error| CommandError::new("DIAGNOSTICS", error))?;
     let directory = root.join("diagnostics");
     fs::create_dir_all(&directory)
         .map_err(|error| CommandError::new("DIAGNOSTICS", format!("创建诊断目录失败: {error}")))?;
@@ -240,7 +269,8 @@ mod tests {
         let root = directory.path();
         todo_native_accounts::ensure_active_account(root).expect("fresh install");
         let before = fs::read(root.join("accounts.json")).expect("registry");
-        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID).expect("diagnostics");
+        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID, Vec::new())
+            .expect("diagnostics");
         let after = fs::read(root.join("accounts.json")).expect("registry after");
         assert_eq!(before, after, "diagnostics must not rewrite account state");
         assert_eq!(
@@ -265,7 +295,8 @@ mod tests {
         todo_native_accounts::prepare_account_switch(root, &pending.id).expect("prepared switch");
         let journal = fs::read(todo_native_accounts::pending_account_switch_file(root))
             .expect("journal before diagnostics");
-        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID).expect("diagnostics");
+        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID, Vec::new())
+            .expect("diagnostics");
         let journal_after = fs::read(todo_native_accounts::pending_account_switch_file(root))
             .expect("journal after diagnostics");
         assert_eq!(
@@ -282,5 +313,50 @@ mod tests {
         let json = serde_json::to_string(&report).expect("json");
         assert!(!json.contains("token"));
         assert!(!json.contains("@example.test"));
+    }
+
+    #[test]
+    fn diagnostics_bundle_carries_the_redacted_activation_section() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path();
+        todo_native_accounts::ensure_active_account(root).expect("fresh install");
+        let record = ActivationDiagnostic {
+            activation_id: "1746000000000-7".to_owned(),
+            notification_instance_id: Some("instance-7".to_owned()),
+            event_type: "rejected",
+            rejection_code: Some("ACTIVATION_EXPIRED_DURING_VALIDATION"),
+            terminal_outcome: Some("rejected"),
+            delivery_attempt: 1,
+            session_correlation: "0d5f8f3b1c2a4e69".to_owned(),
+            timestamp_millis: 301_000,
+        };
+        let report = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID, vec![record])
+            .expect("diagnostics");
+        assert_eq!(report.activation_diagnostics.len(), 1);
+        let value = serde_json::to_value(&report).expect("json");
+        assert!(
+            value.get("activationDiagnostics").is_some(),
+            "the bundle must expose the activation section"
+        );
+        let json = serde_json::to_string(&report).expect("json");
+        assert!(json.contains("ACTIVATION_EXPIRED_DURING_VALIDATION"));
+        assert!(json.contains("0d5f8f3b1c2a4e69"));
+        assert!(json.contains("instance-7"));
+        // The activation section must not become a second data-leak channel.
+        for forbidden in [
+            "@example.test",
+            "token",
+            "refresh",
+            "taskTitle",
+            "accountId",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "the bundle must not contain {forbidden}"
+            );
+        }
+        let empty = collect(root, todo_native_accounts::DEFAULT_ACCOUNT_ID, Vec::new())
+            .expect("diagnostics");
+        assert!(empty.activation_diagnostics.is_empty());
     }
 }
