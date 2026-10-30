@@ -17,7 +17,9 @@ import { fileURLToPath } from 'node:url';
 import {
   ANDROID_TARGETS,
   DEV_IDENTIFIER,
+  EXPRESSION_OPEN,
   MACOS_ARCHES,
+  RELEASE_WORKFLOW_PATHS,
   ReleaseContextError,
   SUMS_NAME,
   MANIFEST_NAME,
@@ -28,6 +30,8 @@ import {
   expectedBuildAssets,
   expectedReleaseAssets,
   formatArtifactName,
+  lintReleaseWorkflows,
+  lintWorkflowExpressions,
   normalizeVersion,
   parseSha256Sums,
   resolveAppConfig,
@@ -593,4 +597,62 @@ test('workflow gates: the publish job verifies assets and identity before publis
   assert.ok(block.includes('fail_on_unmatched_files: true'));
   assert.ok(block.includes('prerelease: true'));
   assert.ok(block.includes(MANIFEST_NAME), 'the manifest must be attached to the release');
+});
+
+test('workflow expressions: all four release workflows pass the expression lint today', () => {
+  assert.equal(RELEASE_WORKFLOW_PATHS.length, 4);
+  for (const path of RELEASE_WORKFLOW_PATHS) {
+    const problems = lintWorkflowExpressions(workflowText(path), path);
+    const report = problems.map(
+      (problem) => problem.file + ':' + problem.line + ':' + problem.column + ' ' + problem.message,
+    );
+    assert.deepEqual(report, [], path + ' has malformed GitHub expressions: ' + report.join(' | '));
+  }
+});
+
+test('workflow expressions: the real-file lint entry point reports nothing', () => {
+  const offenders = lintReleaseWorkflows().map(
+    (problem) => problem.file + ':' + problem.line + ':' + problem.column + ' ' + problem.message,
+  );
+  assert.deepEqual(offenders, [], 'malformed GitHub expressions: ' + offenders.join(' | '));
+});
+
+test('workflow expressions: a shell expansion typed with doubled braces is rejected', () => {
+  const open = EXPRESSION_OPEN;
+  const damaged = [
+    'SDK_DIR="' + open + 'ANDROID_HOME:-' + open + 'ANDROID_SDK_ROOT}}"',
+    'abi="' + open + 'abi_of[$name]:-}"',
+    'base="' + open + 'name%.aab}.apk"',
+    '--abi "' + open + 'token_of[$abi]}"',
+  ].join('\n');
+  const problems = lintWorkflowExpressions(damaged, 'damaged.yml');
+  assert.equal(problems.length, 4, 'each damaged line must be reported once');
+  assert.deepEqual([...new Set(problems.map((problem) => problem.line))], [1, 2, 3, 4]);
+  for (const problem of problems) {
+    assert.equal(problem.file, 'damaged.yml');
+    assert.ok(problem.column > 0);
+  }
+
+  const clean = [
+    'ref: ' + open + ' needs.context.outputs.TagCommitSHA }}',
+    'runs-on: ' + open + ' matrix.os }}',
+    'run: echo "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"',
+    'run: node x --version "$ARTIFACT_VERSION" --abi "${token_of[$abi]}"',
+  ].join('\n');
+  assert.deepEqual(lintWorkflowExpressions(clean, 'clean.yml'), []);
+});
+
+test('workflow expressions: unknown roots and unterminated expressions are rejected', () => {
+  const open = EXPRESSION_OPEN;
+  assert.deepEqual(lintWorkflowExpressions('a: ' + open + ' bogus.context }}'), [
+    { file: '(workflow)', line: 1, column: 4, message: 'unknown expression root "bogus"' },
+  ]);
+  assert.deepEqual(lintWorkflowExpressions('a: ' + open + ' github.ref'), [
+    {
+      file: '(workflow)',
+      line: 1,
+      column: 4,
+      message: 'expression is not closed by a double brace on the same line',
+    },
+  ]);
 });

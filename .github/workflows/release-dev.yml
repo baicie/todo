@@ -404,7 +404,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_DIR="${{ANDROID_HOME:-${{ANDROID_SDK_ROOT}}"
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           AAPT2=$(ls -d "$SDK_DIR"/build-tools/*/aapt2 | sort -V | tail -1)
           test -x "$AAPT2" || { echo "::error::aapt2 not found under $SDK_DIR" >&2; exit 1; }
           EXPECTED_ID=$(node scripts/release/release-context.mjs config --field identifier)
@@ -416,7 +416,7 @@ jobs:
           shopt -s nullglob
           for apk in release-android/*.apk; do
             name=$(basename "$apk")
-            abi="${{abi_of[$name]:-}"
+            abi="${abi_of[$name]:-}"
             if [ -z "$abi" ]; then echo "::error::unexpected APK: $name" >&2; exit 1; fi
             unzip -l "$apk" | grep -q "lib/$abi/" || { echo "::error::APK $name lacks $abi" >&2; exit 1; }
             badging=$("$AAPT2" dump badging "$apk")
@@ -424,21 +424,21 @@ jobs:
             vname=$(printf '%s\n' "$badging" | sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" | head -1)
             test "$pkg" = "$EXPECTED_ID" || { echo "::error::APK $name package id $pkg != $EXPECTED_ID" >&2; exit 1; }
             test "$vname" = "$RELEASE_VERSION" || { echo "::error::APK $name versionName $vname != $RELEASE_VERSION" >&2; exit 1; }
-            target=$(node scripts/release/release-context.mjs artifact-name android-apk --version "$ARTIFACT_VERSION" --abi "${{token_of[$abi]}")
+            target=$(node scripts/release/release-context.mjs artifact-name android-apk --version "$ARTIFACT_VERSION" --abi "${token_of[$abi]}")
             mv "$apk" "release-android/$target"
             echo "verified APK $target abi=$abi package=$pkg versionName=$vname"
           done
           for aab in release-android/*.aab; do
             name=$(basename "$aab")
-            base="${{name%.aab}.apk"
-            abi="${{abi_of[$base]:-}"
+            base="${name%.aab}.apk"
+            abi="${abi_of[$base]:-}"
             if [ -z "$abi" ]; then echo "::error::unexpected AAB: $name" >&2; exit 1; fi
             unzip -l "$aab" | grep -q "base/lib/$abi/" || { echo "::error::AAB $name lacks $abi" >&2; exit 1; }
             manifest=$(mktemp)
             unzip -p "$aab" base/manifest/AndroidManifest.xml > "$manifest"
             strings -a "$manifest" | grep -Fxq "$EXPECTED_ID" || { echo "::error::AAB $name package id != $EXPECTED_ID" >&2; exit 1; }
             strings -a "$manifest" | grep -Fxq "$RELEASE_VERSION" || { echo "::error::AAB $name versionName != $RELEASE_VERSION" >&2; exit 1; }
-            target=$(node scripts/release/release-context.mjs artifact-name android-aab --version "$ARTIFACT_VERSION" --abi "${{token_of[$abi]}")
+            target=$(node scripts/release/release-context.mjs artifact-name android-aab --version "$ARTIFACT_VERSION" --abi "${token_of[$abi]}")
             mv "$aab" "release-android/$target"
             echo "verified AAB $target abi=$abi (protobuf manifest string pool)"
           done

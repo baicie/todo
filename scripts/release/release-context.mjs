@@ -728,6 +728,169 @@ function verifyAssetsCommand(options) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * GitHub expression lint
+ *
+ * GitHub evaluates its double-brace expressions before a job starts and refuses
+ * the whole workflow file (0 jobs, "Invalid workflow file") when one of them is
+ * malformed. A shell parameter expansion typed with a doubled brace looks like
+ * an expression to GitHub and like valid YAML to a YAML parser, so workflow
+ * files must be linted for expression grammar, not only for YAML syntax.
+ * ------------------------------------------------------------------------- */
+
+export const EXPRESSION_OPEN = '$' + '{{';
+export const EXPRESSION_CLOSE = '}}';
+export const EXPRESSION_CONTEXTS = Object.freeze([
+  'github',
+  'needs',
+  'env',
+  'steps',
+  'matrix',
+  'secrets',
+  'inputs',
+  'runner',
+  'job',
+  'strategy',
+  'vars',
+]);
+export const EXPRESSION_FUNCTIONS = Object.freeze([
+  'contains',
+  'startsWith',
+  'endsWith',
+  'format',
+  'join',
+  'toJSON',
+  'fromJSON',
+  'hashFiles',
+  'success',
+  'always',
+  'cancelled',
+  'failure',
+]);
+export const EXPRESSION_LITERALS = Object.freeze(['true', 'false', 'null']);
+export const RELEASE_WORKFLOW_PATHS = Object.freeze([
+  '.github/workflows/release-dev.yml',
+  '.github/workflows/release-acceptance.yml',
+  '.github/workflows/release-desktop.yml',
+  '.github/workflows/release-web.yml',
+]);
+
+const EXPRESSION_TOKEN =
+  /'(?:[^']*)'|[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|===|!==|==|!=|<=|>=|&&|\|\||[.[\]()!,<>+\-*/]/g;
+const EXPRESSION_OPERATORS = new Set([
+  '(',
+  '!',
+  '&&',
+  '||',
+  ',',
+  '==',
+  '!=',
+  '<',
+  '<=',
+  '>',
+  '>=',
+  '+',
+  '-',
+  '*',
+  '/',
+]);
+const KNOWN_EXPRESSION_ROOTS = new Set([
+  ...EXPRESSION_CONTEXTS,
+  ...EXPRESSION_FUNCTIONS,
+  ...EXPRESSION_LITERALS,
+]);
+
+function tokenizeExpression(body) {
+  const tokens = [];
+  let cursor = 0;
+  for (const match of body.matchAll(EXPRESSION_TOKEN)) {
+    const gap = body.slice(cursor, match.index);
+    if (gap.trim() !== '') return { error: 'unexpected text ' + JSON.stringify(gap.trim()) };
+    const value = match[0];
+    const kind = value.startsWith("'")
+      ? 'string'
+      : /^[A-Za-z_]/.test(value)
+        ? 'ident'
+        : /^\d/.test(value)
+          ? 'number'
+          : 'punct';
+    tokens.push({ kind, value });
+    cursor = match.index + value.length;
+  }
+  const tail = body.slice(cursor);
+  if (tail.trim() !== '') return { error: 'unexpected text ' + JSON.stringify(tail.trim()) };
+  return { tokens };
+}
+
+/** Problems in one expression body; an empty array means it is well formed. */
+export function lintExpressionBody(body) {
+  const { tokens, error } = tokenizeExpression(String(body));
+  if (error) return [error];
+  if (tokens.length === 0) return ['empty expression body'];
+  const problems = [];
+  let previous = null;
+  for (const token of tokens) {
+    const isRoot =
+      previous === null || (previous.kind === 'punct' && EXPRESSION_OPERATORS.has(previous.value));
+    if (token.kind === 'ident' && isRoot && !KNOWN_EXPRESSION_ROOTS.has(token.value)) {
+      problems.push('unknown expression root ' + JSON.stringify(token.value));
+    }
+    previous = token;
+  }
+  return problems;
+}
+
+/** Every double-brace expression of a workflow text, checked line by line. */
+export function lintWorkflowExpressions(text, filePath = '(workflow)') {
+  const problems = [];
+  const lines = String(text).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    let searchFrom = 0;
+    for (;;) {
+      const open = line.indexOf(EXPRESSION_OPEN, searchFrom);
+      if (open === -1) return;
+      const location = { file: filePath, line: index + 1, column: open + 1 };
+      const close = line.indexOf(EXPRESSION_CLOSE, open + EXPRESSION_OPEN.length);
+      if (close === -1) {
+        problems.push({
+          ...location,
+          message: 'expression is not closed by a double brace on the same line',
+        });
+        return;
+      }
+      const body = line.slice(open + EXPRESSION_OPEN.length, close);
+      for (const message of lintExpressionBody(body)) problems.push({ ...location, message });
+      searchFrom = close + EXPRESSION_CLOSE.length;
+    }
+  });
+  return problems;
+}
+
+/** Lint the real workflow files on disk; one entry per problem found. */
+export function lintReleaseWorkflows(paths = RELEASE_WORKFLOW_PATHS) {
+  const problems = [];
+  for (const path of paths) {
+    problems.push(...lintWorkflowExpressions(readFileSync(resolve(REPO_ROOT, path), 'utf8'), path));
+  }
+  return problems;
+}
+
+function lintWorkflowsCommand(positional) {
+  const paths = positional.length > 0 ? positional : RELEASE_WORKFLOW_PATHS;
+  const problems = lintReleaseWorkflows(paths);
+  if (problems.length > 0) {
+    for (const problem of problems) {
+      console.error(
+        problem.file + ':' + problem.line + ':' + problem.column + ' ' + problem.message,
+      );
+    }
+    fail(
+      problems.length + ' GitHub expression problem(s) in ' + paths.length + ' workflow file(s)',
+    );
+  }
+  console.log('OK GitHub expressions: ' + paths.length + ' workflow file(s) clean');
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
@@ -758,6 +921,7 @@ const COMMANDS = {
   toolchain: (_positional, options) => toolchainCommand(options),
   manifest: (_positional, options) => manifestCommand(options),
   'verify-assets': (_positional, options) => verifyAssetsCommand(options),
+  'lint-workflows': (positional) => lintWorkflowsCommand(positional),
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
