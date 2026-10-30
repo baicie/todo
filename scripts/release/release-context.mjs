@@ -395,6 +395,7 @@ export function buildManifest({
   releaseChannel,
   repository = '',
   workflowRef = '',
+  workflowSha = '',
   runId = '',
   runAttempt = '',
   assets = [],
@@ -439,6 +440,7 @@ export function buildManifest({
     generator: {
       workflow: 'release-dev',
       workflowRef,
+      workflowSha,
       repository,
       runId,
       runAttempt,
@@ -532,7 +534,8 @@ function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function readArtifactInventory(dir) {
+/** Recursive name/size/sha256 inventory of a directory; shared by the publish gate. */
+export function readArtifactInventory(dir) {
   const files = [];
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
@@ -692,6 +695,7 @@ function manifestCommand(options) {
     releaseChannel: requireEnv('RELEASE_CHANNEL'),
     repository: process.env.GITHUB_REPOSITORY ?? '',
     workflowRef: process.env.GITHUB_WORKFLOW_REF ?? '',
+    workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? '',
     runId: process.env.GITHUB_RUN_ID ?? '',
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? '',
     assets: files.filter((file) => expected.includes(file.name)),

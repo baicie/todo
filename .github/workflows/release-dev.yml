@@ -22,6 +22,45 @@ name: release-dev
 #   * every third-party action is pinned to a 40-hex commit SHA recorded in
 #     scripts/release/actions.lock.json. Permissions are read-only except on the
 #     publishing job.
+#
+# Transactional publish (RC2-D.11): no remote state is modified before every
+# read-only validation has passed, and an incomplete release can never become
+# public.
+#   1. read-only first: the workflow provenance guard, the pre/final asset gates
+#      and "Check the existing release" (a GET by tag through the gh CLI) all run
+#      before anything is written, so a missing asset, a hash mismatch or a
+#      manifest refusal can no longer damage a release that is already public;
+#   2. write #1 only: the release is created as a DRAFT by the pinned
+#      softprops/action-gh-release (draft: true). An existing release is never
+#      modified, renamed or stripped of assets: it is either a byte-identical
+#      repeat of the same build (no-op) or the run refuses and names the
+#      differences;
+#   3. read-only again: "Verify the published asset set" lists the draft assets
+#      through the gh CLI and compares name, size and sha256 with
+#      release-manifest.json, plus the release target commit and the commit the
+#      published manifest records;
+#   4. write #2, and only after that proof: the draft is flipped to a public
+#      pre-release with
+#      gh api -X PATCH .../releases/<id> --field draft=false --field prerelease=true
+#      (typed fields, so the API receives JSON booleans rather than strings);
+#   5. read-only last: "Verify the published release provenance" re-reads the
+#      public release and proves it targets TagCommitSHA and carries a manifest
+#      that records the same commit.
+#
+# Failure residue: a failed or cancelled publish leaves a DRAFT release, which is
+# never publicly visible. Remove it by hand before retrying (a retry over a draft
+# that already carries the exact same build is allowed and only flips it public,
+# but a partial draft must be deleted first):
+#     gh release delete <tag> --yes --cleanup-tag=false
+#
+# MANUAL maintenance only, never part of this workflow: the pre-rename generic
+# Android asset names (app-arm-debug.apk, app-arm-debug.aab, ...) that an old
+# release may still carry are removed one explicit invocation at a time, by a
+# human, outside this workflow:
+#     gh release delete-asset <tag> app-arm64-debug.apk --yes
+# This workflow must never delete or overwrite a remote asset again: a deletion
+# performed before the gates had passed is exactly what left a published release
+# mutilated in the past.
 on:
   push:
     tags:
@@ -33,13 +72,21 @@ on:
         required: true
         default: '0.0.1-dev.0'
         type: string
+      allow_foreign_workflow:
+        description: 'Acknowledge publishing with workflow logic from a commit other than the release tag commit (refused by default)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-dev-${{ github.ref }}
-  cancel-in-progress: true
+  # The resolved version expression: the dispatch input when there is one, else
+  # the pushed ref. cancel-in-progress is FALSE because a cancelled publish could
+  # leave a draft behind, or a release whose verification never ran.
+  group: release-dev-${{ inputs.version || github.event.ref }}
+  cancel-in-progress: false
 
 env:
   TAURI_CLI_VERSION: '2.12.4'
@@ -463,6 +510,11 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+    # Serialize publishes of the same resolved version and never cancel one: a
+    # cancelled publish could leave a draft or a half-verified release behind.
+    concurrency:
+      group: release-dev-publish-${{ needs.context.outputs.ReleaseVersion }}
+      cancel-in-progress: false
     env:
       RELEASE_VERSION: ${{ needs.context.outputs.ReleaseVersion }}
       RELEASE_TAG: ${{ needs.context.outputs.ReleaseTag }}
@@ -488,16 +540,18 @@ jobs:
           merge-multiple: true
           path: artifacts
 
-      - name: Remove legacy generic Android asset names
+      # ---------------------------------------------------------------------
+      # Read-only phase. Every step up to the draft creation only reads: local
+      # files, gh api GET requests and git, so a gate failure leaves the remote
+      # release exactly as it was.
+      # ---------------------------------------------------------------------
+      - name: Guard the workflow provenance
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Only the pre-rename generic names are targeted; the Shishi-* assets
-          # published for this tag are never touched.
-          for name in app-arm-debug.apk app-arm-debug.aab app-arm64-debug.apk app-arm64-debug.aab app-x86-debug.apk app-x86-debug.aab app-x86_64-debug.apk app-x86_64-debug.aab; do
-            gh release delete-asset "$RELEASE_TAG" "$name" --yes >/dev/null 2>&1 || true
-          done
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          INPUT_ALLOW_FOREIGN: ${{ inputs.allow_foreign_workflow }}
+        run: node scripts/release/release-transaction.mjs guard-workflow
 
       - name: Pre-upload gate
         shell: bash
@@ -508,6 +562,7 @@ jobs:
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: node scripts/release/release-context.mjs manifest --artifacts-dir artifacts
@@ -525,11 +580,23 @@ jobs:
         shell: bash
         run: node scripts/release/release-context.mjs verify-assets --artifacts-dir artifacts --stage final
 
-      - name: Publish pre-release
+      - name: Check the existing release
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs check-existing --artifacts-dir artifacts
+
+      # ---------------------------------------------------------------------
+      # Write phase: the two and only two writes of this workflow.
+      # ---------------------------------------------------------------------
+      - name: Create the release as a draft
+        if: steps.existing.outputs.decision == 'create-draft'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.context.outputs.ReleaseTag }}
           name: Shishi ${{ needs.context.outputs.ReleaseVersion }}
+          draft: true
           prerelease: true
           fail_on_unmatched_files: true
           body: |
@@ -555,3 +622,23 @@ jobs:
           files: |
             artifacts/*
           token: ${{ github.token }}
+
+      - name: Verify the published asset set
+        if: steps.existing.outputs.decision != 'noop'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts
+
+      - name: Publish the verified draft as a public pre-release
+        if: steps.existing.outputs.decision != 'noop'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs publish-draft --artifacts-dir artifacts
+
+      - name: Verify the published release provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir artifacts
