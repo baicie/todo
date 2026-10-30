@@ -18,28 +18,43 @@
 //!    traverse, so `..` escapes are structurally impossible instead of being
 //!    caught by a string comparison. `..` components in the root are rejected as
 //!    well.
-//! 2. The root (the configured path's parent) is created, canonicalized once and
-//!    authorized *after* canonicalization. Authorization is fail-closed: the
-//!    canonical root must not be inside the canonical Stable data root or the
-//!    canonical Dev data root, and must be inside either the canonical QA app
-//!    data directory or, when the configured path was RELATIVE, the canonical
-//!    working directory tree. The file is then opened at
-//!    `canonical_root.join(file_name)`, so a root that only looks
-//!    approved lexically (the `..\..\app.shishi.todo` trick) is rejected on its
-//!    resolved path, and an unauthorized location is refused instead of being
-//!    redirected somewhere else.
-//! 3. The opened handle is inspected rather than the path string: the evidence
+//! 2. The intended root is authorized BEFORE anything is created. The nearest
+//!    existing ancestor is canonicalized and every missing tail component must be
+//!    a plain directory name, so the pre-checked path cannot be absolute on its
+//!    own and cannot traverse or escape through a root or prefix component. That
+//!    pre-checked path is fail-closed authorized: it must not be inside the
+//!    canonical Stable data root or the canonical Dev data root, and must be
+//!    inside either the canonical QA app data directory or, when the configured
+//!    path was RELATIVE, the canonical working directory tree. Only then are the
+//!    missing directories created, inside exactly that pre-checked range, so a
+//!    refused configuration has no filesystem side effects at all.
+//! 3. Immediately after creation the result is re-verified: every directory this
+//!    module created is re-inspected for `FILE_ATTRIBUTE_REPARSE_POINT`, the root
+//!    is canonicalized strictly, and the strict canonical form must still equal
+//!    the pre-checked location and still pass the same authorization. Any
+//!    difference (a junction or other materialization changed the meaning of the
+//!    path) fails closed. The file is then opened at
+//!    `canonical_root.join(file_name)`, so a root that only looks approved
+//!    lexically (the `..\..\app.shishi.todo` trick) is rejected on its resolved
+//!    path and never receives evidence.
+//! 4. The opened handle is inspected rather than the path string: the evidence
 //!    file is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, which never follows a
 //!    final symlink/junction, and the handle metadata must not carry
 //!    `FILE_ATTRIBUTE_REPARSE_POINT` or the directory bit. That closes both the
 //!    check-then-open (TOCTOU) window for the final component and the
-//!    "junction planted in the evidence tree" redirect. Directories this module
-//!    creates are re-inspected for reparse points right after creation, and a
-//!    pre-existing junction above the root is neutralized by canonicalizing the
-//!    root before authorization.
-//! 4. Evidence is opened append-only (`create(true).append(true)`): an existing
+//!    "junction planted in the evidence tree" redirect.
+//! 5. Evidence is opened append-only (`create(true).append(true)`): an existing
 //!    file is appended to and never truncated, and a directory sitting at the
 //!    target is an error rather than something to write through.
+//! 6. Residual directory TOCTOU, NOT solved: between the pre-check and
+//!    `create_dir_all` a concurrent actor could in principle materialize one of the
+//!    tail components as a reparse point. The mitigation is the post-create
+//!    re-inspection, strict re-canonicalization and re-authorization described in
+//!    item 3, which fail closed rather than write through the redirect. A fully
+//!    race-free proof would need openat-style directory handles, or
+//!    `FILE_FLAG_BACKUP_SEMANTICS` plus handle attributes on every created
+//!    directory, i.e. a new dependency, which is out of scope here. Item 3 is a
+//!    mitigation, not a proof that the race is impossible.
 //!
 //! Every rejection is an error that names the offending path and the reason; the
 //! writer never falls back to a different location.
@@ -442,6 +457,71 @@ fn missing_components(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(missing)
 }
 
+/// The pre-checked intended location of the evidence root, plus the directories
+/// that still have to be created for it.
+struct IntendedRoot {
+    /// Canonical existing ancestor joined with the validated missing tail.
+    path: PathBuf,
+    /// Absolute directories below that ancestor that do not exist yet.
+    created: Vec<PathBuf>,
+}
+
+/// Resolves the evidence root WITHOUT creating anything, so its intended
+/// location can be authorized before the first directory is made. The nearest
+/// existing ancestor is canonicalized and every missing tail component must be a
+/// plain directory name, so the intended path cannot be absolute on its own, and
+/// cannot traverse or escape through a root or prefix component.
+fn intended_evidence_root(requested_root: &Path) -> Result<IntendedRoot, String> {
+    if !requested_root.is_absolute() {
+        return Err(format!(
+            "QA evidence directory {} must resolve to an absolute directory before it can be authorized",
+            requested_root.display()
+        ));
+    }
+    let created = missing_components(requested_root)?;
+    let Some(deepest_missing) = created.first() else {
+        // Nothing to create: the strict canonical form of the existing root is
+        // both the intended and the actual location.
+        let path = fs::canonicalize(requested_root).map_err(|error| {
+            format!(
+                "unable to canonicalize QA evidence directory {}: {error}",
+                requested_root.display()
+            )
+        })?;
+        return Ok(IntendedRoot { path, created });
+    };
+    let ancestor = deepest_missing.parent().ok_or_else(|| {
+        format!(
+            "unable to locate an existing ancestor of QA evidence directory {}",
+            requested_root.display()
+        )
+    })?;
+    let mut path = fs::canonicalize(ancestor).map_err(|error| {
+        format!(
+            "unable to canonicalize the existing ancestor {} of QA evidence directory {}: {error}",
+            ancestor.display(),
+            requested_root.display()
+        )
+    })?;
+    for directory in &created {
+        let Some(Component::Normal(name)) = directory.components().next_back() else {
+            return Err(format!(
+                "QA evidence directory {} must consist of plain directory names; refusing {}",
+                requested_root.display(),
+                directory.display()
+            ));
+        };
+        path.push(name);
+    }
+    Ok(IntendedRoot { path, created })
+}
+
+/// True when both canonical paths denote the same location, modulo the Windows
+/// case-insensitivity already handled by `component_eq`.
+fn same_path(left: &Path, right: &Path) -> bool {
+    path_contains(left, right) && path_contains(right, left)
+}
+
 /// Refuses a directory this writer created when it is a reparse point, i.e. when
 /// a junction or symlink redirects evidence writing somewhere else.
 fn verify_created_directories(created: &[PathBuf]) -> Result<(), String> {
@@ -544,20 +624,34 @@ fn open_evidence_in(configured: &Path, roots: &EvidenceRoots) -> Result<File, St
     } else {
         request.root.clone()
     };
-    let created = missing_components(&requested_root)?;
+    // Authorize the intended location BEFORE the first directory exists, so a
+    // refused configuration can never leave a directory side effect behind.
+    let intended = intended_evidence_root(&requested_root)?;
+    authorize_evidence_root(&intended.path, roots, relative)?;
     fs::create_dir_all(&requested_root).map_err(|error| {
         format!(
             "unable to create QA evidence directory {}: {error}",
             requested_root.display()
         )
     })?;
-    verify_created_directories(&created)?;
+    // Re-verify what was just created: a reparse point, or a strict canonical
+    // form that differs from the pre-checked location, means a concurrent
+    // materialization changed the meaning of the path.
+    verify_created_directories(&intended.created)?;
     let canonical_root = fs::canonicalize(&requested_root).map_err(|error| {
         format!(
             "unable to canonicalize QA evidence directory {}: {error}",
             requested_root.display()
         )
     })?;
+    if !same_path(&canonical_root, &intended.path) {
+        return Err(format!(
+            "QA evidence directory {} now resolves to {}, which differs from the pre-checked location {}; refusing to write through a materialized redirect",
+            requested_root.display(),
+            canonical_root.display(),
+            intended.path.display()
+        ));
+    }
     authorize_evidence_root(&canonical_root, roots, relative)?;
     let target = canonical_root.join(&request.file_name);
     reject_existing_directory(&target)?;
@@ -690,6 +784,43 @@ mod tests {
         text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
     }
 
+    /// Every path below `root`, sorted. Junctions and symlinks are listed but
+    /// never traversed, so a side-effect assertion cannot wander out of the
+    /// fixture through a link.
+    fn snapshot(root: &Path) -> Vec<PathBuf> {
+        let mut entries = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            let Ok(read) = fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                let path = entry.path();
+                if fs::symlink_metadata(&path)
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false)
+                {
+                    pending.push(path.clone());
+                }
+                entries.push(path);
+            }
+        }
+        entries.sort();
+        entries
+    }
+
+    /// A refused configuration must leave the filesystem exactly as it was: no
+    /// new directory and no new file anywhere below `anchor`, asserted with a
+    /// recursive listing rather than a single existence check.
+    fn assert_untouched(anchor: &Path, before: &[PathBuf], context: &str) {
+        assert_eq!(
+            snapshot(anchor),
+            before,
+            "{context}: a refused QA evidence configuration must not create or change anything below {}",
+            anchor.display()
+        );
+    }
+
     // Case 1.
     #[test]
     fn evidence_path_inside_qa_evidence_root_is_accepted() {
@@ -790,10 +921,38 @@ mod tests {
         );
     }
 
-    // Case 7.
+    // Case 7a: the Stable data root path itself, which must not come into
+    // existence because a QA configuration was refused.
+    #[test]
+    fn refused_stable_root_configuration_has_no_side_effects() {
+        let (_directory, roots) = fixture();
+        let data_parent = roots
+            .stable_data_root
+            .parent()
+            .expect("appdata")
+            .to_path_buf();
+        let before = snapshot(&data_parent);
+        let target = roots.stable_data_root.join("fault-evidence.jsonl");
+        let error = open_evidence_in(&target, &roots)
+            .expect_err("the Stable data root itself must be refused");
+        assert!(error.contains("Stable"), "unexpected error: {error}");
+        assert!(
+            !roots.stable_data_root.exists(),
+            "a refused QA configuration must not create the Stable data root"
+        );
+        assert_untouched(&data_parent, &before, "Stable data root itself");
+    }
+
+    // Case 7b: a child of the Stable data root.
     #[test]
     fn stable_data_root_is_rejected() {
         let (_directory, roots) = fixture();
+        let data_parent = roots
+            .stable_data_root
+            .parent()
+            .expect("appdata")
+            .to_path_buf();
+        let before = snapshot(&data_parent);
         let target = roots
             .stable_data_root
             .join("evidence")
@@ -802,12 +961,19 @@ mod tests {
             open_evidence_in(&target, &roots).expect_err("the Stable data root must be rejected");
         assert!(error.contains("Stable"), "unexpected error: {error}");
         assert!(!target.exists(), "the Stable data root must stay untouched");
+        assert!(
+            !roots.stable_data_root.exists(),
+            "no Stable tree may be created"
+        );
+        assert_untouched(&data_parent, &before, "child of the Stable data root");
     }
 
-    // Case 8.
+    // Case 8: the Dev data root.
     #[test]
     fn dev_data_root_is_rejected() {
         let (_directory, roots) = fixture();
+        let data_parent = roots.dev_data_root.parent().expect("appdata").to_path_buf();
+        let before = snapshot(&data_parent);
         let target = roots
             .dev_data_root
             .join("evidence")
@@ -816,6 +982,8 @@ mod tests {
             open_evidence_in(&target, &roots).expect_err("the Dev data root must be rejected");
         assert!(error.contains("Dev"), "unexpected error: {error}");
         assert!(!target.exists(), "the Dev data root must stay untouched");
+        assert!(!roots.dev_data_root.exists(), "no Dev tree may be created");
+        assert_untouched(&data_parent, &before, "the Dev data root");
     }
 
     // Case 9.
@@ -850,8 +1018,14 @@ mod tests {
     }
 
     // Case 11: a symlink swapped in at the final component before the open.
+    // Building the fixture needs SeCreateSymbolicLinkPrivilege (a local run
+    // without it fails with os error 1314), so the default run reports this as
+    // ignored/NOT_RUN instead of a green pass that proves nothing. CI Windows
+    // runners hold the privilege, so it does execute there. When run explicitly
+    // with --ignored on a host without the privilege it reports BLOCKED.
     #[cfg(windows)]
     #[test]
+    #[ignore = "requires SeCreateSymbolicLinkPrivilege; run with --ignored on a host that grants it"]
     fn symlinked_evidence_target_is_rejected() {
         let (_directory, roots) = fixture();
         let evidence_dir = roots.qa_app_data_dir.join("evidence");
@@ -906,6 +1080,8 @@ mod tests {
                 return;
             }
         }
+        let before_qa = snapshot(&roots.qa_app_data_dir);
+        let before_outside = snapshot(&outside);
         let target = junction.join("fault-evidence.jsonl");
         let error = open_evidence_in(&target, &roots)
             .expect_err("a junction evidence root must be rejected");
@@ -915,13 +1091,68 @@ mod tests {
             !outside.join("fault-evidence.jsonl").exists(),
             "no evidence may be written through the junction"
         );
+        assert_untouched(&outside, &before_outside, "junction redirect target");
+        assert_untouched(&roots.qa_app_data_dir, &before_qa, "junction parent");
     }
 
-    // Case 13: a directory outside every approved root.
+    // Side-effect case (e), nested variant: a junction BELOW the evidence root.
+    // The request looks approved and only canonicalization reveals the redirect,
+    // so the pre-check has to refuse it before anything is created through the
+    // link.
+    #[cfg(windows)]
+    #[test]
+    fn nested_junction_cannot_receive_created_directories() {
+        let (_directory, roots) = fixture();
+        let outside = roots.stable_data_root.join("redirect-target");
+        fs::create_dir_all(&outside).expect("redirect target");
+        fs::create_dir_all(&roots.qa_app_data_dir).expect("qa data dir");
+        let junction = roots.qa_app_data_dir.join("target-link");
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(plain(&junction))
+            .arg(plain(&outside))
+            .output();
+        match output {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                eprintln!(
+                    "BLOCKED nested_junction_cannot_receive_created_directories: mklink /J failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "BLOCKED nested_junction_cannot_receive_created_directories: mklink /J unavailable: {error}"
+                );
+                return;
+            }
+        }
+        let before_qa = snapshot(&roots.qa_app_data_dir);
+        let before_outside = snapshot(&outside);
+        let target = junction.join("evidence").join("fault-evidence.jsonl");
+        let error = open_evidence_in(&target, &roots)
+            .expect_err("creation through a nested junction must be refused");
+        eprintln!("nested junction refused with: {error}");
+        assert!(
+            error.contains("Stable") || error.contains("not an approved QA location"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !outside.join("evidence").exists(),
+            "no directory may be created through the nested junction"
+        );
+        assert_untouched(&outside, &before_outside, "nested junction target");
+        assert_untouched(&roots.qa_app_data_dir, &before_qa, "nested junction parent");
+    }
+
+    // Case 13 / side-effect case (d): an unauthorized absolute path outside the
+    // working directory tree.
     #[test]
     fn unauthorized_directory_is_rejected() {
         let (directory, roots) = fixture();
         let base = fs::canonicalize(directory.path()).expect("canonical tempdir");
+        let before = snapshot(&base);
         let target = base
             .join("outside")
             .join("evidence")
@@ -933,6 +1164,11 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!target.exists(), "no evidence file may be created there");
+        assert!(
+            !base.join("outside").exists(),
+            "a refused configuration must not create its directory tree"
+        );
+        assert_untouched(&base, &before, "unauthorized absolute path");
     }
 
     // Case 14: a directory sitting at the evidence target.
