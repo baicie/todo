@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "runId": "rc2d-20261027T161354Z",
+  "headSha": "56ea18d61a7b63539a5abf48869a50088aaf2656",
+  "appExeSha256": "4e5479a2119db86a278f31fb3484df92061e6fa207d44a1a2210eed6abec5611",
+  "installerSha256": "e7ba70bdc3d4c15c64652188004f1e888c75bdfdcf5032804fa6316925411f80",
+  "generatedAt": "2026-10-27T16:18:34.9955992Z",
+  "scenarios": [
+    {
+      "id": "running-app-activation",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cold-start-activation",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "wrong-account-rejection",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "switch-race-rejection",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "deleted-task-rejection",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "pre-listener-multi-pending",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "pre-listener-multi-rejection",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "target-db-corrupt",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "kill-restart-notification",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "duplicate-toast-click",
+      "status": "NOT_RUN",
+      "evidence": []
+    }
+  ],
+  "files": [
+    "credential-failure.json",
+    "credential-fault-config.json",
+    "credential-fault-evidence.jsonl",
+    "credential-restart.json",
+    "evidence-index.json",
+    "manual-platform.json",
+    "notification-platform.json",
+    "platform-results.json",
+    "platform-scenario.json",
+    "screenshots/qa-final.png",
+    "summary.md",
+    "tests.json",
+    "toast-driver-result.json"
+  ]
+}

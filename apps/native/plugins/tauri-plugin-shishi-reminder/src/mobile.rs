@@ -24,8 +24,13 @@ pub fn register<R: Runtime, C: DeserializeOwned>(
 }
 
 /// A cloneable handle to the platform reminder plugin.
-#[derive(Clone)]
 pub struct Reminder<R: Runtime>(PluginHandle<R>);
+
+impl<R: Runtime> Clone for Reminder<R> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<R: Runtime> Reminder<R> {
     pub(crate) fn new(handle: PluginHandle<R>) -> Self {

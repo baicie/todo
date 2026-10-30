@@ -1,0 +1,122 @@
+{
+  "generatedAt": "2026-10-25T08:03:53.394Z",
+  "kind": "Windows QA import benchmark",
+  "sizes": [1000, 10000, 100000],
+  "runs": 3,
+  "notes": [
+    "Each run imports a real todo-export bundle through the WebView IPC into the QA SQLite store in replace mode.",
+    "This measures import throughput, not desktop cold-start or cloud outbox upload."
+  ],
+  "summaries": [
+    {
+      "scenario": "import_1000",
+      "size": 1000,
+      "runs": 3,
+      "minMs": 396,
+      "p50Ms": 465,
+      "p95Ms": 3485,
+      "maxMs": 3485
+    },
+    {
+      "scenario": "import_10000",
+      "size": 10000,
+      "runs": 3,
+      "minMs": 4626,
+      "p50Ms": 4670,
+      "p95Ms": 4755,
+      "maxMs": 4755
+    },
+    {
+      "scenario": "import_100000",
+      "size": 100000,
+      "runs": 3,
+      "minMs": 81841,
+      "p50Ms": 83235,
+      "p95Ms": 83523,
+      "maxMs": 83523
+    }
+  ],
+  "samples": [
+    {
+      "scenario": "import_1000",
+      "size": 1000,
+      "run": 1,
+      "elapsedMs": 3485,
+      "tasksPerSecond": 287,
+      "allCount": 1000,
+      "generatedAt": "2026-10-25T07:59:29.032Z"
+    },
+    {
+      "scenario": "import_1000",
+      "size": 1000,
+      "run": 2,
+      "elapsedMs": 465,
+      "tasksPerSecond": 2151,
+      "allCount": 1000,
+      "generatedAt": "2026-10-25T07:59:29.504Z"
+    },
+    {
+      "scenario": "import_1000",
+      "size": 1000,
+      "run": 3,
+      "elapsedMs": 396,
+      "tasksPerSecond": 2525,
+      "allCount": 1000,
+      "generatedAt": "2026-10-25T07:59:29.905Z"
+    },
+    {
+      "scenario": "import_10000",
+      "size": 10000,
+      "run": 1,
+      "elapsedMs": 4626,
+      "tasksPerSecond": 2162,
+      "allCount": 10000,
+      "generatedAt": "2026-10-25T07:59:34.558Z"
+    },
+    {
+      "scenario": "import_10000",
+      "size": 10000,
+      "run": 2,
+      "elapsedMs": 4670,
+      "tasksPerSecond": 2141,
+      "allCount": 10000,
+      "generatedAt": "2026-10-25T07:59:39.255Z"
+    },
+    {
+      "scenario": "import_10000",
+      "size": 10000,
+      "run": 3,
+      "elapsedMs": 4755,
+      "tasksPerSecond": 2103,
+      "allCount": 10000,
+      "generatedAt": "2026-10-25T07:59:44.038Z"
+    },
+    {
+      "scenario": "import_100000",
+      "size": 100000,
+      "run": 1,
+      "elapsedMs": 81841,
+      "tasksPerSecond": 1222,
+      "allCount": 100000,
+      "generatedAt": "2026-10-25T08:01:06.115Z"
+    },
+    {
+      "scenario": "import_100000",
+      "size": 100000,
+      "run": 2,
+      "elapsedMs": 83235,
+      "tasksPerSecond": 1201,
+      "allCount": 100000,
+      "generatedAt": "2026-10-25T08:02:29.618Z"
+    },
+    {
+      "scenario": "import_100000",
+      "size": 100000,
+      "run": 3,
+      "elapsedMs": 83523,
+      "tasksPerSecond": 1197,
+      "allCount": 100000,
+      "generatedAt": "2026-10-25T08:03:53.394Z"
+    }
+  ]
+}

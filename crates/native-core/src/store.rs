@@ -169,6 +169,30 @@ impl std::fmt::Debug for TodoStore {
     }
 }
 
+/// Reject duplicate entity IDs before opening a write transaction. IDs are
+/// unique per entity type; a task ID and a list ID may legitimately be equal.
+fn validate_unique_import_ids(bundle: &ExportBundle) -> StoreResult<()> {
+    fn check<'a>(kind: &str, ids: impl Iterator<Item = &'a str>) -> StoreResult<()> {
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            if !seen.insert(id) {
+                return Err(StoreError::Validation(format!(
+                    "导入 bundle 的 {kind} ID 重复: {id}"
+                )));
+            }
+        }
+        Ok(())
+    }
+    check("list", bundle.lists.iter().map(|item| item.id.as_str()))?;
+    check("task", bundle.tasks.iter().map(|item| item.id.as_str()))?;
+    check("step", bundle.steps.iter().map(|item| item.id.as_str()))?;
+    check(
+        "day_plan",
+        bundle.day_plans.iter().map(|item| item.id.as_str()),
+    )?;
+    Ok(())
+}
+
 impl TodoStore {
     pub fn open(path: impl AsRef<Path>) -> StoreResult<Self> {
         let connection = Connection::open(path)?;
@@ -2049,9 +2073,11 @@ impl TodoStore {
         for task in &request.bundle.tasks {
             clean_title(&task.title)?;
         }
+        validate_unique_import_ids(&request.bundle)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
-        if matches!(request.mode, ImportMode::Replace) {
+        let replacing = matches!(request.mode, ImportMode::Replace);
+        if replacing {
             transaction.execute("DELETE FROM local_day_plans", [])?;
             transaction.execute("DELETE FROM local_steps", [])?;
             transaction.execute("DELETE FROM local_tasks", [])?;

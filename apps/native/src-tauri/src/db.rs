@@ -9,8 +9,8 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 use todo_native_accounts::{
-    ActiveAccountContext, ensure_active_account, finish_pending_switch, recover_pending_switch,
-    rollback_pending_switch,
+    ActiveAccountContext, FaultPoint, ensure_active_account, fault_point, finish_pending_switch,
+    recover_pending_switch, rollback_pending_switch,
 };
 use todo_native_core::TodoStore;
 
@@ -287,6 +287,20 @@ pub fn open_store_at(data_dir: &std::path::Path) -> Result<OpenedStore, String> 
         recover_pending_switch(data_dir).map_err(|error| format!("无法恢复账号切换: {error}"))?;
     let account = ensure_active_account(data_dir).map_err(|error| error.to_string())?;
     let target_committed = recovery.target_committed;
+    fault_point(
+        FaultPoint::TargetDatabaseBeforeOpen,
+        None,
+        Some(&account.account_id),
+        Some("open active account database"),
+    )
+    .map_err(|error| error.to_string())?;
+    fault_point(
+        FaultPoint::SqliteBusy,
+        None,
+        Some(&account.account_id),
+        Some("sqlite open preflight"),
+    )
+    .map_err(|error| error.to_string())?;
     let store = match TodoStore::open(&account.database_path) {
         Ok(store) => store,
         Err(error) if target_committed => {
@@ -305,6 +319,13 @@ pub fn open_store_at(data_dir: &std::path::Path) -> Result<OpenedStore, String> 
         }
         Err(error) => return Err(format!("无法打开本地数据库: {error}")),
     };
+    fault_point(
+        FaultPoint::TargetDatabaseAfterOpen,
+        None,
+        Some(&account.account_id),
+        Some("active account database opened"),
+    )
+    .map_err(|error| error.to_string())?;
     if target_committed {
         finish_pending_switch(data_dir).map_err(|error| format!("无法完成账号切换: {error}"))?;
     }
@@ -642,6 +663,47 @@ mod tests {
             !gate.accepts_storage(),
             "abort must not reopen after request"
         );
+    }
+
+    #[cfg(feature = "native-qa")]
+    struct TargetOpenFault {
+        point: todo_native_accounts::FaultPoint,
+    }
+
+    #[cfg(feature = "native-qa")]
+    impl todo_native_accounts::FaultInjector for TargetOpenFault {
+        fn decide(
+            &self,
+            event: &todo_native_accounts::FaultEvent,
+        ) -> Option<todo_native_accounts::FaultAction> {
+            (event.point == self.point).then(|| todo_native_accounts::FaultAction::Error {
+                code: "QA_TARGET_OPEN".to_owned(),
+                message: "QA injected target database open failure".to_owned(),
+            })
+        }
+
+        fn record(&self, _evidence: &todo_native_accounts::FaultEvidence) {}
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[test]
+    fn target_database_and_busy_faults_do_not_create_a_fallback_store() {
+        let _fault_lock = crate::QA_FAULT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for point in [
+            todo_native_accounts::FaultPoint::TargetDatabaseBeforeOpen,
+            todo_native_accounts::FaultPoint::TargetDatabaseAfterOpen,
+            todo_native_accounts::FaultPoint::SqliteBusy,
+        ] {
+            let directory = tempfile::tempdir().expect("tempdir");
+            todo_native_accounts::fault::install(std::sync::Arc::new(TargetOpenFault { point }))
+                .expect("install fault");
+            let error = open_store_at(directory.path()).expect_err("injected open failure");
+            assert!(error.contains("QA injected target database open failure"));
+            todo_native_accounts::fault::clear();
+            open_store_at(directory.path()).expect("retry without fault");
+        }
     }
 
     #[test]

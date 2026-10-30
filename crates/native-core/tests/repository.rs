@@ -1,9 +1,9 @@
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{Value, json};
 use todo_native_core::{
     ApplyServerResultRequest, CloudInitializeRequest, CloudMergeMode, CloudSnapshot, DayPlan,
-    ImportMode, ImportRequest, NewList, NewTask, TaskPatch, TaskStatus, TaskView, TodoStore,
-    dispatch,
+    ExportBundle, ImportMode, ImportRequest, NewList, NewTask, TaskPatch, TaskStatus, TaskView,
+    TodoStore, dispatch,
 };
 
 fn new_task(title: &str) -> NewTask {
@@ -436,6 +436,188 @@ fn export_import_roundtrip_and_clear_all_keep_device() {
     assert_eq!(loaded.title, "导出任务");
     assert_eq!(loaded.day_plan_dates, vec!["2026-10-21"]);
     assert_eq!(loaded.steps.len(), 1);
+}
+
+fn import_fixture() -> (TodoStore, ExportBundle, String) {
+    let store = TodoStore::open_in_memory().expect("open store");
+    store.sync_set_enabled(true).expect("enable sync");
+    let list = create_list(&store, "导入清单");
+    let task = store
+        .create_task(NewTask {
+            title: "导入任务".to_owned(),
+            list_id: Some(list.id.clone()),
+            plan_date: Some("2026-10-21".to_owned()),
+            ..NewTask::default()
+        })
+        .expect("task");
+    store.create_step(&task.id, "导入步骤").expect("step");
+    let bundle = store.export_data().expect("export");
+    (store, bundle, task.id)
+}
+
+/// Stable public-API view of all local state touched by Replace import.
+///
+/// `exportedAt`, `appVersion`, and the export format/version envelope are
+/// intentionally excluded: they are export metadata, not business state. The
+/// public API does not expose `server_shadow`/`kv_state` rows, so diagnostics
+/// are recorded here instead; no test-only production IPC was added.
+fn stable_import_snapshot(store: &TodoStore) -> Value {
+    let bundle = store.export_data().expect("export snapshot");
+    json!({
+        "lists": bundle.lists,
+        "tasks": bundle.tasks,
+        "steps": bundle.steps,
+        "dayPlans": bundle.day_plans,
+        "pendingMutations": store
+            .pending_mutations(500)
+            .expect("pending mutations snapshot"),
+        "syncCursor": store.get_sync_cursor().expect("sync cursor snapshot"),
+        "deviceId": store.get_device_id().expect("device id snapshot"),
+        "syncDiagnostics": store
+            .sync_diagnostics()
+            .expect("sync diagnostics snapshot"),
+    })
+}
+
+fn assert_duplicate_import_rejected(kind: &str) {
+    let (store, bundle, _) = import_fixture();
+    let mut duplicate = bundle.clone();
+    match kind {
+        "list" => {
+            let first = duplicate.lists[0].clone();
+            duplicate.lists.push(first);
+        }
+        "task" => {
+            let first = duplicate.tasks[0].clone();
+            duplicate.tasks.push(first);
+        }
+        "step" => {
+            let first = duplicate.steps[0].clone();
+            duplicate.steps.push(first);
+        }
+        "day_plan" => {
+            let first = duplicate.day_plans[0].clone();
+            duplicate.day_plans.push(first);
+        }
+        _ => panic!("unknown kind"),
+    }
+    let snapshot_before = stable_import_snapshot(&store);
+
+    let error = store
+        .import_data(ImportRequest {
+            bundle: duplicate,
+            mode: ImportMode::Replace,
+        })
+        .expect_err("duplicate ID must be rejected");
+    assert!(
+        error.to_string().contains("重复"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains(kind),
+        "error must identify entity type {kind}: {error}"
+    );
+
+    let snapshot_after = stable_import_snapshot(&store);
+    assert_eq!(
+        snapshot_before, snapshot_after,
+        "rejected duplicate {kind} import must not mutate any stable local state"
+    );
+}
+
+#[test]
+fn replace_import_rejects_duplicate_list_ids_before_writing() {
+    assert_duplicate_import_rejected("list");
+}
+
+#[test]
+fn replace_import_rejects_duplicate_task_ids_before_writing() {
+    assert_duplicate_import_rejected("task");
+}
+
+#[test]
+fn replace_import_rejects_duplicate_step_ids_before_writing() {
+    assert_duplicate_import_rejected("step");
+}
+
+#[test]
+fn replace_import_rejects_duplicate_day_plan_ids_before_writing() {
+    assert_duplicate_import_rejected("day_plan");
+}
+
+#[test]
+fn replace_import_allows_same_id_across_entity_types() {
+    let (store, mut bundle, _) = import_fixture();
+    let shared = "shared-entity-id".to_owned();
+    bundle.lists[0].id = shared.clone();
+    bundle.tasks[0].id = shared.clone();
+    bundle.tasks[0].list_id = Some(shared.clone());
+    bundle.steps[0].id = shared.clone();
+    bundle.steps[0].task_id = shared.clone();
+    bundle.day_plans[0].id = shared.clone();
+    bundle.day_plans[0].task_id = shared;
+    store
+        .import_data(ImportRequest {
+            bundle,
+            mode: ImportMode::Replace,
+        })
+        .expect("same ID in different entity types is allowed");
+}
+
+#[test]
+fn external_sqlite_write_lock_is_reported_without_partial_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("locked.sqlite3");
+    let store = TodoStore::open(&path).expect("open store");
+    let lists_before = store.list_lists().expect("lists before");
+    let outbox_before = serde_json::to_value(store.pending_mutations(100).expect("outbox before"))
+        .expect("outbox json");
+
+    let external = Connection::open(&path).expect("external connection");
+    external
+        .execute_batch("BEGIN IMMEDIATE;")
+        .expect("hold external write lock");
+    let error = store
+        .create_list(NewList {
+            name: "blocked".to_owned(),
+            ..NewList::default()
+        })
+        .expect_err("write must observe the external lock");
+    external.execute_batch("ROLLBACK;").expect("release lock");
+
+    let message = error.to_string().to_lowercase();
+    assert!(
+        message.contains("locked") || message.contains("busy"),
+        "unexpected busy error: {error}"
+    );
+    assert_eq!(
+        lists_before.iter().map(|list| &list.id).collect::<Vec<_>>(),
+        store
+            .list_lists()
+            .expect("lists after")
+            .iter()
+            .map(|list| &list.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        outbox_before,
+        serde_json::to_value(store.pending_mutations(100).expect("outbox after"))
+            .expect("outbox json")
+    );
+}
+
+#[test]
+fn merge_import_preserves_unique_rows() {
+    let (store, bundle, task_id) = import_fixture();
+    store
+        .import_data(ImportRequest {
+            bundle,
+            mode: ImportMode::Merge,
+        })
+        .expect("merge import");
+    let task = store.get_task(&task_id).expect("task").expect("task");
+    assert_eq!(task.title, "导入任务");
+    assert_eq!(task.steps.len(), 1);
 }
 
 #[test]

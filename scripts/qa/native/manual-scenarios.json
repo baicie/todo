@@ -1,0 +1,52 @@
+[
+  {
+    "id": "running-app-activation",
+    "title": "Toast 打开任务（应用运行中）",
+    "expected": "Clicking 打开任务 while the app is running opens the target task exactly once"
+  },
+  {
+    "id": "cold-start-activation",
+    "title": "Toast 冷启动激活",
+    "expected": "Clicking a toast while the app is stopped cold-starts and opens the target task"
+  },
+  {
+    "id": "wrong-account-rejection",
+    "title": "错误账号拒绝",
+    "expected": "A toast for account A while B is active does not open A task and produces a rejection"
+  },
+  {
+    "id": "switch-race-rejection",
+    "title": "账号切换竞争拒绝",
+    "expected": "Click during account switch is rejected without opening a wrong-account task"
+  },
+  {
+    "id": "deleted-task-rejection",
+    "title": "已删除任务拒绝",
+    "expected": "A toast for a deleted task does not open any task and produces a rejection"
+  },
+  {
+    "id": "pre-listener-multi-pending",
+    "title": "Listener 前多条 activation",
+    "expected": "Multiple activations queued before the webview listener open in FIFO order"
+  },
+  {
+    "id": "pre-listener-multi-rejection",
+    "title": "Listener 前多条 rejection",
+    "expected": "Multiple rejections queued before the listener are delivered once each in FIFO order"
+  },
+  {
+    "id": "target-db-corrupt",
+    "title": "目标数据库损坏",
+    "expected": "A damaged target database fails closed and keeps the source account active"
+  },
+  {
+    "id": "kill-restart-notification",
+    "title": "强杀后通知/恢复",
+    "expected": "After forced process kill/restart, queue behavior matches the documented fail-closed/at-most-once contract"
+  },
+  {
+    "id": "duplicate-toast-click",
+    "title": "重复点击",
+    "expected": "Repeated click/activation opens a task at most once and does not duplicate toasts"
+  }
+]

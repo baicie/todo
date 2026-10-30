@@ -1,0 +1,307 @@
+name: release-dev
+
+# Dev-only tag release. The tag intentionally does not start with "v", so the
+# production release-acceptance/release-desktop/release-web tag workflows are
+# not triggered. Artifacts are unsigned QA/dev artifacts, not a production
+# signing claim.
+on:
+  push:
+    tags:
+      - '*-dev.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Dev version/tag, e.g. 0.0.1-dev.0'
+        required: true
+        default: '0.0.1-dev.0'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Build web distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @todo/app build
+      - name: Archive web distribution
+        working-directory: apps/app/dist
+        run: |
+          zip -r "../../../shishi-web-${GITHUB_REF_NAME:-dev}.zip" .
+          sha256sum "../../../shishi-web-${GITHUB_REF_NAME:-dev}.zip" > "../../../shishi-web-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: |
+            shishi-web-*.zip
+            shishi-web-sha256.txt
+          if-no-files-found: error
+
+  windows:
+    name: Build unsigned Windows NSIS
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: Build unsigned NSIS
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 build --bundles nsis
+      - name: Upload NSIS
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: apps/native/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS DMG (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: arm64
+            target: aarch64-apple-darwin
+          - os: macos-14
+            label: x64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+          key: ${{ matrix.target }}
+      - run: pnpm install --frozen-lockfile
+      - name: Build DMG for ${{ matrix.label }}
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 build --target ${{ matrix.target }} --bundles dmg
+      - name: Normalize DMG name
+        shell: bash
+        run: |
+          mkdir -p release-macos
+          for file in apps/native/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            cp "$file" "release-macos/Shishi-${GITHUB_REF_NAME:-dev}-macos-${{ matrix.label }}.dmg"
+          done
+          shasum -a 256 release-macos/*.dmg > "release-macos/Shishi-${GITHUB_REF_NAME:-dev}-macos-${{ matrix.label }}.sha256"
+      - name: Verify DMG architecture
+        shell: bash
+        run: |
+          DMG="release-macos/Shishi-${GITHUB_REF_NAME:-dev}-macos-${{ matrix.label }}.dmg"
+          MOUNT="$RUNNER_TEMP/shishi-dmg-verify"
+          rm -rf "$MOUNT"; mkdir -p "$MOUNT"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null
+          APP=$(find "$MOUNT" -maxdepth 2 -name '*.app' -type d | head -1)
+          BIN=$(find "$APP/Contents/MacOS" -maxdepth 1 -type f | head -1)
+          ARCHS=$(lipo -archs "$BIN")
+          echo "DMG binary $BIN archs=$ARCHS"
+          case "${{ matrix.target }}" in
+            aarch64-*) test "$ARCHS" = "arm64" ;;
+            x86_64-*) test "$ARCHS" = "x86_64" ;;
+            *) echo "unexpected target" >&2; exit 1 ;;
+          esac
+          hdiutil detach "$MOUNT" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.label }}
+          path: |
+            release-macos/*.dmg
+            release-macos/*.sha256
+          if-no-files-found: error
+
+  android:
+    name: Build Android APK/AAB (split per ABI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - run: pnpm install --frozen-lockfile
+      - name: Initialize Android project
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android init --ci
+      - name: Build split debug APK/AAB
+        working-directory: apps/native/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android build --debug --apk --aab --split-per-abi
+      - name: Collect and verify Android artifacts
+        shell: bash
+        run: |
+          mkdir -p release-android
+          find apps/native/src-tauri/gen/android/app/build/outputs -type f \
+            \( -name '*.apk' -o -name '*.aab' \) -exec cp {} release-android/ \;
+          declare -A expected=( [app-arm64-debug.apk]=arm64-v8a [app-arm-debug.apk]=armeabi-v7a [app-x86-debug.apk]=x86 [app-x86_64-debug.apk]=x86_64 )
+          for apk in release-android/*.apk; do
+            name=$(basename "$apk")
+            abi=${expected[$name]:-}
+            if [ -z "$abi" ]; then echo "unexpected APK: $name" >&2; exit 1; fi
+            unzip -l "$apk" | grep -q "lib/$abi/" || { echo "APK $name lacks $abi" >&2; exit 1; }
+            echo "verified APK $name -> $abi"
+          done
+          for aab in release-android/*.aab; do
+            name=$(basename "$aab")
+            base="${name%.aab}.apk"
+            abi=${expected[$base]:-}
+            if [ -z "$abi" ]; then echo "unexpected AAB: $name" >&2; exit 1; fi
+            unzip -l "$aab" | grep -q "base/lib/$abi/" || { echo "AAB $name lacks $abi" >&2; exit 1; }
+            echo "verified AAB $name -> $abi"
+          done
+          ls -lh release-android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release-android/*
+          if-no-files-found: error
+
+  release:
+    name: Create or update GitHub dev pre-release
+    needs: [web, windows, macos, android]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-web
+          path: artifacts/web
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: artifacts/macos-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-macos-x64
+          path: artifacts/macos-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-android
+          path: artifacts/android
+      - name: Normalize Android asset names
+        shell: bash
+        run: |
+          cd artifacts/android
+          for apk in app-*-debug.apk; do
+            [ -e "$apk" ] || continue
+            abi="${apk#app-}"; abi="${abi%-debug.apk}"
+            mv "$apk" "Shishi-${GITHUB_REF_NAME}-android-${abi}-debug.apk"
+          done
+          for aab in app-*-debug.aab; do
+            [ -e "$aab" ] || continue
+            abi="${aab#app-}"; abi="${abi%-debug.aab}"
+            mv "$aab" "Shishi-${GITHUB_REF_NAME}-android-${abi}-debug.aab"
+          done
+          ls -lh
+      - name: Remove legacy generic Android asset names
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for name in app-arm-debug.apk app-arm-debug.aab app-arm64-debug.apk app-arm64-debug.aab app-x86-debug.apk app-x86-debug.aab app-x86_64-debug.apk app-x86_64-debug.aab; do
+            gh release delete-asset "$RELEASE_VERSION" "$name" --yes >/dev/null 2>&1 || true
+          done
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          cd artifacts
+          find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: Shishi ${{ env.RELEASE_VERSION }}
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Shishi ${{ env.RELEASE_VERSION }}
+
+            Dev pre-release built entirely by GitHub Actions.
+
+            ### Downloads
+
+            - **macOS Apple Silicon**: `Shishi-${{ env.RELEASE_VERSION }}-macos-arm64.dmg`
+            - **macOS Intel**: `Shishi-${{ env.RELEASE_VERSION }}-macos-x64.dmg`
+            - **Windows x64**: `Shishi_${{ env.RELEASE_VERSION }}_x64-setup.exe`
+            - **Android** debug APK/AAB, split per ABI:
+              armv7 (`android-arm`), arm64 (`android-arm64`), x86 (`android-x86`), x86_64 (`android-x86_64`).
+            - **Web**: `shishi-web-${{ env.RELEASE_VERSION }}.zip`
+            - **Checksums**: `SHA256SUMS.txt` plus macOS `.sha256` files.
+
+            Unsigned QA/dev artifacts. Windows notification actions remain gated;
+            Windows platform is NOT_READY. This release does not merge PR #5 and
+            is not a production release. Tauri updater signatures/latest.json are
+            not published because no signing key is configured.
+          files: |
+            artifacts/SHA256SUMS.txt
+            artifacts/web/*.zip
+            artifacts/web/*.txt
+            artifacts/windows/*.exe
+            artifacts/macos-arm64/*.dmg
+            artifacts/macos-arm64/*.sha256
+            artifacts/macos-x64/*.dmg
+            artifacts/macos-x64/*.sha256
+            artifacts/android/*.apk
+            artifacts/android/*.aab
+          token: ${{ github.token }}

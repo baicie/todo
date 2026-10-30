@@ -2,12 +2,19 @@ mod commands;
 mod db;
 #[cfg(desktop)]
 mod desktop_shell;
+mod diagnostics;
 mod lifecycle;
+mod notification_activation;
+#[cfg(feature = "native-qa")]
+mod qa;
 mod reminders;
 mod secure_tokens;
 mod security;
 
 use tauri::Manager;
+
+#[cfg(all(test, feature = "native-qa"))]
+pub(crate) static QA_FAULT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,6 +40,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(feature = "native-qa")]
+            qa::initialize(app.handle()).map_err(std::io::Error::other)?;
             let opened = db::open_app_store(app.handle()).map_err(std::io::Error::other)?;
             let account = opened.account;
             if account.migrated_from_legacy
@@ -51,7 +60,11 @@ pub fn run() {
             let lifecycle =
                 lifecycle::LifecycleState::load(app.handle()).map_err(std::io::Error::other)?;
             app.manage(lifecycle);
+            app.manage(notification_activation::NotificationActivationState::default());
             app.manage(db::AppState::new(opened.store, reminders, account));
+            #[cfg(desktop)]
+            notification_activation::install_handler(app.handle())
+                .map_err(std::io::Error::other)?;
 
             #[cfg(desktop)]
             {
@@ -93,6 +106,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::todo_storage,
+            commands::qa_build_identity,
             commands::schedule_reminder,
             commands::cancel_reminder,
             commands::reschedule_reminders,
@@ -115,6 +129,12 @@ pub fn run() {
             commands::secure_token_get,
             commands::secure_token_set,
             commands::secure_token_remove,
+            notification_activation::native_notification_listener_ready,
+            notification_activation::native_take_notification_activation,
+            notification_activation::native_ack_notification_activation,
+            notification_activation::native_take_notification_rejection,
+            diagnostics::native_recovery_diagnostics,
+            diagnostics::native_export_recovery_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Shishi native application");

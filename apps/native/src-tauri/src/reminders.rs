@@ -84,6 +84,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 #[cfg(desktop)]
 struct QueuedReminder {
+    reminder_id: String,
     fire_at: DateTime<Utc>,
     title: String,
     body: String,
@@ -148,6 +149,7 @@ impl ReminderAdapter for DesktopTimerAdapter {
         entries.insert(
             reminder_id.to_owned(),
             QueuedReminder {
+                reminder_id: reminder_id.to_owned(),
                 fire_at,
                 title: title.to_owned(),
                 body: body.to_owned(),
@@ -210,8 +212,18 @@ fn permission_label(result: Result<PermissionState, tauri_plugin_notification::E
     .to_owned()
 }
 
+/// Windows notification action routing is experimental until the Windows App
+/// SDK registration/activation path is accepted on a real interactive desktop.
+/// Production Windows builds therefore show the reminder body but do not expose
+/// the "打开任务" action; QA builds retain it for the isolated harness.
+#[cfg(all(windows, not(feature = "native-qa")))]
+const NOTIFICATION_ACTIONS_ENABLED: bool = false;
+#[cfg(any(not(windows), feature = "native-qa"))]
+const NOTIFICATION_ACTIONS_ENABLED: bool = true;
+
 #[cfg(desktop)]
 fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
+    let mut notification_sequence = 0u64;
     loop {
         let due = wait_for_due(&queue);
         if let Some(reminder) = due {
@@ -222,13 +234,44 @@ fn reminder_worker(app: AppHandle, queue: Arc<SharedQueue>) {
                     } else {
                         reminder.body.as_str()
                     };
-                    if let Err(error) = app
+                    notification_sequence = notification_sequence.wrapping_add(1);
+                    let notification_id = format!(
+                        "{}-{notification_sequence}",
+                        chrono::Utc::now().timestamp_millis()
+                    );
+                    let target =
+                        crate::notification_activation::target_from_reminder_id_with_notification(
+                            &reminder.reminder_id,
+                            &notification_id,
+                        );
+                    let mut builder = app
                         .notification()
                         .builder()
                         .title(reminder.title)
-                        .body(body)
-                        .show()
-                    {
+                        .body(body);
+                    if !NOTIFICATION_ACTIONS_ENABLED && target.is_some() {
+                        eprintln!(
+                            "shishi: Windows notification actions are disabled until platform verification"
+                        );
+                    }
+                    if let Some(target) = target.filter(|_| NOTIFICATION_ACTIONS_ENABLED) {
+                        use tauri_plugin_notification::{Action, ActionType};
+                        let action_type =
+                            ActionType::builder(crate::notification_activation::ACTION_TYPE_ID)
+                                .actions(vec![
+                                    Action::builder(target.encode_action_id(), "打开任务").build(),
+                                ])
+                                .build();
+                        if let Err(error) =
+                            app.notification().register_action_types(vec![action_type])
+                        {
+                            eprintln!("shishi: notification action registration failed: {error}");
+                        } else {
+                            builder = builder
+                                .action_type_id(crate::notification_activation::ACTION_TYPE_ID);
+                        }
+                    }
+                    if let Err(error) = builder.show() {
                         eprintln!("shishi: desktop reminder notification failed: {error}");
                     }
                 }
@@ -362,5 +405,16 @@ impl ReminderAdapter for MobileReminderAdapter {
 
     fn request_permission(&self) -> Result<String, String> {
         self.app.shishi_reminder().request_permission()
+    }
+}
+
+#[cfg(all(test, windows, not(feature = "native-qa")))]
+mod tests {
+    #[test]
+    fn windows_production_notification_actions_are_disabled() {
+        assert!(
+            !super::NOTIFICATION_ACTIONS_ENABLED,
+            "Windows production actions must stay disabled until platform verification"
+        );
     }
 }

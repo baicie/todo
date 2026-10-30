@@ -1,6 +1,6 @@
 [package]
 name = "todo-native"
-version = "1.0.0"
+version = "0.0.1-dev.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -13,6 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+# QA-only deterministic fault injection and isolated credential namespace.
+# Production bundles must not enable this feature.
+native-qa = ["todo-native-accounts/fault-injection"]
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

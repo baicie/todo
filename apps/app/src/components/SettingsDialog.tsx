@@ -41,6 +41,7 @@ interface SettingsDialogProps {
   onExportJson: () => Promise<void>;
   onExportCsv: () => Promise<void>;
   onExportIcs: () => Promise<void>;
+  onExportDiagnostics?: () => Promise<void>;
   onImport: (file: File, mode: 'merge' | 'replace') => Promise<void>;
   onClear: () => Promise<void>;
 }
@@ -331,6 +332,23 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 >
                   <CalendarDays size={16} /> 导出日历
                 </button>
+                <Show when={props.platformKind === 'tauri' && props.onExportDiagnostics}>
+                  <button
+                    type="button"
+                    class="secondary-button"
+                    disabled={busy() === 'diagnostics'}
+                    onClick={async () => {
+                      setBusy('diagnostics');
+                      try {
+                        await props.onExportDiagnostics?.();
+                      } finally {
+                        setBusy(null);
+                      }
+                    }}
+                  >
+                    <ShieldCheck size={16} /> 导出诊断包
+                  </button>
+                </Show>
               </div>
             </section>
 

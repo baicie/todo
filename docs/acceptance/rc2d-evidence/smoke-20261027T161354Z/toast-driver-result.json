@@ -1,0 +1,78 @@
+{
+    "schemaVersion":  2,
+    "mode":  "Click",
+    "status":  "NOT_RUN",
+    "runMarker":  "rc2d-20261027T161354Z",
+    "startedAt":  "2026-10-28T01:21:49.9430029Z",
+    "driverReadyAt":  "2026-10-28T01:21:50.2429053Z",
+    "notificationObservedAt":  null,
+    "invokeAt":  null,
+    "finishedAt":  "2026-10-28T01:22:30.5698561Z",
+    "expectedText":  "打开任务",
+    "desktopInteractive":  true,
+    "wpnService":  "Running",
+    "webView2":  "155.0.4283.62",
+    "findings":  [
+
+                 ],
+    "screenshot":  null,
+    "error":  "no unique Toast card with action \u0027打开任务\u0027 and marker \u0027rc2d-20261027T161354Z\u0027 within 40 s",
+    "diagnostics":  {
+                        "hostWindows":  1,
+                        "actionButtons":  0,
+                        "markerElements":  0,
+                        "topLevelWindows":  13
+                    },
+    "samples":  [
+                    {
+                        "at":  "2026-10-28T01:22:10.8918914Z",
+                        "hostWindows":  1,
+                        "actionButtons":  0,
+                        "markerElements":  0,
+                        "topLevelWindows":  13
+                    },
+                    {
+                        "at":  "2026-10-28T01:22:18.2599995Z",
+                        "hostWindows":  1,
+                        "actionButtons":  0,
+                        "markerElements":  0,
+                        "topLevelWindows":  13
+                    },
+                    {
+                        "at":  "2026-10-28T01:22:22.3295962Z",
+                        "hostWindows":  1,
+                        "actionButtons":  0,
+                        "markerElements":  0,
+                        "topLevelWindows":  13
+                    },
+                    {
+                        "at":  "2026-10-28T01:22:26.3773239Z",
+                        "hostWindows":  1,
+                        "actionButtons":  0,
+                        "markerElements":  0,
+                        "topLevelWindows":  13
+                    }
+                ],
+    "timeline":  [
+                     {
+                         "at":  "2026-10-28T01:21:49.9807415Z",
+                         "name":  "uia_loaded",
+                         "detail":  null
+                     },
+                     {
+                         "at":  "2026-10-28T01:21:50.2435018Z",
+                         "name":  "driver_ready",
+                         "detail":  null
+                     },
+                     {
+                         "at":  "2026-10-28T01:22:30.5688515Z",
+                         "name":  "toast_not_found_or_ambiguous",
+                         "detail":  {
+                                        "hostWindows":  1,
+                                        "actionButtons":  0,
+                                        "markerElements":  0,
+                                        "topLevelWindows":  13
+                                    }
+                     }
+                 ]
+}

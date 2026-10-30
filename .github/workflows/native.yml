@@ -37,6 +37,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p todo-native-core -p todo-native-accounts
+      - run: cargo test -p todo-native-accounts --features fault-injection
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p todo-native-core -p todo-native-accounts --all-targets -- -D warnings
 
@@ -64,3 +65,4 @@ jobs:
       - run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
       - run: cargo check --manifest-path apps/native/src-tauri/Cargo.toml
       - run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml --lib
+      - run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml --lib --features native-qa -- --test-threads=1

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AccountError, AccountResult},
+    fault::{self, FaultPoint},
     paths::{
         DEFAULT_ACCOUNT_ID, database_path, ensure_account_dir, ensure_data_root,
         installation_state_file, legacy_database_path, migration_backups_dir, migration_state_file,
@@ -281,10 +282,25 @@ pub struct LegacyReviewReport {
     pub requires_manual_identity_verification: bool,
 }
 
+/// Read-only migration state load. Unlike startup recovery this never repairs
+/// a ReplaceFileW journal or writes the state file back.
+pub fn migration_state_read_only(root: &Path) -> AccountResult<Option<MigrationState>> {
+    let path = migration_state_file(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read(&path)?;
+    let state: MigrationState = serde_json::from_slice(&raw).map_err(|error| {
+        AccountError::InvalidRegistry(format!("migration state is corrupt: {error}"))
+    })?;
+    state.validate()?;
+    Ok(Some(state))
+}
+
 /// Read-only diagnosis for a legacy database blocked as REQUIRES_REVIEW.
 /// This never writes registry/DB state and never offers a force-bind shortcut.
 pub fn legacy_review_report(root: &Path) -> AccountResult<Option<LegacyReviewReport>> {
-    let Some(state) = MigrationState::load(root)? else {
+    let Some(state) = migration_state_read_only(root)? else {
         return Ok(None);
     };
     if state.phase != MigrationPhase::RequiresReview {
@@ -474,6 +490,12 @@ fn verify_complete_migration(
 fn initialize_fresh(root: &Path) -> AccountResult<ActiveAccountContext> {
     let state = InstallationState::new();
     state.save(root)?;
+    fault::point(
+        FaultPoint::InstallationPrepared,
+        Some("PREPARED"),
+        Some(DEFAULT_ACCOUNT_ID),
+        Some("fresh installation marker persisted"),
+    )?;
     resume_fresh_installation(root, state, None)
 }
 
@@ -513,6 +535,12 @@ fn resume_fresh_installation(
         state.touch(InstallationPhase::DatabaseCreated);
         state.save(root)?;
     }
+    fault::point(
+        FaultPoint::InstallationDatabaseCreated,
+        Some("DATABASE_CREATED"),
+        Some(DEFAULT_ACCOUNT_ID),
+        Some("fresh database created"),
+    )?;
     if state.phase == InstallationPhase::DatabaseCreated {
         registry.save(root)?;
         state.touch(InstallationPhase::RegistryCommitted);
@@ -675,6 +703,10 @@ fn run_migration(
     let result = run_migration_inner(root, &source, ownership, &mut state);
     match result {
         Ok(context) => Ok(context),
+        // A QA fault is not a data failure: preserve the phase that was already
+        // durably persisted so the next start resumes instead of pretending the
+        // migration failed or redoing the backup.
+        Err(error @ AccountError::FaultInjected(_)) => Err(error),
         Err(AccountError::NeedsReview { .. }) => Err(AccountError::NeedsReview {
             reason: state.reason.clone().unwrap_or_default(),
             state_path: migration_state_file(root),
@@ -784,6 +816,12 @@ fn run_migration_inner(
     state.verified = Some(target_snapshot.summary());
     state.touch(MigrationPhase::CopyVerified);
     state.save(root)?;
+    fault::point(
+        FaultPoint::MigrationCopyVerified,
+        Some("COPY_VERIFIED"),
+        Some(&target_id),
+        Some("backup/target fingerprints match"),
+    )?;
 
     if registry.account(&target_id).is_none() {
         match &ownership {
@@ -880,6 +918,12 @@ fn ensure_backup(
     state.backup_fingerprint = Some(snapshot.fingerprint);
     state.touch(MigrationPhase::BackupCreated);
     state.save(root)?;
+    fault::point(
+        FaultPoint::MigrationBackupCreated,
+        Some("BACKUP_CREATED"),
+        state.target_account_id.as_deref(),
+        Some("legacy backup durably created"),
+    )?;
     Ok(destination)
 }
 

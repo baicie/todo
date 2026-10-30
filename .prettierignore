@@ -8,3 +8,6 @@ pnpm-lock.yaml
 apps/native/src-tauri/Cargo.lock
 apps/native/plugins/**/permissions/**
 Cargo.lock
+
+# Generated QA evidence is checksum-bound; do not reformat its JSON.
+docs/acceptance/rc2d-evidence/*/

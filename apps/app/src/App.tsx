@@ -47,6 +47,7 @@ import {
   type TaskWithSteps,
 } from '@todo/domain';
 import type { AppPlatform, ThemePreference } from './adapters/platform';
+import { startNotificationActivationBridge } from './lib/notification-activation';
 import { DetailPanel } from './components/DetailPanel';
 import { CalendarView } from './components/CalendarView';
 import { QuickAdd } from './components/QuickAdd';
@@ -126,6 +127,8 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   let quickAddInput: HTMLInputElement | undefined;
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
+  let stopNotificationActivation: (() => void) | undefined;
+  const notificationAbort = new AbortController();
   const scheduledReminders = new Map<string, string>();
   const [reminderIssues, setReminderIssues] = createSignal<ReminderIssue[]>([]);
   let reminderReconcileInFlight: Promise<void> | null = null;
@@ -488,6 +491,48 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     };
     window.addEventListener('keydown', onKeydown);
     void refreshReminders();
+    void startNotificationActivationBridge(
+      {
+        openTask: async (taskId, signal) => {
+          if (signal.aborted || notificationAbort.signal.aborted) return false;
+          try {
+            const task = await props.platform.repository.getTask(taskId);
+            if (!task || signal.aborted || notificationAbort.signal.aborted) return false;
+            // Commit only after the detail is actually rendered. setSelectedId
+            // alone starts an async load and may race a reload/account switch.
+            setSelectedTask(task);
+            setSelectedId(taskId);
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              if (signal.aborted || notificationAbort.signal.aborted) return false;
+              const title = document
+                .querySelector('aside.detail .detail__title')
+                ?.textContent?.trim();
+              if (selectedTask()?.id === taskId && title === task.title) return true;
+            }
+            return false;
+          } catch {
+            return false;
+          }
+        },
+        notify: (message, tone) => {
+          if (!notificationAbort.signal.aborted) showToast(message, { tone });
+        },
+      },
+      notificationAbort.signal,
+    )
+      .then((stop) => {
+        if (notificationAbort.signal.aborted) {
+          // Cleanup happened while initialization was in flight. Release the
+          // listeners now instead of storing a disposer nobody will call.
+          stop();
+          return;
+        }
+        stopNotificationActivation = stop;
+      })
+      .catch(() => {
+        // Notification activation is an enhancement; editing must stay usable.
+      });
     void cloud.initialize();
     if (props.platform.startupSwitchFailure) {
       showToast('上次账号切换未完成，已恢复原账号', {
@@ -502,6 +547,9 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
       void navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
     onCleanup(() => {
+      notificationAbort.abort();
+      stopNotificationActivation?.();
+      stopNotificationActivation = undefined;
       cloud.dispose();
       stopTheme();
       unsubscribe();
@@ -756,6 +804,17 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     const bundle = await service.exportBundle();
     downloadBlob(toIcs(bundle), exportFilename('ics'), 'text/calendar;charset=utf-8');
     showToast('日历已导出', { tone: 'success' });
+  };
+
+  const exportDiagnostics = async () => {
+    if (props.platform.kind !== 'tauri') return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const path = await invoke<string>('native_export_recovery_diagnostics');
+      showToast(`诊断包已导出：${path}`, { tone: 'success' });
+    } catch (error) {
+      reportError(error);
+    }
   };
 
   const importBackup = async (file: File, mode: 'merge' | 'replace') => {
@@ -1247,6 +1306,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           onExportJson={exportJson}
           onExportCsv={exportCsv}
           onExportIcs={exportIcs}
+          onExportDiagnostics={exportDiagnostics}
           onImport={importBackup}
           onClear={clearAll}
         />

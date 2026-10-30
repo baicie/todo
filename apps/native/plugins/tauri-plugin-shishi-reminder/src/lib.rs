@@ -11,6 +11,9 @@ use tauri::{
 };
 
 #[cfg(mobile)]
+use tauri::Manager;
+
+#[cfg(mobile)]
 mod mobile;
 
 #[cfg(mobile)]
@@ -44,7 +47,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .setup(|_app, _api| {
             #[cfg(mobile)]
             {
-                let handle = mobile::register(_api)?;
+                let handle = mobile::register(&_api)?;
                 _app.manage(Reminder::new(handle));
             }
             #[cfg(desktop)]

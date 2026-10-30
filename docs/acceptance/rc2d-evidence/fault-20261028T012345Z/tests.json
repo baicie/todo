@@ -1,0 +1,123 @@
+{
+  "generatedAt": "2026-10-28T01:24:16.416Z",
+  "status": "PARTIAL",
+  "counts": {
+    "PASS": 9,
+    "FAIL": 0,
+    "NOT_RUN": 2
+  },
+  "tests": [
+    {
+      "name": "qa_build_identity",
+      "status": "PASS",
+      "durationMs": 0,
+      "detail": {
+        "identifier": "app.shishi.todo.qa",
+        "dataRoot": "<user>\\AppData\\Roaming\\app.shishi.todo.qa",
+        "credentialService": "app.shishi.todo.rc2d-qa.secure-token"
+      }
+    },
+    {
+      "name": "qa_boot_context",
+      "status": "PASS",
+      "durationMs": 12,
+      "detail": {
+        "accountId": "default",
+        "kind": "anonymous",
+        "switchPhase": null,
+        "dataRoot": "<user>\\AppData\\Roaming\\app.shishi.todo.qa"
+      }
+    },
+    {
+      "name": "qa_storage_roundtrip",
+      "status": "PASS",
+      "durationMs": 1210,
+      "detail": {
+        "taskId": "01a1801b-9c0a-76ad-97fe-3c49df3c61c2",
+        "allCount": 100008,
+        "title": "QA roundtrip 1793150655467"
+      }
+    },
+    {
+      "name": "qa_reminder_permission_contract",
+      "status": "PASS",
+      "durationMs": 4,
+      "detail": {
+        "permission": "granted"
+      }
+    },
+    {
+      "name": "qa_reminder_schedule_cancel",
+      "status": "PASS",
+      "durationMs": 16,
+      "detail": {
+        "reminderId": "qa-reminder-1793150656193",
+        "mode": "scheduled"
+      }
+    },
+    {
+      "name": "qa_credential_namespace",
+      "status": "PASS",
+      "durationMs": 38,
+      "detail": {
+        "service": "app.shishi.todo.rc2d-qa.secure-token",
+        "rejectedKey": "cross-account key",
+        "activeKey": "cloud-refresh:default"
+      }
+    },
+    {
+      "name": "qa_invalid_switch_does_not_change_active_account",
+      "status": "PASS",
+      "durationMs": 13,
+      "detail": {
+        "error": "invalid account registry: target account 01a1673d-1000-7000-8000-deadbeef0000 is not registered",
+        "activeAccountId": "default"
+      }
+    },
+    {
+      "name": "qa_desktop_notification_action_target",
+      "status": "NOT_RUN",
+      "durationMs": 0,
+      "detail": "covered by Rust unit tests; real toast click requires a logged-in account and desktop interaction"
+    },
+    {
+      "name": "qa_wrong_account_notification_is_rejected",
+      "status": "NOT_RUN",
+      "durationMs": 0,
+      "detail": "requires two isolated cloud accounts and an interactive toast; not fabricated"
+    },
+    {
+      "name": "qa_fault_injection_prepared_recovery",
+      "status": "PASS",
+      "durationMs": 37,
+      "detail": {
+        "faultPoint": "switch_prepared_persisted",
+        "error": "injected fault: QA_INJECTED_SWITCH_PREPARE: QA injected failure after switch journal PREPARED",
+        "journalPhaseAfterRecovery": null,
+        "accountId": "01a1801b-9f03-760e-bce8-f19adcfa30d8"
+      }
+    },
+    {
+      "name": "qa_fault_evidence",
+      "status": "PASS",
+      "durationMs": 3,
+      "detail": {
+        "evidenceFile": "fault-evidence.jsonl",
+        "records": 9,
+        "configuredPoints": [
+          "switch_prepared_persisted"
+        ],
+        "observedPoints": [
+          "target_database_before_open",
+          "sqlite_busy",
+          "target_database_after_open",
+          "credential_set",
+          "credential_get",
+          "credential_delete",
+          "switch_prepared_persisted",
+          "switch_journal_before_cleanup"
+        ]
+      }
+    }
+  ]
+}

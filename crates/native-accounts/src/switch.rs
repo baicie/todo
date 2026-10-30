@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AccountError, AccountResult},
+    fault::{self, FaultPoint},
     paths::{
         DEFAULT_ACCOUNT_ID, database_path, ensure_account_dir, pending_account_switch_file,
         sync_directory, sync_file, validate_account_id, validate_database_path, write_json_atomic,
@@ -201,6 +202,12 @@ pub fn prepare_account_switch(root: &Path, target_id: &str) -> AccountResult<Swi
         error_code: None,
     };
     journal.save(root)?;
+    fault::point(
+        FaultPoint::SwitchPreparedPersisted,
+        Some("PREPARED"),
+        Some(&journal.to_account_id),
+        Some("journal persisted"),
+    )?;
     Ok(SwitchStatus {
         active: false,
         from_account_id: Some(journal.from_account_id),
@@ -210,6 +217,30 @@ pub fn prepare_account_switch(root: &Path, target_id: &str) -> AccountResult<Swi
         pending_outbox,
         error_code: None,
     })
+}
+
+/// Read-only request validation used by the command layer before destructive
+/// side effects such as cancelling notifications. It proves the journal target
+/// and generation still match before those effects run.
+pub fn validate_account_switch_request(
+    root: &Path,
+    target_id: &str,
+    generation: u64,
+) -> AccountResult<()> {
+    let journal = PendingAccountSwitch::load(root)?.ok_or_else(|| {
+        AccountError::InvalidRegistry("no prepared account switch exists".to_owned())
+    })?;
+    if journal.to_account_id != target_id || journal.generation != generation {
+        return Err(AccountError::InvalidRegistry(
+            "account switch request does not match the prepared journal".to_owned(),
+        ));
+    }
+    match journal.phase {
+        SwitchPhase::Prepared | SwitchPhase::RestartRequired => Ok(()),
+        _ => Err(AccountError::InvalidRegistry(
+            "account switch is not in a requestable phase".to_owned(),
+        )),
+    }
 }
 
 pub fn request_account_switch(
@@ -229,6 +260,12 @@ pub fn request_account_switch(
         SwitchPhase::Prepared => {
             journal.touch(SwitchPhase::RestartRequired);
             journal.save(root)?;
+            fault::point(
+                FaultPoint::SwitchRestartRequiredPersisted,
+                Some("RESTART_REQUIRED"),
+                Some(&journal.to_account_id),
+                Some("journal persisted"),
+            )?;
         }
         SwitchPhase::RestartRequired => {}
         _ => {
@@ -347,9 +384,27 @@ pub fn recover_pending_switch(root: &Path) -> AccountResult<SwitchRecovery> {
         journal.touch(SwitchPhase::Failed);
         journal.error_code = Some(code.to_owned());
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchFailedPersisted,
+            Some("FAILED"),
+            Some(&journal.to_account_id),
+            Some("failed journal persisted before registry restore"),
+        )?;
         if registry.active_account_id == journal.to_account_id {
+            fault::point(
+                FaultPoint::RegistryActiveBeforeUpdate,
+                Some("FAILED"),
+                Some(&journal.from_account_id),
+                Some("restore source after target validation failure"),
+            )?;
             registry.active_account_id = journal.from_account_id.clone();
             registry.save(root)?;
+            fault::point(
+                FaultPoint::RegistryActiveAfterUpdate,
+                Some("FAILED"),
+                Some(&journal.from_account_id),
+                Some("source restored"),
+            )?;
         }
         return Ok(SwitchRecovery {
             target_committed: false,
@@ -363,11 +418,35 @@ pub fn recover_pending_switch(root: &Path) -> AccountResult<SwitchRecovery> {
     if registry.active_account_id != journal.to_account_id {
         journal.touch(SwitchPhase::VerifyingTarget);
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchVerifyingTargetPersisted,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("journal persisted before registry update"),
+        )?;
+        fault::point(
+            FaultPoint::RegistryActiveBeforeUpdate,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("commit verified target"),
+        )?;
         registry.active_account_id = journal.to_account_id.clone();
         registry.save(root)?;
+        fault::point(
+            FaultPoint::RegistryActiveAfterUpdate,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("target committed"),
+        )?;
     } else {
         journal.touch(SwitchPhase::VerifyingTarget);
         journal.save(root)?;
+        fault::point(
+            FaultPoint::SwitchVerifyingTargetPersisted,
+            Some("VERIFYING_TARGET"),
+            Some(&journal.to_account_id),
+            Some("journal persisted; registry already target"),
+        )?;
     }
     Ok(SwitchRecovery {
         target_committed: true,
@@ -384,9 +463,27 @@ pub fn rollback_pending_switch(root: &Path, error_code: &str) -> AccountResult<S
     journal.touch(SwitchPhase::Failed);
     journal.error_code = Some(error_code.to_owned());
     journal.save(root)?;
+    fault::point(
+        FaultPoint::SwitchFailedPersisted,
+        Some("FAILED"),
+        Some(&journal.to_account_id),
+        Some("rollback failed journal persisted"),
+    )?;
     if registry.active_account_id == journal.to_account_id {
+        fault::point(
+            FaultPoint::RegistryActiveBeforeUpdate,
+            Some("FAILED"),
+            Some(&journal.from_account_id),
+            Some("rollback target to source"),
+        )?;
         registry.active_account_id = journal.from_account_id.clone();
         registry.save(root)?;
+        fault::point(
+            FaultPoint::RegistryActiveAfterUpdate,
+            Some("FAILED"),
+            Some(&journal.from_account_id),
+            Some("rollback source committed"),
+        )?;
     }
     Ok(SwitchFailure {
         from_account_id: journal.from_account_id,
@@ -398,6 +495,43 @@ pub fn rollback_pending_switch(root: &Path, error_code: &str) -> AccountResult<S
 pub fn switch_status(root: &Path) -> AccountResult<SwitchStatus> {
     let journal = PendingAccountSwitch::load(root)?;
     status_from_journal(root, journal)
+}
+
+/// Read-only switch status for diagnostics. Unlike startup status, this never
+/// runs registry recovery or repairs a replacement journal.
+pub fn switch_status_read_only(root: &Path) -> AccountResult<SwitchStatus> {
+    let journal = PendingAccountSwitch::load(root)?;
+    let registry = AccountRegistry::load(root).ok();
+    let from = registry
+        .as_ref()
+        .map(|registry| registry.active_account_id.clone());
+    let current_db = registry
+        .as_ref()
+        .and_then(|registry| database_path(root, &registry.active_account_id).ok());
+    let pending_outbox = current_db
+        .filter(|path| path.is_file())
+        .map(|path| pending_outbox_count(&path))
+        .unwrap_or_default();
+    match journal {
+        Some(journal) => Ok(SwitchStatus {
+            active: false,
+            from_account_id: Some(journal.from_account_id),
+            to_account_id: Some(journal.to_account_id),
+            generation: Some(journal.generation),
+            phase: Some(journal.phase),
+            pending_outbox,
+            error_code: journal.error_code,
+        }),
+        None => Ok(SwitchStatus {
+            active: true,
+            from_account_id: from,
+            to_account_id: None,
+            generation: None,
+            phase: None,
+            pending_outbox,
+            error_code: None,
+        }),
+    }
 }
 
 fn pending_outbox_count(path: &Path) -> i64 {
@@ -675,6 +809,12 @@ fn summary_from_record(record: &AccountRecord, active_id: &str) -> AccountSummar
 }
 
 fn remove_journal(root: &Path) -> AccountResult<()> {
+    fault::point(
+        FaultPoint::SwitchJournalBeforeCleanup,
+        None,
+        None,
+        Some("remove switch journal"),
+    )?;
     match fs::remove_file(pending_account_switch_file(root)) {
         Ok(()) => {
             sync_directory(root)?;
