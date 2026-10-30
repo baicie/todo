@@ -410,11 +410,11 @@ impl ReminderAdapter for MobileReminderAdapter {
 
 #[cfg(all(test, windows, not(feature = "native-qa")))]
 mod tests {
-    #[test]
-    fn windows_production_notification_actions_are_disabled() {
-        assert!(
-            !super::NOTIFICATION_ACTIONS_ENABLED,
-            "Windows production actions must stay disabled until platform verification"
-        );
-    }
+    // A runtime `assert!` on a constant trips clippy::assertions_on_constants, so
+    // the invariant is a compile-time assertion instead: flipping the flag fails
+    // the test build itself, which is a stronger gate than a failing test.
+    const _: () = assert!(
+        !super::NOTIFICATION_ACTIONS_ENABLED,
+        "Windows production actions must stay disabled until platform verification"
+    );
 }
