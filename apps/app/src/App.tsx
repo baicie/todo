@@ -10,6 +10,7 @@ import {
   createSignal,
   onCleanup,
   onMount,
+  untrack,
   type JSX,
 } from 'solid-js';
 import {
@@ -127,13 +128,14 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   const [toast, setToast] = createSignal<ToastState | null>(null);
   const [renaming, setRenaming] = createSignal(false);
   const [renameValue, setRenameValue] = createSignal('');
+  // Written by the detail component's own render report and by nothing else.
   const [renderedDetail, setRenderedDetail] = createSignal<DetailRenderReport | null>(null);
+  /** Generation of the navigator commit behind the current selection; 0 when a manual one. */
+  const [committedDetailGeneration, setCommittedDetailGeneration] = createSignal(0);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let quickAddInput: HTMLInputElement | undefined;
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
-  /** Generation of the commit behind the current selection; 0 when a manual one. */
-  let committedDetailGeneration = 0;
   /** `${revision}:${id}` of the detail load already in flight or loaded. */
   let detailLoadKey: string | null = null;
   let stopNotificationActivation: (() => void) | undefined;
@@ -436,28 +438,15 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     });
   });
 
-  // What the detail panel has on screen, published after the render pass. This
-  // is the confirmation the notification navigator waits for: no DOM query, no
-  // polling, no timeout.
-  createEffect(() => {
-    const task = selectedTask();
-    const id = selectedId();
-    const next: DetailRenderReport | null =
-      task && id && task.id === id ? { taskId: id, generation: committedDetailGeneration } : null;
-    setRenderedDetail((previous) =>
-      previous?.taskId === next?.taskId && previous?.generation === next?.generation
-        ? previous
-        : next,
-    );
-  });
-
   const taskNavigator = createTaskNavigator<TaskWithSteps>({
     getTask: (taskId) => props.platform.repository.getTask(taskId),
     readSelectedId: () => selectedId(),
     readSelectedTask: () => selectedTask(),
     commitSelection: (task, id, generation) => {
-      committedDetailGeneration = generation;
+      // The generation is threaded to the detail component as a signal: only a
+      // reactive prop makes the panel re-report the task it just rendered.
       batch(() => {
+        setCommittedDetailGeneration(generation);
         detailLoadKey = `${revision()}:${id}`;
         setSelectedTask(task);
         setSelectedId(id);
@@ -465,6 +454,7 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     },
     restoreSelection: (previousId, previousTask) => {
       batch(() => {
+        setCommittedDetailGeneration(0);
         detailLoadKey = previousId && previousTask ? `${revision()}:${previousId}` : null;
         setSelectedTask(previousTask);
         setSelectedId(previousId);
@@ -474,8 +464,11 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     subscribeToDetailConfirmation: (listener) =>
       createRoot((disposeRoot) => {
         createEffect(() => {
+          // Only the panel's own report is tracked here; the generation rides
+          // along untracked so a commit cannot publish an empty report and
+          // cancel the transaction it just started.
           const current = renderedDetail();
-          listener(current ?? { taskId: null, generation: committedDetailGeneration });
+          listener(current ?? { taskId: null, generation: untrack(committedDetailGeneration) });
         });
         return disposeRoot;
       }),
@@ -1269,6 +1262,8 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
                 onDeleteStep={deleteStep}
                 onPlan={(planned) => planTask(task(), planned)}
                 onReorder={reorderSelected}
+                navigationGeneration={committedDetailGeneration()}
+                onRenderedDetail={setRenderedDetail}
               />
             </>
           )}

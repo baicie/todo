@@ -1,4 +1,4 @@
-import { batch, createEffect, createRoot, createSignal } from 'solid-js';
+import { batch, createEffect, createRoot, createSignal, on, onCleanup, onMount } from 'solid-js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createTaskNavigator,
@@ -110,6 +110,14 @@ function createHarness() {
     },
     /** The detail panel rendered nothing (render failure / deleted target). */
     reportEmptyDetail(): void {
+      report({ taskId: null, generation: commitGeneration });
+    },
+    /** The detail panel reported a render of one task at one generation. */
+    reportDetail(id: string | null, generation: number): void {
+      report({ taskId: id, generation });
+    },
+    /** The detail panel was closed or torn down: it renders nothing from now on. */
+    closeDetail(): void {
       report({ taskId: null, generation: commitGeneration });
     },
     setRenderOnCommit(value: boolean): void {
@@ -316,29 +324,94 @@ describe('task navigation abort and teardown', () => {
   });
 });
 
+describe('task navigation detail confirmation', () => {
+  it('cannot be confirmed by a report about another task', async () => {
+    const harness = createHarness();
+    harness.setRenderOnCommit(false);
+    const opened = harness.navigator.navigateToTask('a');
+    await harness.resolveLoad(0, harness.task('a'));
+    expect(harness.commits).toHaveLength(1);
+
+    // The App committed "a" but the panel put "b" into its output.
+    harness.reportDetail('b', 1);
+    await flush();
+
+    expect(await opened).toBe(false);
+    expect(harness.restores).toEqual([{ previousId: null, previousTitle: null }]);
+    expect(harness.readSelectedId()).toBeNull();
+  });
+
+  it('cannot be confirmed by a stale generation report for the target task', async () => {
+    const harness = createHarness();
+    harness.setRenderOnCommit(false);
+    const opened = harness.navigator.navigateToTask('a');
+    await harness.resolveLoad(0, harness.task('a'));
+
+    let settled = false;
+    void opened.then(() => {
+      settled = true;
+    });
+    // Generation 0 predates the attempt, so it proves nothing about it.
+    harness.reportDetail('a', 0);
+    await flush();
+    expect(settled).toBe(false);
+
+    harness.reportDetail('a', 1);
+    expect(await opened).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it('stays unconfirmed and resolves false when the panel closes mid-flight', async () => {
+    const harness = createHarness();
+    harness.setRenderOnCommit(false);
+    const opened = harness.navigator.navigateToTask('a');
+    await harness.resolveLoad(0, harness.task('a'));
+    expect(harness.commits).toHaveLength(1);
+
+    harness.closeDetail();
+    await flush();
+
+    expect(await opened).toBe(false);
+    expect(harness.restores).toEqual([{ previousId: null, previousTitle: null }]);
+  });
+
+  it('never confirms an attempt whose account switched before the report', async () => {
+    const harness = createHarness();
+    harness.setRenderOnCommit(false);
+    const opened = harness.navigator.navigateToTask('a');
+    await harness.resolveLoad(0, harness.task('a'));
+
+    harness.switchAccount('account-b');
+    harness.reportDetail('a', 1);
+    await flush();
+
+    expect(await opened).toBe(false);
+    // Superseded, not rolled back: the newer owner keeps the view.
+    expect(harness.restores).toHaveLength(0);
+    expect(harness.readSelectedId()).toBe('a');
+  });
+});
+
 describe('task navigation view wiring', () => {
-  it('confirms the navigation from a Solid effect inside the commit batch', async () => {
+  it('confirms the navigation from a component-owned report inside the commit batch', async () => {
     const [selectedId, setSelectedId] = createSignal<string | null>(null);
     const [selectedTask, setSelectedTask] = createSignal<TestTask | null>(null);
+    const [generation, setGeneration] = createSignal(0);
     const [rendered, setRendered] = createSignal<DetailRenderReport | null>(null);
     const restored: Array<string | null> = [];
     const commits: string[] = [];
-    let committedGeneration = 0;
 
-    // Mirrors App.tsx: the render signal is published by an effect that runs
-    // after the framework render pass, and the navigator resolves on it.
-    const disposeRenderEffect = createRoot((disposeRoot) => {
-      createEffect(() => {
+    // Mirrors DetailPanel: the confirming party reports from its own lifecycle
+    // (the first commit plus every task/generation change) and always reports
+    // the task it actually holds, never an App-side derivation.
+    const disposePanel = createRoot((disposeRoot) => {
+      const report = () => {
         const task = selectedTask();
-        const id = selectedId();
-        const next: DetailRenderReport | null =
-          task && id && task.id === id ? { taskId: id, generation: committedGeneration } : null;
-        setRendered((previous) =>
-          previous?.taskId === next?.taskId && previous?.generation === next?.generation
-            ? previous
-            : next,
-        );
-      });
+        if (task) setRendered({ taskId: task.id, generation: generation() });
+      };
+      onMount(report);
+      createEffect(on(() => [selectedTask()?.id, generation()] as const, report, { defer: true }));
+      onCleanup(() => setRendered(null));
       return disposeRoot;
     });
 
@@ -346,10 +419,10 @@ describe('task navigation view wiring', () => {
       getTask: async (id) => ({ id, title: `title-${id}` }),
       readSelectedId: () => selectedId(),
       readSelectedTask: () => selectedTask(),
-      commitSelection: (task, id, generation) => {
+      commitSelection: (task, id, committedGeneration) => {
         commits.push(id);
-        committedGeneration = generation;
         batch(() => {
+          setGeneration(committedGeneration);
           setSelectedTask(task);
           setSelectedId(id);
         });
@@ -357,6 +430,7 @@ describe('task navigation view wiring', () => {
       restoreSelection: (previousId, previousTask) => {
         restored.push(previousId);
         batch(() => {
+          setGeneration(0);
           setSelectedTask(previousTask);
           setSelectedId(previousId);
         });
@@ -366,7 +440,7 @@ describe('task navigation view wiring', () => {
         createRoot((disposeRoot) => {
           createEffect(() => {
             const current = rendered();
-            listener(current ?? { taskId: null, generation: committedGeneration });
+            listener(current ?? { taskId: null, generation: 0 });
           });
           return disposeRoot;
         }),
@@ -386,6 +460,6 @@ describe('task navigation view wiring', () => {
     expect(selectedId()).toBe('b');
 
     navigator.dispose();
-    disposeRenderEffect();
+    disposePanel();
   });
 });
