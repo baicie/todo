@@ -6,21 +6,18 @@
 //! with encrypted SharedPreferences, and iOS Security.framework Keychain.
 //! Tokens are never written to localStorage or the SQLite database.
 //!
-//! The production credential service name is deliberately stable. RC2-D only
-//! adds a QA namespace and an injectable backend behind the `native-qa` feature;
-//! a production build has no way to select another backend at runtime.
+//! The credential service name is derived from the runtime Tauri identifier
+//! (see `build_identity`), so Stable, Dev and QA never share a namespace. An
+//! unknown identifier is an error, never a fallback to the Stable namespace.
+//! The `native-qa` feature only adds an injectable backend; it does not select
+//! the namespace.
 
 use std::sync::Arc;
 
 use tauri::AppHandle;
 use todo_native_accounts::{LEGACY_REFRESH_TOKEN_KEY, fault_point, refresh_token_key};
 
-#[cfg(desktop)]
-#[cfg(not(feature = "native-qa"))]
-const SERVICE: &str = "app.shishi.todo.secure-token";
-#[cfg(desktop)]
-#[cfg(feature = "native-qa")]
-const SERVICE: &str = "app.shishi.todo.rc2d-qa.secure-token";
+use crate::build_identity;
 
 #[cfg(mobile)]
 use tauri_plugin_shishi_reminder::ReminderExt;
@@ -108,33 +105,40 @@ pub fn install_qa_backend(backend: Arc<dyn CredentialBackend>) -> Result<(), Str
     Ok(())
 }
 
-pub fn service_name() -> &'static str {
+/// The credential service for this build, derived from the runtime Tauri
+/// identifier. An unknown identifier is an error: a build with a typo'd
+/// identifier must be unable to touch another channel's credentials.
+pub fn service_name(app: &AppHandle) -> Result<&'static str, String> {
+    let channel =
+        build_identity::resolve(&app.config().identifier).map_err(|error| error.to_string())?;
     #[cfg(desktop)]
     {
-        SERVICE
+        Ok(channel.credential_service())
     }
     #[cfg(mobile)]
     {
-        "mobile-keychain"
+        // Mobile keychains are already scoped by the bundle identifier.
+        let _ = channel;
+        Ok("mobile-keychain")
     }
 }
 
-fn backend(app: &AppHandle) -> Arc<dyn CredentialBackend> {
+fn backend(app: &AppHandle) -> Result<Arc<dyn CredentialBackend>, String> {
     #[cfg(feature = "native-qa")]
     if let Some(slot) = QA_BACKEND.get()
         && let Ok(guard) = slot.lock()
         && let Some(backend) = guard.as_ref()
     {
-        return Arc::clone(backend);
+        return Ok(Arc::clone(backend));
     }
     #[cfg(desktop)]
     {
-        let _ = app;
-        Arc::new(OsCredentialBackend { service: SERVICE })
+        let service = service_name(app)?;
+        Ok(Arc::new(OsCredentialBackend { service }))
     }
     #[cfg(mobile)]
     {
-        Arc::new(MobileCredentialBackend { app: app.clone() })
+        Ok(Arc::new(MobileCredentialBackend { app: app.clone() }))
     }
 }
 
@@ -158,19 +162,19 @@ fn check_fault(point: todo_native_accounts::FaultPoint) -> Result<(), String> {
 pub fn get(app: &AppHandle, key: &str) -> Result<Option<String>, String> {
     validate_key(key)?;
     check_fault(todo_native_accounts::FaultPoint::CredentialGet)?;
-    backend(app).get(key)
+    backend(app)?.get(key)
 }
 
 pub fn set(app: &AppHandle, key: &str, value: &str) -> Result<(), String> {
     validate_key(key)?;
     check_fault(todo_native_accounts::FaultPoint::CredentialSet)?;
-    backend(app).set(key, value)
+    backend(app)?.set(key, value)
 }
 
 pub fn remove(app: &AppHandle, key: &str) -> Result<(), String> {
     validate_key(key)?;
     check_fault(todo_native_accounts::FaultPoint::CredentialDelete)?;
-    backend(app).delete(key)
+    backend(app)?.delete(key)
 }
 
 fn migrate_with(backend: &dyn CredentialBackend, account_id: &str) -> Result<(), String> {
@@ -214,7 +218,7 @@ fn migrate_with(backend: &dyn CredentialBackend, account_id: &str) -> Result<(),
 /// engine has proven the old database is bound to this cloud account. The old
 /// key is removed only after the account-scoped key is written and read back.
 pub fn migrate_legacy_refresh_token(app: &AppHandle, account_id: &str) -> Result<(), String> {
-    let backend = backend(app);
+    let backend = backend(app)?;
     migrate_with(backend.as_ref(), account_id)
 }
 
