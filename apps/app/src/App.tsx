@@ -3,8 +3,10 @@ import {
   Match,
   Show,
   Switch,
+  batch,
   createEffect,
   createMemo,
+  createRoot,
   createSignal,
   onCleanup,
   onMount,
@@ -47,7 +49,9 @@ import {
   type TaskWithSteps,
 } from '@todo/domain';
 import type { AppPlatform, ThemePreference } from './adapters/platform';
+import { activeAccountId } from './lib/accounts';
 import { startNotificationActivationBridge } from './lib/notification-activation';
+import { createTaskNavigator, type DetailRenderReport } from './lib/task-navigation';
 import { DetailPanel } from './components/DetailPanel';
 import { CalendarView } from './components/CalendarView';
 import { QuickAdd } from './components/QuickAdd';
@@ -123,10 +127,15 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   const [toast, setToast] = createSignal<ToastState | null>(null);
   const [renaming, setRenaming] = createSignal(false);
   const [renameValue, setRenameValue] = createSignal('');
+  const [renderedDetail, setRenderedDetail] = createSignal<DetailRenderReport | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let quickAddInput: HTMLInputElement | undefined;
   let listMenu: HTMLDetailsElement | undefined;
   let loadGeneration = 0;
+  /** Generation of the commit behind the current selection; 0 when a manual one. */
+  let committedDetailGeneration = 0;
+  /** `${revision}:${id}` of the detail load already in flight or loaded. */
+  let detailLoadKey: string | null = null;
   let stopNotificationActivation: (() => void) | undefined;
   const notificationAbort = new AbortController();
   const scheduledReminders = new Map<string, string>();
@@ -403,21 +412,75 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   });
 
   createEffect(() => {
-    revision();
+    const currentRevision = revision();
     const id = selectedId();
     if (!id) {
+      detailLoadKey = null;
       setSelectedTask(null);
       return;
     }
+    // The navigator commits the task it already loaded; reloading the same id
+    // would race that navigation and could overwrite a newer selection.
+    const key = `${currentRevision}:${id}`;
+    if (detailLoadKey === key) return;
+    detailLoadKey = key;
     void props.platform.repository.getTask(id).then((task) => {
-      if (selectedId() !== id) return;
+      if (selectedId() !== id || detailLoadKey !== key) return;
       if (!task) {
+        detailLoadKey = null;
         setSelectedTask(null);
         setSelectedId(null);
       } else {
         setSelectedTask(task);
       }
     });
+  });
+
+  // What the detail panel has on screen, published after the render pass. This
+  // is the confirmation the notification navigator waits for: no DOM query, no
+  // polling, no timeout.
+  createEffect(() => {
+    const task = selectedTask();
+    const id = selectedId();
+    const next: DetailRenderReport | null =
+      task && id && task.id === id ? { taskId: id, generation: committedDetailGeneration } : null;
+    setRenderedDetail((previous) =>
+      previous?.taskId === next?.taskId && previous?.generation === next?.generation
+        ? previous
+        : next,
+    );
+  });
+
+  const taskNavigator = createTaskNavigator<TaskWithSteps>({
+    getTask: (taskId) => props.platform.repository.getTask(taskId),
+    readSelectedId: () => selectedId(),
+    readSelectedTask: () => selectedTask(),
+    commitSelection: (task, id, generation) => {
+      committedDetailGeneration = generation;
+      batch(() => {
+        detailLoadKey = `${revision()}:${id}`;
+        setSelectedTask(task);
+        setSelectedId(id);
+      });
+    },
+    restoreSelection: (previousId, previousTask) => {
+      batch(() => {
+        detailLoadKey = previousId && previousTask ? `${revision()}:${previousId}` : null;
+        setSelectedTask(previousTask);
+        setSelectedId(previousId);
+      });
+    },
+    isDetailRendered: (taskId) => renderedDetail()?.taskId === taskId,
+    subscribeToDetailConfirmation: (listener) =>
+      createRoot((disposeRoot) => {
+        createEffect(() => {
+          const current = renderedDetail();
+          listener(current ?? { taskId: null, generation: committedDetailGeneration });
+        });
+        return disposeRoot;
+      }),
+    readAccountId: () => activeAccountId(),
+    notifyError: (error) => reportError(error),
   });
 
   createEffect(() => {
@@ -493,28 +556,11 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     void refreshReminders();
     void startNotificationActivationBridge(
       {
-        openTask: async (taskId, signal) => {
-          if (signal.aborted || notificationAbort.signal.aborted) return false;
-          try {
-            const task = await props.platform.repository.getTask(taskId);
-            if (!task || signal.aborted || notificationAbort.signal.aborted) return false;
-            // Commit only after the detail is actually rendered. setSelectedId
-            // alone starts an async load and may race a reload/account switch.
-            setSelectedTask(task);
-            setSelectedId(taskId);
-            for (let attempt = 0; attempt < 10; attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 50));
-              if (signal.aborted || notificationAbort.signal.aborted) return false;
-              const title = document
-                .querySelector('aside.detail .detail__title')
-                ?.textContent?.trim();
-              if (selectedTask()?.id === taskId && title === task.title) return true;
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        },
+        // Navigation is a transaction: load -> validate -> commit -> the detail
+        // panel confirms the render through its signal -> ACK. The navigator only
+        // resolves true once the detail confirmed the task, so business state and
+        // delivery state cannot disagree.
+        openTask: (taskId, signal) => taskNavigator.navigateToTask(taskId, signal),
         notify: (message, tone) => {
           if (!notificationAbort.signal.aborted) showToast(message, { tone });
         },
@@ -548,6 +594,9 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     }
     onCleanup(() => {
       notificationAbort.abort();
+      // Settle an in-flight navigation so the bridge never waits on a promise
+      // nobody will resolve after teardown.
+      taskNavigator.dispose();
       stopNotificationActivation?.();
       stopNotificationActivation = undefined;
       cloud.dispose();
