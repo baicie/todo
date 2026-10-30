@@ -1129,15 +1129,24 @@ mod tests {
     }
 
     fn deliver(state: &NotificationActivationState, session_id: &str) -> Option<String> {
+        deliver_at(state, session_id, Instant::now())
+    }
+
+    fn deliver_at(
+        state: &NotificationActivationState,
+        session_id: &str,
+        at: Instant,
+    ) -> Option<String> {
         state
-            .take_for_listener(session_id, |_| Ok("live".to_owned()), |_| {})
+            .take_for_listener_at(session_id, at, |_| Ok("live".to_owned()), |_| {})
             .map(|activation| activation.activation_id)
     }
 
-    fn expired_instant() -> Instant {
-        Instant::now()
-            .checked_sub(ACTIVATION_TTL + Duration::from_secs(1))
-            .expect("instant back-off")
+    /// Forward-only clock helper. `Instant + Duration` cannot fail, while
+    /// `Instant - Duration` panics whenever the result would precede the
+    /// monotonic clock origin (the machine boot), so no test may go backwards.
+    fn after(base: Instant, delta: Duration) -> Instant {
+        base + delta
     }
 
     #[test]
@@ -1505,7 +1514,10 @@ mod tests {
         assert!(
             !state.completed_target_at(
                 &target,
-                Instant::now() + DUPLICATE_TARGET_TTL + Duration::from_secs(1)
+                after(
+                    Instant::now(),
+                    DUPLICATE_TARGET_TTL + Duration::from_secs(1)
+                )
             ),
             "target suppression must expire"
         );
@@ -1785,20 +1797,25 @@ mod tests {
             state.assert_audit();
         }
 
-        // A ends through the time budget instead of an ACK.
+        // A ends through the time budget instead of an ACK. The base instant is
+        // captured and the check instant is derived by going FORWARD, so nothing
+        // here depends on how long the machine has been up.
         let state = NotificationActivationState::default();
-        assert!(state.listener_ready("s1"));
-        state.put_at(activation("a", "task-a"), expired_instant());
-        assert_eq!(deliver(&state, "s1"), None);
+        let base = Instant::now();
+        let check = after(base, ACTIVATION_TTL + Duration::from_secs(1));
+        assert!(state.listener_ready_at("s1", base));
+        state.put_at(activation("a", "task-a"), base);
+        assert_eq!(deliver_at(&state, "s1", check), None);
         assert_eq!(
             state.take_rejection().expect("timed out").code,
             "ACTIVATION_EXPIRED"
         );
-        state.put(activation("b", "task-b"));
-        assert_eq!(deliver(&state, "s1"), Some("b".to_owned()));
-        assert!(state.listener_ready("s2"));
+        // B is admitted at the check instant, so B has spent zero time itself.
+        state.put_at(activation("b", "task-b"), check);
+        assert_eq!(deliver_at(&state, "s1", check), Some("b".to_owned()));
+        assert!(state.listener_ready_at("s2", check));
         assert_eq!(
-            deliver(&state, "s2"),
+            deliver_at(&state, "s2", check),
             Some("b".to_owned()),
             "a timed-out activation must not spend B's retry budget"
         );
@@ -1940,13 +1957,17 @@ mod tests {
     #[test]
     fn activation_ttl_expires_with_evidence() {
         let state = NotificationActivationState::default();
-        let now = Instant::now();
-        assert!(state.listener_ready_at("s1", now));
-        state.put_at(activation("stale", "task-stale"), expired_instant());
-        state.put_at(activation("fresh", "task-fresh"), now);
+        let base = Instant::now();
+        let check = after(base, ACTIVATION_TTL + Duration::from_secs(1));
+        assert!(state.listener_ready_at("s1", base));
+        // "stale" is admitted at the base instant while "fresh" is admitted at the
+        // later check instant, so stale is past its TTL and fresh has spent zero
+        // time. The check instant is reached by adding, never by subtracting.
+        state.put_at(activation("stale", "task-stale"), base);
+        state.put_at(activation("fresh", "task-fresh"), check);
         assert_eq!(
             state
-                .take_for_listener_at("s1", now, |_| Ok("live".to_owned()), |_| {})
+                .take_for_listener_at("s1", check, |_| Ok("live".to_owned()), |_| {})
                 .expect("fresh activation")
                 .activation_id,
             "fresh"
@@ -1965,15 +1986,15 @@ mod tests {
         // The clock is injectable: an activation that was fresh when it was
         // delivered and then crosses the TTL across a listener reload expires
         // instead of being requeued.
-        state.put_at(activation("aging", "task-aging"), now);
+        state.put_at(activation("aging", "task-aging"), check);
         assert_eq!(
             state
-                .take_for_listener_at("s1", now, |_| Ok("live".to_owned()), |_| {})
+                .take_for_listener_at("s1", check, |_| Ok("live".to_owned()), |_| {})
                 .expect("fresh at reservation time")
                 .activation_id,
             "aging"
         );
-        let later = now + ACTIVATION_TTL + Duration::from_secs(1);
+        let later = after(check, ACTIVATION_TTL + Duration::from_secs(1));
         assert!(state.listener_ready_at("s2", later));
         assert!(
             state
