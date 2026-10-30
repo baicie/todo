@@ -4,6 +4,26 @@
 //! against the account registry, the runtime gate and the live task store before
 //! the WebView receives it. A target from another account is never opened, and
 //! Native never switches accounts as a side effect of a click.
+//!
+//! # Delivery state machine
+//!
+//! Every activation ends in exactly one terminal state - delivered and
+//! acknowledged, or rejected with observable evidence. The machine is a single
+//! `Mutex<DeliveryState>` on purpose: the previous pending/delivery split let a
+//! stale re-check after the pending pop silently drop an activation that had no
+//! terminal outcome. With one lock and a *reserved* ownership slot there is no
+//! window between "accounted for" and "committed":
+//!
+//! 1. reserve: under the lock verify the session and that nothing is in flight,
+//!    pop the front activation and move it into the reserved slot.
+//! 2. validate: outside the lock (the account registry and SQLite are touched
+//!    here) - never hold the state lock across it.
+//! 3. commit: under the lock, either promote the reservation to in flight, or
+//!    reject it with evidence, or restore it to the queue front. A reserved slot
+//!    is already owned, so a restore can never fail on capacity.
+//!
+//! The retry budget lives on the activation itself, so one activation can never
+//! spend another's reload retry.
 
 use std::{
     collections::VecDeque,
@@ -13,6 +33,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -139,19 +162,92 @@ pub struct Activation {
     pub activation_id: String,
     pub target: NotificationTargetV1,
     pub task_title: String,
+    /// Delivery bookkeeping owned by this activation. Skipped so the serialized
+    /// WebView contract stays exactly `{activationId, target, taskTitle}`.
+    #[serde(skip)]
+    meta: ActivationMeta,
+}
+
+impl Activation {
+    fn new(activation_id: String, target: NotificationTargetV1, task_title: String) -> Self {
+        Self {
+            activation_id,
+            target,
+            task_title,
+            meta: ActivationMeta::default(),
+        }
+    }
+
+    fn is_expired(&self, now: Instant) -> bool {
+        self.meta.is_expired(now)
+    }
+}
+
+/// Delivery bookkeeping for one activation. It never lives on the shared state:
+/// a shared retry flag is what let one activation spend another's first requeue.
+#[derive(Debug, Clone, Default)]
+struct ActivationMeta {
+    attempts: u32,
+    requeues_used: u32,
+    enqueued_at: Option<Instant>,
+}
+
+impl ActivationMeta {
+    fn admitted_at(now: Instant) -> Self {
+        Self {
+            attempts: 0,
+            requeues_used: 0,
+            enqueued_at: Some(now),
+        }
+    }
+
+    fn is_expired(&self, now: Instant) -> bool {
+        self.enqueued_at
+            .is_some_and(|enqueued_at| now.saturating_duration_since(enqueued_at) >= ACTIVATION_TTL)
+    }
 }
 
 const DUPLICATE_TARGET_TTL: Duration = Duration::from_secs(300);
 const COMPLETED_TARGET_CAPACITY: usize = 32;
 const ACKED_ID_CAPACITY: usize = 32;
 
-#[derive(Default)]
-struct DeliveryMeta {
-    session_id: Option<String>,
-    in_flight: Option<InFlightActivation>,
-    completed: VecDeque<CompletedActivation>,
-    acked: VecDeque<AckedActivation>,
-    requeue_used: bool,
+/// A click is only meaningful while its reminder is fresh. The budget is checked
+/// when an activation is reserved and again when the reservation commits, so an
+/// expired click never reaches the WebView.
+const ACTIVATION_TTL: Duration = Duration::from_secs(300);
+
+/// Reload retries that belong to a single activation: one listener reload may
+/// requeue it, a second reload of the same unacknowledged activation expires it.
+const MAX_REQUEUES_PER_ACTIVATION: u32 = 1;
+
+/// The first delivery plus the single allowed requeue.
+const MAX_DELIVERY_ATTEMPTS: u32 = 2;
+
+/// Capacity for every activation the state holds: pending + reserved + in flight.
+const ACTIVATION_CAPACITY: usize = 8;
+
+/// Bounded rejection window handed to the WebView.
+const REJECTION_CAPACITY: usize = 8;
+
+/// Bounded drain size. Invalid or expired activations are reported and skipped in
+/// one command call so the WebView does not have to poll once per stale click.
+const MAX_ACTIVATION_DRAIN_ATTEMPTS: usize = 8;
+
+/// The only ACK outcomes the delivery state machine accepts. Single source of
+/// truth for the protocol: anything else fails closed before the state lock is
+/// taken, which is what the WebView bridge relies on to detect a mismatch.
+const ACCEPTED_ACK_OUTCOMES: [&str; 4] = ["opened", "rejected", "expired", "duplicate"];
+
+fn is_accepted_ack_outcome(outcome: &str) -> bool {
+    ACCEPTED_ACK_OUTCOMES.contains(&outcome)
+}
+
+struct ReservedActivation {
+    /// Reservation identity. A commit or restore only applies to the reservation
+    /// it owns, so a stale holder can neither commit nor displace another one.
+    ticket: u64,
+    session_id: String,
+    activation: Activation,
 }
 
 struct InFlightActivation {
@@ -168,11 +264,192 @@ struct AckedActivation {
     activation_id: String,
 }
 
+/// Everything the delivery state machine owns, behind one lock.
+#[derive(Default)]
+struct DeliveryState {
+    session_id: Option<String>,
+    pending: VecDeque<Activation>,
+    reserved: Option<ReservedActivation>,
+    in_flight: Option<InFlightActivation>,
+    completed: VecDeque<CompletedActivation>,
+    acked: VecDeque<AckedActivation>,
+    rejections: VecDeque<RejectedActivation>,
+    next_ticket: u64,
+    #[cfg(test)]
+    audit: AuditLedger,
+}
+
+impl DeliveryState {
+    /// Every activation the state currently holds. The capacity cap applies to
+    /// this number, not to the pending queue alone.
+    fn live_count(&self) -> usize {
+        self.pending.len()
+            + usize::from(self.reserved.is_some())
+            + usize::from(self.in_flight.is_some())
+    }
+
+    /// The rejection notice is best-effort UX; keep only the newest bounded
+    /// window. Losing the oldest notice never loses an activation silently,
+    /// because the terminal record is the rejection itself.
+    fn push_rejection(&mut self, rejection: RejectedActivation) {
+        while self.rejections.len() >= REJECTION_CAPACITY {
+            self.rejections.pop_front();
+        }
+        self.rejections.push_back(rejection);
+    }
+
+    /// Terminal outcome: the activation was delivered and acknowledged. The
+    /// bounded ACK record makes a duplicate ACK idempotent.
+    fn terminate_acked(&mut self, activation_id: &str) {
+        self.acked.push_back(AckedActivation {
+            activation_id: activation_id.to_owned(),
+        });
+        while self.acked.len() > ACKED_ID_CAPACITY {
+            self.acked.pop_front();
+        }
+        #[cfg(test)]
+        self.audit.terminate(activation_id, Terminal::Acked);
+    }
+
+    /// Terminal outcome: the activation will never be delivered, and the reason
+    /// is observable through the bounded rejection queue.
+    fn terminate_rejected(&mut self, _activation_id: &str, code: RejectionCode) {
+        // The id is consumed by the test-only accounting audit; the bounded
+        // rejection is the production evidence the WebView needs.
+        self.push_rejection(RejectedActivation::from_code(code));
+        #[cfg(test)]
+        self.audit.terminate(_activation_id, Terminal::Rejected);
+    }
+
+    /// Admit a new activation. Capacity counts every held activation, and a
+    /// displacement is always observable: reserved and in-flight slots belong to
+    /// a delivery in progress and are never touched here.
+    fn admit(&mut self, activation: Activation) {
+        #[cfg(test)]
+        self.audit.admit(&activation.activation_id);
+        if self.live_count() >= ACTIVATION_CAPACITY
+            && let Some(victim) = self.pending.pop_front()
+        {
+            self.terminate_rejected(
+                &victim.activation_id,
+                RejectionCode::ActivationQueueOverflow,
+            );
+        }
+        if self.live_count() >= ACTIVATION_CAPACITY {
+            // Unreachable while the cap exceeds the reserved/in-flight slots, so
+            // the arrival itself is rejected rather than admitted over the cap.
+            self.terminate_rejected(
+                &activation.activation_id,
+                RejectionCode::ActivationQueueOverflow,
+            );
+            return;
+        }
+        self.pending.push_back(activation);
+    }
+
+    fn completed_target_at(&mut self, target: &NotificationTargetV1, now: Instant) -> bool {
+        let key = target_key(target);
+        self.completed.retain(|completed| {
+            now.saturating_duration_since(completed.opened_at) < DUPLICATE_TARGET_TTL
+        });
+        self.completed
+            .iter()
+            .any(|completed| completed.target_key == key)
+    }
+
+    /// Acknowledge the delivery outcome. Duplicate ACKs are idempotent; unknown
+    /// ids, unknown outcomes and an ACK from another session fail closed without
+    /// consuming the in-flight slot.
+    fn acknowledge(
+        &mut self,
+        session_id: &str,
+        activation_id: &str,
+        outcome: &str,
+        now: Instant,
+    ) -> bool {
+        // The command surface rejects an unknown outcome before taking the lock;
+        // the check is repeated here so no future caller can reach the state
+        // machine with an outcome outside the allow-list either.
+        if !is_accepted_ack_outcome(outcome) {
+            return false;
+        }
+        if let Some(in_flight) = self.in_flight.take() {
+            if in_flight.activation.activation_id != activation_id
+                || in_flight.session_id != session_id
+            {
+                self.in_flight = Some(in_flight);
+                return false;
+            }
+            // Only a true opened business result suppresses future clicks of the
+            // same target. rejected/expired/duplicate must not poison the target.
+            if outcome == "opened" {
+                self.completed.push_back(CompletedActivation {
+                    target_key: target_key(&in_flight.activation.target),
+                    opened_at: now,
+                });
+                while self.completed.len() > COMPLETED_TARGET_CAPACITY {
+                    self.completed.pop_front();
+                }
+            }
+            self.terminate_acked(&in_flight.activation.activation_id);
+            return true;
+        }
+        self.acked
+            .iter()
+            .any(|acked| acked.activation_id == activation_id)
+    }
+}
+
+/// What the reserve step produced.
+enum ReserveOutcome {
+    /// The activation is now in the reserved slot and owned by the caller.
+    Reserved { ticket: u64, activation: Activation },
+    /// One activation was finished terminally (duplicate or expired); the drain
+    /// loop may keep going.
+    Drained,
+    /// Nothing can be reserved right now: no session, a delivery already in
+    /// flight, a reservation outstanding, or an empty queue.
+    Unavailable,
+}
+
+/// What the commit step produced.
+enum CommitOutcome {
+    Committed(Activation),
+    /// The activation reached a terminal state (expiry) with evidence recorded.
+    Expired,
+    /// The reservation was restored to the queue or was no longer ours.
+    Relinquished,
+    Poisoned,
+}
+
+/// Ownership of a reserved slot. While it is alive the activation is accounted
+/// for in `DeliveryState::reserved`: capacity cannot displace it and no other
+/// session can take it. Dropping it unresolved (panic in validation, early
+/// return) restores the activation instead of leaking the slot.
+struct ReservationGuard<'a> {
+    state: &'a NotificationActivationState,
+    ticket: u64,
+    now: Instant,
+    resolved: bool,
+}
+
+impl ReservationGuard<'_> {
+    fn resolve(&mut self) {
+        self.resolved = true;
+    }
+}
+
+impl Drop for ReservationGuard<'_> {
+    fn drop(&mut self) {
+        if !self.resolved {
+            self.state.restore_reservation(self.ticket, self.now);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct NotificationActivationState {
-    pending: Mutex<VecDeque<Activation>>,
-    delivery: Mutex<DeliveryMeta>,
-    rejections: Mutex<VecDeque<RejectedActivation>>,
+    state: Mutex<DeliveryState>,
     sequence: AtomicU64,
 }
 
@@ -183,71 +460,194 @@ impl NotificationActivationState {
         format!("{millis}-{sequence}")
     }
 
-    fn put(&self, activation: Activation) {
-        if let Ok(mut pending) = self.pending.lock() {
-            // Bound the in-memory queue; a burst of clicks must not grow without
-            // limit. Oldest activations are dropped before newer ones.
-            while pending.len() >= 8 {
-                pending.pop_front();
-            }
-            pending.push_back(activation);
+    /// Run `visit` under the one state lock. `None` means the lock is poisoned:
+    /// every caller fails closed instead of unwrapping a poisoned lock.
+    fn with_state<R>(&self, visit: impl FnOnce(&mut DeliveryState) -> R) -> Option<R> {
+        match self.state.lock() {
+            Ok(mut state) => Some(visit(&mut state)),
+            Err(_) => None,
         }
     }
 
+    fn put(&self, activation: Activation) {
+        self.put_at(activation, Instant::now());
+    }
+
+    fn put_at(&self, mut activation: Activation, now: Instant) {
+        activation.meta = ActivationMeta::admitted_at(now);
+        let _ = self.with_state(|state| state.admit(activation));
+    }
+
+    /// Test-only raw pop. Bypasses delivery accounting, so tests that audit the
+    /// invariant must not use it: it exists to assert queue order.
+    #[cfg(test)]
     pub fn take(&self) -> Option<Activation> {
-        self.pending
-            .lock()
-            .ok()
-            .and_then(|mut pending| pending.pop_front())
+        self.with_state(|state| state.pending.pop_front()).flatten()
     }
 
     fn put_rejection(&self, rejection: RejectedActivation) {
-        if let Ok(mut rejections) = self.rejections.lock() {
-            // The rejection notice is best-effort UX; failure to deliver it is
-            // fail-closed. Keep only the newest bounded window.
-            while rejections.len() >= 8 {
-                rejections.pop_front();
-            }
-            rejections.push_back(rejection);
-        }
+        let _ = self.with_state(|state| state.push_rejection(rejection));
     }
 
     pub fn take_rejection(&self) -> Option<RejectedActivation> {
-        self.rejections
-            .lock()
-            .ok()
-            .and_then(|mut rejections| rejections.pop_front())
+        self.with_state(|state| state.rejections.pop_front())
+            .flatten()
     }
 
     /// Register the WebView listener session. A reload with a different session
-    /// may have left an activation in flight; requeue it once at the front so a
-    /// lost ACK does not lose the click. A second reload drops it (bounded
-    /// recovery), which is surfaced as no delivery rather than a synthetic open.
+    /// may have left an activation in flight; requeue it so a lost ACK does not
+    /// lose the click. The retry budget belongs to that activation: its second
+    /// reload expires it instead of delivering it a third time.
     pub fn listener_ready(&self, session_id: &str) -> bool {
+        self.listener_ready_at(session_id, Instant::now())
+    }
+
+    fn listener_ready_at(&self, session_id: &str, now: Instant) -> bool {
         if !valid_component(session_id) {
             return false;
         }
-        let Ok(mut delivery) = self.delivery.lock() else {
-            return false;
-        };
-        let is_new_session = delivery.session_id.as_deref() != Some(session_id);
-        if is_new_session && let Some(in_flight) = delivery.in_flight.take() {
-            if delivery.requeue_used {
-                self.put_rejection(RejectedActivation::from_code(
-                    RejectionCode::ActivationExpired,
-                ));
-            } else {
-                delivery.requeue_used = true;
-                if let Ok(mut pending) = self.pending.lock() {
-                    if pending.len() >= 8 {
-                        pending.pop_back();
-                    }
-                    pending.push_front(in_flight.activation);
+        self.with_state(|state| {
+            let is_new_session = state.session_id.as_deref() != Some(session_id);
+            if is_new_session && let Some(in_flight) = state.in_flight.take() {
+                let mut activation = in_flight.activation;
+                if activation.meta.requeues_used >= MAX_REQUEUES_PER_ACTIVATION
+                    || activation.is_expired(now)
+                {
+                    state.terminate_rejected(
+                        &activation.activation_id,
+                        RejectionCode::ActivationExpired,
+                    );
+                } else {
+                    activation.meta.requeues_used = activation.meta.requeues_used.saturating_add(1);
+                    // Ownership transfer inside one critical section: the slot is
+                    // already accounted for, so capacity policy does not apply.
+                    state.pending.push_front(activation);
                 }
             }
-        }
-        delivery.session_id = Some(session_id.to_owned());
-        true
+            state.session_id = Some(session_id.to_owned());
+        })
+        .is_some()
+    }
+
+    /// Reserve the front activation for a session - one critical section, no
+    /// window in which the activation is accounted for nowhere.
+    fn reserve_for_session(&self, session_id: &str, now: Instant) -> ReserveOutcome {
+        self.with_state(|state| {
+            if state.session_id.as_deref() != Some(session_id)
+                || state.in_flight.is_some()
+                || state.reserved.is_some()
+            {
+                return ReserveOutcome::Unavailable;
+            }
+            let Some(activation) = state.pending.pop_front() else {
+                return ReserveOutcome::Unavailable;
+            };
+            if state.completed_target_at(&activation.target, now) {
+                // A duplicate click of a target that already opened must not open
+                // it again; its terminal evidence is the bounded ACK record.
+                state.terminate_acked(&activation.activation_id);
+                return ReserveOutcome::Drained;
+            }
+            if activation.is_expired(now) {
+                state.terminate_rejected(
+                    &activation.activation_id,
+                    RejectionCode::ActivationExpired,
+                );
+                return ReserveOutcome::Drained;
+            }
+            let ticket = state.next_ticket;
+            state.next_ticket = state.next_ticket.wrapping_add(1);
+            state.reserved = Some(ReservedActivation {
+                ticket,
+                session_id: session_id.to_owned(),
+                activation: activation.clone(),
+            });
+            ReserveOutcome::Reserved { ticket, activation }
+        })
+        .unwrap_or(ReserveOutcome::Unavailable)
+    }
+
+    /// Promote our reservation to the in-flight slot, or hand it back / reject it.
+    fn commit_reservation(
+        &self,
+        ticket: u64,
+        session_id: &str,
+        task_title: &str,
+        now: Instant,
+    ) -> CommitOutcome {
+        self.with_state(|state| {
+            let Some(reserved) = state.reserved.take() else {
+                return CommitOutcome::Relinquished;
+            };
+            if reserved.ticket != ticket {
+                state.reserved = Some(reserved);
+                return CommitOutcome::Relinquished;
+            }
+            if reserved.session_id != session_id {
+                state.pending.push_front(reserved.activation);
+                return CommitOutcome::Relinquished;
+            }
+            let mut activation = reserved.activation;
+            activation.task_title = task_title.to_owned();
+            if activation.is_expired(now) || activation.meta.attempts >= MAX_DELIVERY_ATTEMPTS {
+                state.terminate_rejected(
+                    &activation.activation_id,
+                    RejectionCode::ActivationExpired,
+                );
+                return CommitOutcome::Expired;
+            }
+            if state.session_id.as_deref() != Some(session_id) || state.in_flight.is_some() {
+                // The listener session changed while validation ran. Restoring is
+                // an ownership transfer, so it can never fail on capacity.
+                state.pending.push_front(activation);
+                return CommitOutcome::Relinquished;
+            }
+            activation.meta.attempts = activation.meta.attempts.saturating_add(1);
+            let delivered = activation.clone();
+            state.in_flight = Some(InFlightActivation {
+                activation,
+                session_id: session_id.to_owned(),
+            });
+            CommitOutcome::Committed(delivered)
+        })
+        .unwrap_or(CommitOutcome::Poisoned)
+    }
+
+    /// Terminal for a reservation whose validation failed.
+    fn reject_reservation(&self, ticket: u64, code: RejectionCode) {
+        let _ = self.with_state(|state| {
+            let Some(reserved) = state.reserved.take() else {
+                return;
+            };
+            if reserved.ticket != ticket {
+                state.reserved = Some(reserved);
+                return;
+            }
+            state.terminate_rejected(&reserved.activation.activation_id, code);
+        });
+    }
+
+    /// Hand an unresolved reservation back to the queue front (same position it
+    /// was taken from). On a poisoned lock the slot simply stays accounted for in
+    /// the reserved state, which is inspectable, rather than being lost.
+    fn restore_reservation(&self, ticket: u64, now: Instant) {
+        let _ = self.with_state(|state| {
+            let Some(reserved) = state.reserved.take() else {
+                return;
+            };
+            if reserved.ticket != ticket {
+                state.reserved = Some(reserved);
+                return;
+            }
+            if reserved.activation.is_expired(now) {
+                state.terminate_rejected(
+                    &reserved.activation.activation_id,
+                    RejectionCode::ActivationExpired,
+                );
+                return;
+            }
+            state.pending.push_front(reserved.activation);
+        });
     }
 
     /// Take one valid activation for a specific listener session. The activation
@@ -255,6 +655,20 @@ impl NotificationActivationState {
     fn take_for_listener<F, R>(
         &self,
         session_id: &str,
+        validate: F,
+        reject: R,
+    ) -> Option<Activation>
+    where
+        F: FnMut(&Activation) -> Result<String, RejectionCode>,
+        R: FnMut(RejectionCode),
+    {
+        self.take_for_listener_at(session_id, Instant::now(), validate, reject)
+    }
+
+    fn take_for_listener_at<F, R>(
+        &self,
+        session_id: &str,
+        now: Instant,
         mut validate: F,
         mut reject: R,
     ) -> Option<Activation>
@@ -262,123 +676,190 @@ impl NotificationActivationState {
         F: FnMut(&Activation) -> Result<String, RejectionCode>,
         R: FnMut(RejectionCode),
     {
-        {
-            let Ok(delivery) = self.delivery.lock() else {
-                return None;
-            };
-            if delivery.session_id.as_deref() != Some(session_id) || delivery.in_flight.is_some() {
-                return None;
-            }
-        }
         for _ in 0..MAX_ACTIVATION_DRAIN_ATTEMPTS {
-            let activation = self.take()?;
-            if self.completed_target(&activation.target) {
-                // A duplicate click of a target that already opened must not open
-                // it again.
-                continue;
-            }
+            let (ticket, activation) = match self.reserve_for_session(session_id, now) {
+                ReserveOutcome::Reserved { ticket, activation } => (ticket, activation),
+                ReserveOutcome::Drained => continue,
+                ReserveOutcome::Unavailable => return None,
+            };
+            let mut reservation = ReservationGuard {
+                state: self,
+                ticket,
+                now,
+                resolved: false,
+            };
+            // The account registry and SQLite are touched here: never hold the
+            // state lock across validation.
             match validate(&activation) {
                 Ok(task_title) => {
-                    let activation = Activation {
-                        task_title,
-                        ..activation
-                    };
-                    let Ok(mut delivery) = self.delivery.lock() else {
-                        return None;
-                    };
-                    if delivery.session_id.as_deref() != Some(session_id)
-                        || delivery.in_flight.is_some()
-                    {
-                        if let Ok(mut pending) = self.pending.lock()
-                            && pending.len() < 8
-                        {
-                            pending.push_front(activation);
+                    match self.commit_reservation(ticket, session_id, &task_title, now) {
+                        CommitOutcome::Committed(delivered) => {
+                            reservation.resolve();
+                            return Some(delivered);
                         }
-                        return None;
+                        CommitOutcome::Expired => {
+                            reservation.resolve();
+                            continue;
+                        }
+                        CommitOutcome::Relinquished => {
+                            reservation.resolve();
+                            return None;
+                        }
+                        CommitOutcome::Poisoned => return None,
                     }
-                    delivery.in_flight = Some(InFlightActivation {
-                        activation: activation.clone(),
-                        session_id: session_id.to_owned(),
-                    });
-                    return Some(activation);
                 }
-                Err(code) => reject(code),
+                Err(code) => {
+                    self.reject_reservation(ticket, code);
+                    reservation.resolve();
+                    reject(code);
+                    continue;
+                }
             }
         }
         None
     }
 
-    fn completed_target(&self, target: &NotificationTargetV1) -> bool {
-        self.completed_target_at(target, Instant::now())
-    }
-
-    fn completed_target_at(&self, target: &NotificationTargetV1, now: Instant) -> bool {
-        let key = target_key(target);
-        self.delivery
-            .lock()
-            .map(|mut delivery| {
-                delivery.completed.retain(|completed| {
-                    now.saturating_duration_since(completed.opened_at) < DUPLICATE_TARGET_TTL
-                });
-                delivery
-                    .completed
-                    .iter()
-                    .any(|completed| completed.target_key == key)
-            })
-            .unwrap_or(true)
-    }
-
     /// Acknowledge the delivery outcome. Duplicate ACKs are idempotent; unknown
     /// ids or unknown outcomes fail closed.
     pub fn acknowledge(&self, session_id: &str, activation_id: &str, outcome: &str) -> bool {
-        if !matches!(outcome, "opened" | "rejected" | "expired" | "duplicate") {
+        if !is_accepted_ack_outcome(outcome) {
             return false;
         }
-        let Ok(mut delivery) = self.delivery.lock() else {
-            return false;
-        };
-        if let Some(in_flight) = delivery.in_flight.take() {
-            if in_flight.activation.activation_id != activation_id
-                || in_flight.session_id != session_id
-            {
-                delivery.in_flight = Some(in_flight);
-                return false;
-            }
-            let activation_id = in_flight.activation.activation_id;
-            // Only a true opened business result suppresses future clicks of the
-            // same target. rejected/expired/duplicate must not poison the target.
-            if outcome == "opened" {
-                delivery.completed.push_back(CompletedActivation {
-                    target_key: target_key(&in_flight.activation.target),
-                    opened_at: Instant::now(),
-                });
-                while delivery.completed.len() > COMPLETED_TARGET_CAPACITY {
-                    delivery.completed.pop_front();
-                }
-            }
-            delivery.acked.push_back(AckedActivation {
-                activation_id: activation_id.clone(),
-            });
-            while delivery.acked.len() > ACKED_ID_CAPACITY {
-                delivery.acked.pop_front();
-            }
-            delivery.requeue_used = false;
-            return true;
-        }
-        delivery
-            .acked
-            .iter()
-            .any(|acked| acked.activation_id == activation_id)
+        self.with_state(|state| {
+            state.acknowledge(session_id, activation_id, outcome, Instant::now())
+        })
+        .unwrap_or(false)
     }
 }
 
 fn target_key(target: &NotificationTargetV1) -> String {
     match &target.notification_id {
-        Some(notification_id) => format!(
-            "{}:{}:{}",
-            target.account_id, target.task_id, notification_id
-        ),
+        Some(notification_id) => {
+            format!(
+                "{}:{}:{}",
+                target.account_id, target.task_id, notification_id
+            )
+        }
         None => format!("{}:{}", target.account_id, target.task_id),
+    }
+}
+
+/// Test-only terminal marker for the accounting audit.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Terminal {
+    Acked,
+    Rejected,
+}
+
+/// Test-only ledger: what was admitted and how each activation terminated.
+#[cfg(test)]
+#[derive(Default)]
+struct AuditLedger {
+    admitted: BTreeSet<String>,
+    terminated: Vec<(String, Terminal)>,
+}
+
+#[cfg(test)]
+impl AuditLedger {
+    fn admit(&mut self, activation_id: &str) {
+        self.admitted.insert(activation_id.to_owned());
+    }
+
+    fn terminate(&mut self, activation_id: &str, terminal: Terminal) {
+        self.terminated.push((activation_id.to_owned(), terminal));
+    }
+}
+
+#[cfg(test)]
+impl NotificationActivationState {
+    fn completed_target(&self, target: &NotificationTargetV1) -> bool {
+        self.completed_target_at(target, Instant::now())
+    }
+
+    fn completed_target_at(&self, target: &NotificationTargetV1, now: Instant) -> bool {
+        self.with_state(|state| state.completed_target_at(target, now))
+            .unwrap_or(true)
+    }
+
+    /// Accounting invariant: every admitted activation is live in exactly one
+    /// slot, or has exactly one terminal record - never both, never neither.
+    /// Capacity is never exceeded.
+    fn audit(&self) -> Result<(), String> {
+        let Ok(state) = self.state.lock() else {
+            return Err("state lock poisoned".to_owned());
+        };
+        if state.live_count() > ACTIVATION_CAPACITY {
+            return Err(format!(
+                "live activation count {} exceeds capacity {ACTIVATION_CAPACITY}",
+                state.live_count()
+            ));
+        }
+        let mut live: Vec<(&str, &'static str)> = Vec::new();
+        live.extend(
+            state
+                .pending
+                .iter()
+                .map(|item| (item.activation_id.as_str(), "pending")),
+        );
+        if let Some(reserved) = state.reserved.as_ref() {
+            live.push((reserved.activation.activation_id.as_str(), "reserved"));
+        }
+        if let Some(in_flight) = state.in_flight.as_ref() {
+            live.push((in_flight.activation.activation_id.as_str(), "in_flight"));
+        }
+        for (index, (activation_id, slot)) in live.iter().enumerate() {
+            if live[..index]
+                .iter()
+                .any(|(earlier, _)| earlier == activation_id)
+            {
+                return Err(format!(
+                    "activation {activation_id} is live in more than one slot ({slot})"
+                ));
+            }
+            if !state
+                .audit
+                .admitted
+                .iter()
+                .any(|admitted| admitted == activation_id)
+            {
+                return Err(format!(
+                    "activation {activation_id} is live in {slot} but was never admitted"
+                ));
+            }
+        }
+        for activation_id in &state.audit.admitted {
+            let live_slot = live
+                .iter()
+                .find(|(live_id, _)| live_id == &activation_id.as_str())
+                .map(|(_, slot)| *slot);
+            let terminals = state
+                .audit
+                .terminated
+                .iter()
+                .filter(|(terminal_id, _)| terminal_id == activation_id)
+                .count();
+            match (live_slot, terminals) {
+                (Some(_), 0) | (None, 1) => {}
+                (Some(slot), terminals) => {
+                    return Err(format!(
+                        "activation {activation_id} is live in {slot} and has {terminals} terminal records"
+                    ));
+                }
+                (None, terminals) => {
+                    return Err(format!(
+                        "activation {activation_id} has no live slot and {terminals} terminal records"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_audit(&self) {
+        if let Err(failure) = self.audit() {
+            panic!("activation accounting invariant violated: {failure}");
+        }
     }
 }
 
@@ -393,6 +874,7 @@ enum RejectionCode {
     TaskNotFound,
     TaskReadFailed,
     ActivationExpired,
+    ActivationQueueOverflow,
 }
 
 impl RejectionCode {
@@ -407,6 +889,7 @@ impl RejectionCode {
             Self::TaskNotFound => "TASK_NOT_FOUND",
             Self::TaskReadFailed => "TASK_READ_FAILED",
             Self::ActivationExpired => "ACTIVATION_EXPIRED",
+            Self::ActivationQueueOverflow => "ACTIVATION_QUEUE_OVERFLOW",
         }
     }
 
@@ -424,6 +907,7 @@ impl RejectionCode {
             Self::TaskNotFound => "提醒对应的任务已删除或不可见",
             Self::TaskReadFailed => "暂时无法读取提醒对应的任务",
             Self::ActivationExpired => "提醒已过期，请重新打开任务",
+            Self::ActivationQueueOverflow => "提醒打开过于频繁，请稍后重新打开任务",
         }
     }
 }
@@ -522,20 +1006,16 @@ pub fn handle_action(app: &AppHandle, action_id: &str) {
             return;
         }
     };
-    let activation = Activation {
-        activation_id: app.state::<NotificationActivationState>().next_id(),
+    let activation = Activation::new(
+        app.state::<NotificationActivationState>().next_id(),
         target,
         task_title,
-    };
+    );
     app.state::<NotificationActivationState>()
         .put(activation.clone());
     show_window(app);
     let _ = app.emit(EVENT_OPEN, activation);
 }
-
-/// Bounded drain size. Invalid activations are reported and skipped in one
-/// command call so the WebView does not have to poll once per stale click.
-const MAX_ACTIVATION_DRAIN_ATTEMPTS: usize = 8;
 
 #[cfg(test)]
 fn take_valid_activation<F, R>(
@@ -619,7 +1099,46 @@ pub fn install_handler(app: &AppHandle) -> tauri_plugin_notification::Result<()>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use super::*;
+
+    fn activation(id: &str, task: &str) -> Activation {
+        Activation::new(
+            id.to_owned(),
+            NotificationTargetV1::new("default", task).expect("target"),
+            "task".to_owned(),
+        )
+    }
+
+    fn activation_for(account: &str, id: &str, task: &str) -> Activation {
+        Activation::new(
+            id.to_owned(),
+            NotificationTargetV1::new(account, task).expect("target"),
+            "task".to_owned(),
+        )
+    }
+
+    fn activation_with_notification(id: &str, task: &str, notification: &str) -> Activation {
+        Activation::new(
+            id.to_owned(),
+            NotificationTargetV1::new_with_notification("default", task, notification)
+                .expect("target"),
+            "task".to_owned(),
+        )
+    }
+
+    fn deliver(state: &NotificationActivationState, session_id: &str) -> Option<String> {
+        state
+            .take_for_listener(session_id, |_| Ok("live".to_owned()), |_| {})
+            .map(|activation| activation.activation_id)
+    }
+
+    fn expired_instant() -> Instant {
+        Instant::now()
+            .checked_sub(ACTIVATION_TTL + Duration::from_secs(1))
+            .expect("instant back-off")
+    }
 
     #[test]
     fn target_round_trips_through_the_action_id() {
@@ -687,13 +1206,8 @@ mod tests {
     #[test]
     fn take_drains_rejected_activations_and_returns_first_valid() {
         let state = NotificationActivationState::default();
-        for (activation_id, task_id) in [("stale", "stale-task"), ("valid", "task-ok")] {
-            state.put(Activation {
-                activation_id: activation_id.to_owned(),
-                target: NotificationTargetV1::new("default", task_id).expect("target"),
-                task_title: "queued".to_owned(),
-            });
-        }
+        state.put(activation("stale", "stale-task"));
+        state.put(activation("valid", "task-ok"));
 
         let mut rejected = Vec::new();
         let activation = take_valid_activation(
@@ -718,12 +1232,7 @@ mod tests {
     #[test]
     fn activation_is_consumed_once() {
         let state = NotificationActivationState::default();
-        let target = NotificationTargetV1::new("default", "task-1").expect("target");
-        state.put(Activation {
-            activation_id: "a1".to_owned(),
-            target,
-            task_title: "task".to_owned(),
-        });
+        state.put(activation("a1", "task-1"));
         assert_eq!(state.take().expect("pending").activation_id, "a1");
         assert!(
             state.take().is_none(),
@@ -735,15 +1244,20 @@ mod tests {
     fn activation_queue_preserves_click_order_and_drops_oldest() {
         let state = NotificationActivationState::default();
         for index in 0..10 {
-            state.put(Activation {
-                activation_id: format!("a{index}"),
-                target: NotificationTargetV1::new("default", format!("task-{index}"))
-                    .expect("target"),
-                task_title: "task".to_owned(),
-            });
+            state.put(activation(&format!("a{index}"), &format!("task-{index}")));
         }
         assert_eq!(state.take().expect("pending").activation_id, "a2");
+        // Both displaced clicks are observable instead of silently dropped.
+        assert_eq!(
+            state.take_rejection().expect("first overflow").code,
+            "ACTIVATION_QUEUE_OVERFLOW"
+        );
+        assert_eq!(
+            state.take_rejection().expect("second overflow").code,
+            "ACTIVATION_QUEUE_OVERFLOW"
+        );
     }
+
     #[test]
     fn rejection_queue_is_fifo_and_consumed_once() {
         let state = NotificationActivationState::default();
@@ -840,6 +1354,10 @@ mod tests {
             (RejectionCode::TaskNotFound, "TASK_NOT_FOUND"),
             (RejectionCode::TaskReadFailed, "TASK_READ_FAILED"),
             (RejectionCode::ActivationExpired, "ACTIVATION_EXPIRED"),
+            (
+                RejectionCode::ActivationQueueOverflow,
+                "ACTIVATION_QUEUE_OVERFLOW",
+            ),
         ] {
             assert_eq!(code.as_str(), expected);
             let rejection = RejectedActivation::from_code(code);
@@ -853,11 +1371,7 @@ mod tests {
     fn rejected_notification_does_not_consume_valid_activation() {
         let state = NotificationActivationState::default();
         state.put_rejection(RejectedActivation::from_code(RejectionCode::TaskNotFound));
-        state.put(Activation {
-            activation_id: "valid".to_owned(),
-            target: NotificationTargetV1::new("default", "task-1").expect("target"),
-            task_title: "current".to_owned(),
-        });
+        state.put(activation("valid", "task-1"));
         assert_eq!(state.take().expect("activation").activation_id, "valid");
         assert_eq!(
             state.take_rejection().expect("rejection").code,
@@ -865,29 +1379,11 @@ mod tests {
         );
     }
 
-    fn activation(id: &str, task: &str) -> Activation {
-        Activation {
-            activation_id: id.to_owned(),
-            target: NotificationTargetV1::new("default", task).expect("target"),
-            task_title: "task".to_owned(),
-        }
-    }
-
     #[test]
     fn distinct_notification_instances_for_same_task_are_both_delivered() {
         let state = NotificationActivationState::default();
-        for (activation_id, notification_id) in [("a1", "instance-1"), ("a2", "instance-2")] {
-            state.put(Activation {
-                activation_id: activation_id.to_owned(),
-                target: NotificationTargetV1::new_with_notification(
-                    "default",
-                    "task-1",
-                    notification_id,
-                )
-                .expect("target"),
-                task_title: "task".to_owned(),
-            });
-        }
+        state.put(activation_with_notification("a1", "task-1", "instance-1"));
+        state.put(activation_with_notification("a2", "task-1", "instance-2"));
         assert!(state.listener_ready("s1"));
         let first = state
             .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
@@ -899,6 +1395,7 @@ mod tests {
             .expect("second legitimate reminder");
         assert_eq!(second.activation_id, "a2");
         assert!(state.acknowledge("s1", "a2", "opened"));
+        state.assert_audit();
     }
 
     #[test]
@@ -928,6 +1425,7 @@ mod tests {
             .expect("second");
         assert_eq!(second.activation_id, "a2");
         assert!(state.acknowledge("s1", "a2", "opened"));
+        state.assert_audit();
     }
 
     #[test]
@@ -959,6 +1457,7 @@ mod tests {
             "old session must not ACK the new in-flight delivery"
         );
         assert!(state.acknowledge("s2", "a1", "opened"));
+        state.assert_audit();
     }
 
     #[test]
@@ -982,6 +1481,7 @@ mod tests {
                 "a2",
                 "{outcome} must not poison target"
             );
+            state.assert_audit();
         }
     }
 
@@ -989,11 +1489,11 @@ mod tests {
     fn opened_target_is_suppressed_only_within_ttl() {
         let state = NotificationActivationState::default();
         let target = NotificationTargetV1::new("default", "task-1").expect("target");
-        state.put(Activation {
-            activation_id: "a1".to_owned(),
-            target: target.clone(),
-            task_title: "task".to_owned(),
-        });
+        state.put(Activation::new(
+            "a1".to_owned(),
+            target.clone(),
+            "task".to_owned(),
+        ));
         assert!(state.listener_ready("s1"));
         assert!(
             state
@@ -1032,6 +1532,7 @@ mod tests {
                 .activation_id,
             "a2"
         );
+        state.assert_audit();
     }
 
     #[test]
@@ -1047,12 +1548,14 @@ mod tests {
                 .expect("queued");
             assert_eq!(delivered.activation_id, format!("a{index}"));
             assert!(state.acknowledge("s1", &delivered.activation_id, "opened"));
+            state.assert_audit();
         }
         assert!(
             state
                 .take_for_listener("s1", |_| Ok("task".to_owned()), |_| {})
                 .is_none()
         );
+        state.assert_audit();
     }
 
     #[test]
@@ -1081,6 +1584,7 @@ mod tests {
             state.take_rejection().expect("expired").code,
             "ACTIVATION_EXPIRED"
         );
+        state.assert_audit();
     }
 
     #[test]
@@ -1111,6 +1615,7 @@ mod tests {
                 .is_none(),
             "completed target must be deduplicated"
         );
+        state.assert_audit();
     }
 
     #[test]
@@ -1135,6 +1640,7 @@ mod tests {
             .expect("valid");
         assert_eq!(delivered.activation_id, "valid");
         assert_eq!(rejected, vec!["TASK_NOT_FOUND"]);
+        state.assert_audit();
     }
 
     #[test]
@@ -1150,6 +1656,47 @@ mod tests {
         assert!(state.acknowledge("s1", &delivered.activation_id, "opened"));
         assert!(!state.acknowledge("s1", "unknown", "opened"));
         assert!(!state.acknowledge("s1", &delivered.activation_id, "bogus"));
+        state.assert_audit();
+    }
+
+    #[test]
+    fn unknown_ack_outcome_fails_closed_without_consuming_the_in_flight_slot() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put(activation("a", "task-a"));
+        let delivered = state
+            .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+            .expect("delivery");
+        assert_eq!(delivered.activation_id, "a");
+
+        for outcome in ["garbage", "", "OPENED", "opened ", "Opened", "ack"] {
+            assert!(
+                !state.acknowledge("s1", "a", outcome),
+                "unknown outcome {outcome:?} must fail closed"
+            );
+            // Returning false is not enough: the in-flight slot must still be
+            // held, so the same activation can still be acknowledged for real.
+            assert!(
+                state
+                    .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+                    .is_none(),
+                "in-flight slot consumed by {outcome:?}"
+            );
+            assert!(
+                state.take_rejection().is_none(),
+                "a rejected ACK must not fabricate rejection evidence for the click"
+            );
+            state.assert_audit();
+        }
+
+        // The activation is still live in the in-flight slot and terminates only
+        // on an accepted outcome.
+        assert!(state.acknowledge("s1", "a", "opened"));
+        assert!(
+            !state.acknowledge("s1", "a", "garbage"),
+            "an unknown outcome must fail closed even for an already acked id"
+        );
+        state.assert_audit();
     }
 
     #[test]
@@ -1161,5 +1708,631 @@ mod tests {
             state.take_rejection().expect("pre-listener rejection").code,
             "TASK_NOT_FOUND"
         );
+    }
+
+    #[test]
+    fn activation_json_contract_is_stable() {
+        let mut activation = Activation::new(
+            "a1".to_owned(),
+            NotificationTargetV1::new("default", "task-1").expect("target"),
+            "任务标题".to_owned(),
+        );
+        activation.meta = ActivationMeta::admitted_at(Instant::now());
+        let value = serde_json::to_value(&activation).expect("serialize");
+        let object = value.as_object().expect("activation object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["activationId", "target", "taskTitle"]);
+        assert_eq!(
+            serde_json::to_string(&activation).expect("serialize"),
+            r#"{"activationId":"a1","target":{"accountId":"default","taskId":"task-1","sourceVersion":1},"taskTitle":"任务标题"}"#
+        );
+    }
+
+    #[test]
+    fn requeued_activation_expiry_does_not_spend_a_later_activations_retry() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a", "task-a"));
+        assert!(state.listener_ready("s1"));
+        assert_eq!(deliver(&state, "s1"), Some("a".to_owned()));
+        assert!(state.listener_ready("s2"));
+        assert_eq!(deliver(&state, "s2"), Some("a".to_owned()));
+        // The second reload of the same unacknowledged activation spends its one
+        // allowed requeue and terminates it with evidence.
+        assert!(state.listener_ready("s3"));
+        assert_eq!(deliver(&state, "s3"), None);
+        assert_eq!(
+            state.take_rejection().expect("activation a expired").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(
+            state.take_rejection().is_none(),
+            "only one activation has ended so far"
+        );
+        state.assert_audit();
+
+        // A different activation owns its own retry budget: the expiry of a must
+        // not spend b's first requeue.
+        state.put(activation("b", "task-b"));
+        assert_eq!(deliver(&state, "s3"), Some("b".to_owned()));
+        assert!(state.listener_ready("s4"));
+        assert_eq!(
+            deliver(&state, "s4"),
+            Some("b".to_owned()),
+            "B must get its own first requeue after another activation expired"
+        );
+        assert!(state.acknowledge("s4", "b", "opened"));
+        state.assert_audit();
+    }
+
+    #[test]
+    fn terminal_outcome_does_not_spend_a_later_activations_retry() {
+        for outcome in ["opened", "rejected"] {
+            let state = NotificationActivationState::default();
+            assert!(state.listener_ready("s1"));
+            state.put(activation("a", "task-a"));
+            assert_eq!(deliver(&state, "s1"), Some("a".to_owned()));
+            assert!(state.acknowledge("s1", "a", outcome));
+            state.put(activation("b", "task-b"));
+            assert_eq!(deliver(&state, "s1"), Some("b".to_owned()));
+            assert!(state.listener_ready("s2"));
+            assert_eq!(
+                deliver(&state, "s2"),
+                Some("b".to_owned()),
+                "{outcome} must not spend B's retry budget"
+            );
+            assert!(state.acknowledge("s2", "b", "opened"));
+            state.assert_audit();
+        }
+
+        // A ends through the time budget instead of an ACK.
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put_at(activation("a", "task-a"), expired_instant());
+        assert_eq!(deliver(&state, "s1"), None);
+        assert_eq!(
+            state.take_rejection().expect("timed out").code,
+            "ACTIVATION_EXPIRED"
+        );
+        state.put(activation("b", "task-b"));
+        assert_eq!(deliver(&state, "s1"), Some("b".to_owned()));
+        assert!(state.listener_ready("s2"));
+        assert_eq!(
+            deliver(&state, "s2"),
+            Some("b".to_owned()),
+            "a timed-out activation must not spend B's retry budget"
+        );
+        assert!(state.acknowledge("s2", "b", "opened"));
+        state.assert_audit();
+    }
+
+    #[test]
+    fn ten_activations_delivered_in_click_order_reach_terminal_state() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        let mut delivered = Vec::new();
+        for index in 0..10 {
+            let id = format!("a{index}");
+            state.put(activation(&id, &format!("task-{index}")));
+            let item = state
+                .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+                .expect("click must be delivered");
+            assert_eq!(item.activation_id, id, "click order must be preserved");
+            assert!(state.acknowledge("s1", &item.activation_id, "opened"));
+            delivered.push(item.activation_id);
+            state.assert_audit();
+        }
+        assert_eq!(delivered.len(), 10);
+        assert!(
+            state
+                .take_for_listener("s1", |_| Ok("live".to_owned()), |_| {})
+                .is_none()
+        );
+        assert!(
+            state.take_rejection().is_none(),
+            "no click may be lost or overflowed"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn old_session_ack_is_rejected_duplicate_ack_is_idempotent_and_instances_are_distinct() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put(activation_with_notification("a", "task-1", "instance-1"));
+        assert_eq!(deliver(&state, "s1"), Some("a".to_owned()));
+        assert!(
+            !state.acknowledge("stale-session", "a", "opened"),
+            "an ACK is bound to the session that received the activation"
+        );
+        assert!(
+            state.acknowledge("s1", "a", "opened"),
+            "the failed old-session ACK must not consume the in-flight slot"
+        );
+        assert!(
+            state.acknowledge("s1", "a", "opened"),
+            "duplicate ACK is idempotent"
+        );
+        assert!(!state.acknowledge("s1", "a", "bogus"));
+        state.assert_audit();
+
+        // Same target and same notification instance: delivered once.
+        state.put(activation_with_notification("dup", "task-2", "instance-1"));
+        assert_eq!(deliver(&state, "s1"), Some("dup".to_owned()));
+        assert!(state.acknowledge("s1", "dup", "opened"));
+        state.put(activation_with_notification(
+            "dup-again",
+            "task-2",
+            "instance-1",
+        ));
+        assert_eq!(
+            deliver(&state, "s1"),
+            None,
+            "a duplicate instance of an opened target is suppressed"
+        );
+        state.assert_audit();
+
+        // Same task with distinct notification instances: two deliveries.
+        state.put(activation_with_notification("i1", "task-3", "instance-1"));
+        state.put(activation_with_notification("i2", "task-3", "instance-2"));
+        assert_eq!(deliver(&state, "s1"), Some("i1".to_owned()));
+        assert!(state.acknowledge("s1", "i1", "rejected"));
+        assert_eq!(deliver(&state, "s1"), Some("i2".to_owned()));
+        assert!(state.acknowledge("s1", "i2", "opened"));
+        state.assert_audit();
+    }
+
+    #[test]
+    fn queue_overflow_rejects_with_evidence_and_never_displaces_a_held_slot() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put(activation("held", "task-held"));
+        let mut flooded = false;
+        let held = state
+            .take_for_listener(
+                "s1",
+                |_| {
+                    if !flooded {
+                        flooded = true;
+                        // A burst arrives while "held" is reserved: capacity may
+                        // only displace pending activations, and only with
+                        // observable evidence.
+                        for index in 0..8 {
+                            state.put(activation(
+                                &format!("burst{index}"),
+                                &format!("burst-{index}"),
+                            ));
+                            state.assert_audit();
+                        }
+                    }
+                    Ok("live".to_owned())
+                },
+                |_| {},
+            )
+            .expect("the reserved activation must still commit");
+        assert_eq!(held.activation_id, "held");
+        assert!(state.acknowledge("s1", "held", "opened"));
+
+        let mut delivered = Vec::new();
+        while let Some(item) = state.take_for_listener("s1", |_| Ok("live".to_owned()), |_| {}) {
+            assert!(state.acknowledge("s1", &item.activation_id, "opened"));
+            delivered.push(item.activation_id);
+            state.assert_audit();
+        }
+        assert_eq!(
+            delivered.len(),
+            7,
+            "seven of eight burst activations fit under the cap"
+        );
+        assert_eq!(
+            delivered.first().map(String::as_str),
+            Some("burst1"),
+            "the oldest pending activation was displaced"
+        );
+
+        let overflow = state.take_rejection().expect("overflow evidence");
+        assert_eq!(overflow.code, "ACTIVATION_QUEUE_OVERFLOW");
+        assert_eq!(overflow.message, "提醒打开过于频繁，请稍后重新打开任务");
+        assert!(state.take_rejection().is_none());
+        state.assert_audit();
+    }
+
+    #[test]
+    fn activation_ttl_expires_with_evidence() {
+        let state = NotificationActivationState::default();
+        let now = Instant::now();
+        assert!(state.listener_ready_at("s1", now));
+        state.put_at(activation("stale", "task-stale"), expired_instant());
+        state.put_at(activation("fresh", "task-fresh"), now);
+        assert_eq!(
+            state
+                .take_for_listener_at("s1", now, |_| Ok("live".to_owned()), |_| {})
+                .expect("fresh activation")
+                .activation_id,
+            "fresh"
+        );
+        assert_eq!(
+            state.take_rejection().expect("ttl expiry").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(state.take_rejection().is_none());
+        state.assert_audit();
+
+        // "fresh" is acknowledged, so the in-flight slot is free again.
+        assert!(state.acknowledge("s1", "fresh", "opened"));
+        state.assert_audit();
+
+        // The clock is injectable: an activation that was fresh when it was
+        // delivered and then crosses the TTL across a listener reload expires
+        // instead of being requeued.
+        state.put_at(activation("aging", "task-aging"), now);
+        assert_eq!(
+            state
+                .take_for_listener_at("s1", now, |_| Ok("live".to_owned()), |_| {})
+                .expect("fresh at reservation time")
+                .activation_id,
+            "aging"
+        );
+        let later = now + ACTIVATION_TTL + Duration::from_secs(1);
+        assert!(state.listener_ready_at("s2", later));
+        assert!(
+            state
+                .take_for_listener_at("s2", later, |_| Ok("live".to_owned()), |_| {})
+                .is_none(),
+            "an expired activation must never be delivered"
+        );
+        assert_eq!(
+            state.take_rejection().expect("reload expiry").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(state.take_rejection().is_none());
+        state.assert_audit();
+    }
+
+    #[test]
+    fn five_chained_listener_reloads_keep_the_accounting_invariant() {
+        let state = NotificationActivationState::default();
+        state.put(activation("a", "task-a"));
+        state.put(activation("b", "task-b"));
+        assert!(state.listener_ready("s1"));
+        assert_eq!(deliver(&state, "s1"), Some("a".to_owned()));
+        state.assert_audit();
+
+        let expected = [Some("a"), Some("b"), Some("b"), None];
+        for (session, expected) in ["s2", "s3", "s4", "s5"].into_iter().zip(expected) {
+            assert!(state.listener_ready(session));
+            state.assert_audit();
+            assert_eq!(
+                deliver(&state, session),
+                expected.map(str::to_owned),
+                "{session}"
+            );
+            state.assert_audit();
+        }
+        // Each activation spent exactly its own single requeue.
+        assert_eq!(
+            state.take_rejection().expect("a expired").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert_eq!(
+            state.take_rejection().expect("b expired").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(state.take_rejection().is_none());
+        state.assert_audit();
+    }
+
+    #[test]
+    fn session_change_during_validation_restores_the_activation_instead_of_dropping_it() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        for index in 0..8 {
+            state.put(activation(&format!("q{index}"), &format!("task-{index}")));
+        }
+        let mut swapped = false;
+        let delivered = state.take_for_listener(
+            "s1",
+            |_| {
+                if !swapped {
+                    swapped = true;
+                    assert!(state.listener_ready("s2"));
+                    // The queue is at capacity while the reservation is held.
+                    state.put(activation("late", "task-late"));
+                }
+                Ok("live".to_owned())
+            },
+            |_| {},
+        );
+        assert!(
+            delivered.is_none(),
+            "the replaced session must not receive the old session's activation"
+        );
+        assert_eq!(
+            deliver(&state, "s2"),
+            Some("q0".to_owned()),
+            "the reserved activation is restored, not dropped"
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn panicking_validation_restores_the_reserved_activation() {
+        let state = NotificationActivationState::default();
+        assert!(state.listener_ready("s1"));
+        state.put(activation("a", "task-a"));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.take_for_listener("s1", |_| panic!("validation exploded"), |_| {})
+        }));
+        assert!(panicked.is_err(), "validation must unwind");
+        state.assert_audit();
+        assert_eq!(
+            deliver(&state, "s1"),
+            Some("a".to_owned()),
+            "the drop guard must restore the reservation instead of leaking the slot"
+        );
+        assert!(state.acknowledge("s1", "a", "opened"));
+        state.assert_audit();
+    }
+
+    #[test]
+    fn accounting_invariant_survives_every_transition() {
+        let state = NotificationActivationState::default();
+        let now = Instant::now();
+        assert!(state.listener_ready_at("s1", now));
+        state.assert_audit();
+
+        state.put_at(activation("a", "task-a"), now);
+        state.put_at(activation("b", "task-b"), now);
+        state.assert_audit();
+
+        let first = state
+            .take_for_listener_at("s1", now, |_| Ok("live".to_owned()), |_| {})
+            .expect("committed delivery");
+        assert_eq!(first.activation_id, "a");
+        state.assert_audit();
+
+        assert!(state.listener_ready_at("s2", now));
+        state.assert_audit();
+        let requeued = state
+            .take_for_listener_at("s2", now, |_| Ok("live".to_owned()), |_| {})
+            .expect("requeued delivery");
+        assert_eq!(requeued.activation_id, "a");
+        state.assert_audit();
+
+        assert!(state.listener_ready_at("s3", now));
+        state.assert_audit();
+        assert_eq!(
+            state.take_rejection().expect("expired").code,
+            "ACTIVATION_EXPIRED"
+        );
+        assert!(
+            !state.acknowledge("s3", "a", "opened"),
+            "an expired activation is not an accepted ACK"
+        );
+        state.assert_audit();
+
+        let second = state
+            .take_for_listener_at("s3", now, |_| Ok("live".to_owned()), |_| {})
+            .expect("second delivery");
+        assert_eq!(second.activation_id, "b");
+        state.assert_audit();
+        assert!(state.acknowledge("s3", "b", "opened"));
+        state.assert_audit();
+        assert!(
+            state.acknowledge("s3", "b", "opened"),
+            "duplicate ACK is idempotent"
+        );
+        state.assert_audit();
+        assert!(
+            state
+                .take_for_listener_at("s3", now, |_| Ok("live".to_owned()), |_| {})
+                .is_none()
+        );
+        state.assert_audit();
+    }
+
+    #[test]
+    fn audit_helper_detects_an_unaccounted_activation() {
+        let state = NotificationActivationState::default();
+        state.put(activation("lost", "task-lost"));
+        let popped = state.take().expect("test-only raw pop");
+        assert_eq!(popped.activation_id, "lost");
+        assert!(
+            state.audit().is_err(),
+            "the accounting audit must not be vacuous"
+        );
+    }
+
+    #[test]
+    fn concurrent_reload_and_enqueue_never_loses_or_duplicates_an_activation() {
+        let state = Arc::new(NotificationActivationState::default());
+        assert!(state.listener_ready("s1"));
+        state.put(activation("a0", "task-a0"));
+
+        let at_validation = Arc::new(Barrier::new(3));
+        let after_interference = Arc::new(Barrier::new(3));
+
+        let (reserved_delivery, reload_ok) = std::thread::scope(|scope| {
+            let thread_state = Arc::clone(&state);
+            let at = Arc::clone(&at_validation);
+            let after = Arc::clone(&after_interference);
+            let worker_a = scope.spawn(move || {
+                thread_state.take_for_listener(
+                    "s1",
+                    |_| {
+                        // Validation runs outside the state lock: this is exactly
+                        // the window in which the listener session may be replaced
+                        // and a burst of activations may arrive.
+                        at.wait();
+                        after.wait();
+                        Ok("validated".to_owned())
+                    },
+                    |_| {},
+                )
+            });
+
+            let thread_state = Arc::clone(&state);
+            let at = Arc::clone(&at_validation);
+            let after = Arc::clone(&after_interference);
+            let worker_b = scope.spawn(move || {
+                at.wait();
+                let ready = thread_state.listener_ready("s2");
+                after.wait();
+                ready
+            });
+
+            let thread_state = Arc::clone(&state);
+            let at = Arc::clone(&at_validation);
+            let after = Arc::clone(&after_interference);
+            let worker_c = scope.spawn(move || {
+                at.wait();
+                for index in 0..8 {
+                    let account = if index % 2 == 0 { "default" } else { "other" };
+                    thread_state.put(activation_for(
+                        account,
+                        &format!("c{index}"),
+                        &format!("task-c{index}"),
+                    ));
+                    thread_state.assert_audit();
+                }
+                after.wait();
+            });
+
+            let reload_ok = worker_b.join().expect("thread B");
+            worker_c.join().expect("thread C");
+            let reserved_delivery = worker_a.join().expect("thread A");
+            (reserved_delivery, reload_ok)
+        });
+
+        assert!(reload_ok, "the reload must register the new session");
+        assert!(
+            reserved_delivery.is_none(),
+            "a reservation taken for the replaced session must not be delivered to it"
+        );
+
+        let mut delivered = Vec::new();
+        while let Some(item) = state.take_for_listener(
+            "s2",
+            |activation| {
+                if activation.target.account_id == "default" {
+                    Ok("validated".to_owned())
+                } else {
+                    Err(RejectionCode::AccountSwitchRequired)
+                }
+            },
+            |_| {},
+        ) {
+            assert_eq!(
+                item.target.account_id, "default",
+                "no cross-account delivery"
+            );
+            assert!(
+                !delivered.contains(&item.activation_id),
+                "activation {} was delivered twice",
+                item.activation_id
+            );
+            assert!(state.acknowledge("s2", &item.activation_id, "opened"));
+            delivered.push(item.activation_id);
+            state.assert_audit();
+        }
+        let mut rejected = Vec::new();
+        while let Some(rejection) = state.take_rejection() {
+            rejected.push(rejection.code);
+        }
+
+        assert_eq!(
+            delivered.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["a0", "c2", "c4", "c6"],
+            "the reserved activation is restored ahead of the burst and nothing is lost"
+        );
+        assert_eq!(
+            rejected
+                .iter()
+                .filter(|code| **code == "ACTIVATION_QUEUE_OVERFLOW")
+                .count(),
+            1,
+            "the capacity overflow must be observable"
+        );
+        assert_eq!(
+            rejected
+                .iter()
+                .filter(|code| **code == "ACCOUNT_SWITCH_REQUIRED")
+                .count(),
+            4,
+            "every other-account activation must be rejected, never delivered"
+        );
+        state.assert_audit();
+    }
+
+    /// Deterministic linear congruential generator: the randomized state machine
+    /// must reproduce exactly, so no external rand dependency is used.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn below(&mut self, bound: u64) -> u64 {
+            self.next() % bound
+        }
+    }
+
+    #[test]
+    fn randomized_state_machine_keeps_accounting_consistent() {
+        let sessions = ["s1", "s2", "s3"];
+        let mut random = Lcg(0x5eed_1a2b_3c4d_5e6f);
+        let mut clock = Instant::now();
+        let state = NotificationActivationState::default();
+        let mut admitted: u64 = 0;
+        let mut delivered: Vec<String> = Vec::new();
+        assert!(state.listener_ready_at(sessions[0], clock));
+
+        for step in 0..400 {
+            clock += Duration::from_millis(random.below(20_000));
+            match random.below(6) {
+                0 | 1 => {
+                    let id = format!("a{admitted}");
+                    state.put_at(activation(&id, &format!("task-{}", admitted % 7)), clock);
+                    admitted += 1;
+                }
+                2 => {
+                    let session = sessions[random.below(3) as usize];
+                    assert!(state.listener_ready_at(session, clock));
+                }
+                3 | 4 => {
+                    let session = sessions[random.below(3) as usize];
+                    let outcomes = ["opened", "rejected", "expired", "duplicate"];
+                    let outcome = outcomes[random.below(4) as usize];
+                    let taken = state.take_for_listener_at(
+                        session,
+                        clock,
+                        |_| Ok("live".to_owned()),
+                        |_| {},
+                    );
+                    if let Some(item) = taken {
+                        assert!(
+                            !delivered.contains(&item.activation_id),
+                            "activation {} was delivered twice (step {step})",
+                            item.activation_id
+                        );
+                        assert!(
+                            state.acknowledge(session, &item.activation_id, outcome),
+                            "the in-flight ACK must succeed (step {step})"
+                        );
+                        delivered.push(item.activation_id);
+                    }
+                }
+                _ => {
+                    let _ = state.take_rejection();
+                }
+            }
+            state.assert_audit();
+        }
+        assert!(admitted > 0 && !delivered.is_empty());
     }
 }
