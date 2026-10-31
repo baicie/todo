@@ -42,13 +42,15 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   MANIFEST_NAME,
   SUMS_NAME,
+  expectedBuildAssets,
   expectedReleaseAssets,
   normalizeVersion,
   parseSha256Sums,
@@ -631,6 +633,381 @@ export function guardWorkflowProvenance({
 }
 
 /* ---------------------------------------------------------------------------
+ * RC2-D.15 Phase D: staging and publishing are two jobs, and the publish job
+ * must decide for itself, after the approval, that the world has not moved.
+ * ------------------------------------------------------------------------- */
+
+/** The GitHub Environment that gates publishing; a repository setting. */
+export const ENVIRONMENT_NAME = 'dev-pre-release';
+
+export const GATE_ENFORCED = 'enforced';
+export const GATE_NOT_CONFIGURED = 'not-configured';
+export const GATE_UNVERIFIED = 'unverified';
+export const GATE_STATES = Object.freeze([GATE_ENFORCED, GATE_NOT_CONFIGURED, GATE_UNVERIFIED]);
+
+/** The protection-rule type GitHub uses for "required reviewers". */
+export const REVIEWER_RULE_TYPE = 'required_reviewers';
+
+export const EVIDENCE_PHASE_STAGE = 'stage';
+export const EVIDENCE_PHASE_PUBLISH = 'publish';
+export const EVIDENCE_PHASES = Object.freeze([EVIDENCE_PHASE_STAGE, EVIDENCE_PHASE_PUBLISH]);
+
+export const PIPELINE_PUBLISHED = 'published';
+export const PIPELINE_ALREADY_PUBLISHED = 'already-published';
+export const PIPELINE_AWAITING_APPROVAL = 'awaiting-approval';
+export const PIPELINE_NOT_APPROVED = 'not-approved';
+export const PIPELINE_FAILED = 'failed';
+
+/**
+ * No run of this workflow ever claims release readiness. The environment gate is
+ * a repository setting, the physical-device behaviour is a host fact, and the
+ * artifacts are unsigned, so the only honest answer is "not claimed".
+ */
+export const RELEASE_READINESS_STATEMENT =
+  'no production-distribution readiness is claimed: required reviewers on the dev-pre-release ' +
+  'environment are a repository setting this workflow cannot verify, the Windows notification ' +
+  'banners and clicks and the Android physical-device behaviour are not verified here, and the ' +
+  'macOS DMGs are unsigned and not notarised';
+
+/**
+ * Whether the GitHub Environment really blocks the publish job.
+ *   inspection = { ok, status, protectionRules: [{ type, reviewers }] }
+ * GitHub evaluates the approval BEFORE the job starts, so this is evidence only:
+ * it is printed, recorded, and never used to claim the pipeline is release-ready.
+ */
+export function decideEnvironmentGate({
+  environmentName = ENVIRONMENT_NAME,
+  inspection = null,
+} = {}) {
+  const name = String(environmentName ?? '').trim() || ENVIRONMENT_NAME;
+  const base = { environmentName: name, enforced: false, releaseReady: false, failures: [] };
+  if (!inspection || inspection.ok !== true) {
+    const status = Number.isFinite(inspection?.status) ? inspection.status : null;
+    return {
+      ...base,
+      gate: GATE_UNVERIFIED,
+      notes: [
+        'environment ' +
+          name +
+          ' could not be inspected' +
+          (status === null ? '' : ' (HTTP ' + status + ')') +
+          ': whether required reviewers block this job is a repository setting only a maintainer ' +
+          'can confirm, so this run does not treat the pipeline as release-ready',
+      ],
+    };
+  }
+  const rules = Array.isArray(inspection.protectionRules) ? inspection.protectionRules : [];
+  const reviewerRule = rules.find((rule) => rule?.type === REVIEWER_RULE_TYPE) ?? null;
+  const reviewers = Array.isArray(reviewerRule?.reviewers) ? reviewerRule.reviewers : [];
+  if (!reviewerRule || reviewers.length === 0) {
+    const seen = rules.map((rule) => String(rule?.type ?? '?')).join(', ') || 'none';
+    return {
+      ...base,
+      gate: GATE_NOT_CONFIGURED,
+      notes: [
+        'environment ' +
+          name +
+          ' is not gated: it declares no ' +
+          REVIEWER_RULE_TYPE +
+          ' rule with at least one reviewer (protection rules seen: ' +
+          seen +
+          '), so the publish job needs no approval and this run does not treat the pipeline as ' +
+          'release-ready',
+      ],
+    };
+  }
+  return {
+    ...base,
+    enforced: true,
+    gate: GATE_ENFORCED,
+    notes: [
+      'environment ' +
+        name +
+        ' requires ' +
+        reviewers.length +
+        ' reviewer(s): GitHub blocked this job until one approved it, and the read-only ' +
+        'revalidation below still runs after that approval',
+    ],
+  };
+}
+
+function describeReviewerRule(rule) {
+  const reviewers = Array.isArray(rule?.reviewers) ? rule.reviewers : [];
+  return reviewers
+    .map((reviewer) => String(reviewer?.reviewer?.login ?? reviewer?.login ?? '(unknown)'))
+    .join(', ');
+}
+
+/** The reviewer names, for evidence only. */
+export function environmentReviewers(protectionRules = []) {
+  const rule = (Array.isArray(protectionRules) ? protectionRules : []).find(
+    (entry) => entry?.type === REVIEWER_RULE_TYPE,
+  );
+  return describeReviewerRule(rule)
+    .split(', ')
+    .filter((name) => name !== '(unknown)' && name !== '');
+}
+
+/**
+ * The publish job must publish the exact identity that stage-release created the
+ * draft from. The staged manifest IS that identity: it is compared with the
+ * artifacts re-downloaded for publishing and with the release context passed
+ * through needs.<job>.outputs, so nothing is recomputed differently.
+ */
+export function adoptStagedRelease({
+  stagedManifest = null,
+  inventory = [],
+  expected = {},
+} = {}) {
+  if (!stagedManifest || typeof stagedManifest !== 'object') {
+    return {
+      ok: false,
+      failures: [MANIFEST_NAME + ' is missing from the staged release evidence'],
+      notes: [],
+      assets: [],
+    };
+  }
+  const failures = [];
+  const notes = [];
+
+  const staged = Array.isArray(stagedManifest.assets) ? stagedManifest.assets : [];
+  if (staged.length === 0) failures.push('the staged ' + MANIFEST_NAME + ' records no assets');
+  const onDisk = new Map();
+  for (const file of Array.isArray(inventory) ? inventory : []) {
+    if (typeof file?.name === 'string' && file.name !== '') onDisk.set(file.name, file);
+  }
+  const tally = (assets) => assets.map((asset) => asset.name).sort();
+  for (const asset of staged) {
+    const name = String(asset?.name ?? '');
+    const file = onDisk.get(name);
+    if (!file) {
+      failures.push('the build artifacts re-downloaded for publishing carry no ' + name);
+      continue;
+    }
+    if (file.size !== asset.size) {
+      failures.push(
+        'the re-downloaded ' + name + ' is ' + file.size + ' bytes but the staged manifest records ' + asset.size,
+      );
+      continue;
+    }
+    if (hexOf(file.sha256) !== hexOf(asset.sha256)) {
+      failures.push(
+        'the re-downloaded ' + name + ' has sha256 ' + file.sha256 + ' but the staged manifest records ' + asset.sha256,
+      );
+    }
+  }
+  const expectedAssets = expectedBuildAssets(normalizeVersion(stagedManifest.release?.version));
+  const stagedNames = tally(staged.map((asset) => ({ name: asset?.name })));
+  for (const name of expectedAssets) {
+    if (!stagedNames.includes(name)) {
+      failures.push('the staged ' + MANIFEST_NAME + ' does not record the contract asset ' + name);
+    }
+  }
+  const recordedSums = onDisk.get(SUMS_NAME);
+  if (recordedSums) notes.push(SUMS_NAME + ' is present in the re-downloaded artifact set');
+
+  const identity = {
+    tag: String(stagedManifest.release?.tag ?? ''),
+    version: normalizeVersion(stagedManifest.release?.version),
+    channel: String(stagedManifest.release?.channel ?? ''),
+    tagCommitSHA: shaOf(stagedManifest.commit?.tagSHA),
+    identifier: String(stagedManifest.app?.identifier ?? ''),
+  };
+  for (const [key, expectedValue] of Object.entries(expected ?? {})) {
+    if (expectedValue === undefined || expectedValue === null || expectedValue === '') continue;
+    const actual = key === 'tagCommitSHA' ? identity.tagCommitSHA : identity[key];
+    if (actual !== expectedValue) {
+      failures.push(
+        'the staged ' +
+          MANIFEST_NAME +
+          ' records ' +
+          key +
+          ' ' +
+          String(actual) +
+          ' but stage-release declared ' +
+          String(expectedValue),
+      );
+    }
+  }
+  return { ok: failures.length === 0, failures, notes, assets: stagedNames, identity };
+}
+
+/**
+ * The whole pipeline in one decision, so a pending or rejected approval, an
+ * interrupted staging and a finished duplicate run all have a name and a
+ * statement about what is visible to the public.
+ */
+export function describePipelineOutcome({ stage = null, publish = null } = {}) {
+  const base = { releaseReady: false, failures: [], notes: [] };
+  const decision = String(stage?.decision ?? '');
+  const stageFailed = !stage || stage.ok === false || decision === DECISION_REFUSE;
+  if (stageFailed) {
+    return {
+      ...base,
+      action: PIPELINE_FAILED,
+      draftVisible: true,
+      notes: [
+        'staging did not complete: no release was published and any draft that already exists stays ' +
+          'a draft, invisible to the public',
+      ],
+      failures: [...(stage?.failures ?? [])],
+    };
+  }
+  if (publish === null || publish === undefined || publish.outcome === 'pending') {
+    return {
+      ...base,
+      action: PIPELINE_AWAITING_APPROVAL,
+      draftVisible: true,
+      notes: [
+        'the draft is staged and the publish job has not run: it waits for the required reviewers ' +
+          'of the ' +
+          ENVIRONMENT_NAME +
+          ' environment, and the draft stays a draft until one approves',
+      ],
+    };
+  }
+  if (publish.outcome === 'rejected') {
+    return {
+      ...base,
+      action: PIPELINE_NOT_APPROVED,
+      draftVisible: true,
+      notes: [
+        'the publish job was not approved (or the approval was withdrawn): the draft stays a draft ' +
+          'and nothing was published',
+      ],
+    };
+  }
+  if (publish.outcome === 'failed') {
+    return {
+      ...base,
+      action: PIPELINE_FAILED,
+      draftVisible: true,
+      notes: [
+        'publishing failed after the approval: the release stays a draft and is never publicly ' +
+          'visible, delete it by hand before retrying',
+      ],
+      failures: [...(publish.failures ?? [])],
+    };
+  }
+  if (publish.outcome === 'noop' || decision === DECISION_NOOP) {
+    return {
+      ...base,
+      action: PIPELINE_ALREADY_PUBLISHED,
+      draftVisible: false,
+      notes: [
+        'tag ' +
+          String(publish?.tag ?? stage?.tag ?? '(unknown)') +
+          ' already carries this exact build: the run is a no-op and the published release is ' +
+          'untouched',
+      ],
+    };
+  }
+  return {
+    ...base,
+    action: PIPELINE_PUBLISHED,
+    draftVisible: false,
+    notes: ['the verified draft was flipped to a public pre-release'],
+  };
+}
+
+/** The reviewable evidence record a failed or successful run must leave behind. */
+export function buildReleaseEvidence({
+  phase,
+  context = {},
+  jobStatus = 'unknown',
+  decision = null,
+  outcome = null,
+  environment = null,
+  manifestSha256 = null,
+  failures = [],
+  notes = [],
+  generatedAt = null,
+} = {}) {
+  if (!EVIDENCE_PHASES.includes(phase)) {
+    fail('the evidence phase must be one of ' + EVIDENCE_PHASES.join(', '));
+  }
+  const pipeline = describePipelineOutcome({
+    stage: { decision: decision ?? (phase === EVIDENCE_PHASE_STAGE ? null : DECISION_PUBLISH_DRAFT) },
+    publish: phase === EVIDENCE_PHASE_STAGE ? null : { outcome: outcome ?? 'pending' },
+  });
+  const gate = environment
+    ? {
+        name: String(environment.name ?? ENVIRONMENT_NAME),
+        gate: GATE_STATES.includes(environment.gate) ? environment.gate : GATE_UNVERIFIED,
+        enforced: environment.enforced === true,
+      }
+    : { name: ENVIRONMENT_NAME, gate: GATE_UNVERIFIED, enforced: false };
+  return {
+    schemaVersion: 1,
+    phase,
+    generatedAt,
+    jobStatus: String(jobStatus ?? 'unknown'),
+    context: {
+      releaseVersion: String(context.releaseVersion ?? ''),
+      releaseTag: String(context.releaseTag ?? ''),
+      tagCommitSHA: String(context.tagCommitSHA ?? ''),
+      buildCommitSHA: String(context.buildCommitSHA ?? ''),
+      artifactVersion: String(context.artifactVersion ?? ''),
+      releaseChannel: String(context.releaseChannel ?? ''),
+      workflowSha: String(context.workflowSha ?? ''),
+      runId: String(context.runId ?? ''),
+    },
+    decision: decision ?? null,
+    outcome: outcome ?? null,
+    manifestSha256: manifestSha256 ?? null,
+    environment: gate,
+    pipeline: { action: pipeline.action, draftVisible: pipeline.draftVisible },
+    releaseReadiness: { claimed: false, statement: RELEASE_READINESS_STATEMENT },
+    draftRemainsVisible: pipeline.draftVisible,
+    failures: [...failures],
+    notes: [...notes, ...pipeline.notes],
+  };
+}
+
+/** The evidence record as markdown, for the step summary and the artifact. */
+export function renderReleaseEvidence(evidence) {
+  const record = evidence && typeof evidence === 'object' ? evidence : {};
+  const context = record.context ?? {};
+  const environment = record.environment ?? {};
+  const lines = [
+    '## Release evidence: ' + String(record.phase ?? '(unknown)') + ' phase',
+    '',
+    '| fact | value |',
+    '| --- | --- |',
+    '| job status | `' + String(record.jobStatus ?? 'unknown') + '` |',
+    '| tag | `' + String(context.releaseTag ?? '') + '` |',
+    '| TagCommitSHA | `' + String(context.tagCommitSHA ?? '') + '` |',
+    '| artifact version | `' + String(context.artifactVersion ?? '') + '` |',
+    '| stage decision | `' + String(record.decision ?? '(none)') + '` |',
+    '| pipeline | `' + String(record.pipeline?.action ?? '(none)') + '` |',
+    '| manifest sha256 | `' + String(record.manifestSha256 ?? '(missing)') + '` |',
+    '| environment | `' +
+      String(environment.name ?? ENVIRONMENT_NAME) +
+      '` gate=' +
+      String(environment.gate ?? GATE_UNVERIFIED) +
+      ' enforced=' +
+      String(environment.enforced === true) +
+      ' |',
+    '',
+    record.draftRemainsVisible === false
+      ? 'The release is public; it is never overwritten or re-uploaded by a later run.'
+      : 'A failed, cancelled or unapproved run leaves the release as a DRAFT: it is never publicly ' +
+        'visible. Remove a partial draft by hand before retrying.',
+    '',
+    'Release readiness: **not claimed**. ' + String(record.releaseReadiness?.statement ?? ''),
+  ];
+  if (Array.isArray(record.failures) && record.failures.length > 0) {
+    lines.push('', '### Failures', '');
+    for (const failure of record.failures) lines.push('- ' + String(failure));
+  }
+  if (Array.isArray(record.notes) && record.notes.length > 0) {
+    lines.push('', '### Notes', '');
+    for (const note of record.notes) lines.push('- ' + String(note));
+  }
+  return lines;
+}
+
+/* ---------------------------------------------------------------------------
  * CLI: the only place that talks to GitHub, and only through the gh CLI.
  * Every command below is one phase of the transaction, and every phase that
  * writes is preceded by the pure decision that may refuse it.
@@ -861,7 +1238,7 @@ function checkExistingCommand(options) {
     remote: fetchReleaseSnapshot({ repo: repoSlug(), tag: built.tag }),
   });
   reportDecision(decision);
-  writeGithubOutputs({ decision: decision.action });
+  writeGithubOutputs({ decision: decision.action, releaseId: decision.releaseId ?? '' });
   if (decision.action === DECISION_REFUSE) {
     if (decision.differences.some((line) => line.startsWith('unexpected remote asset'))) {
       console.log(
@@ -880,19 +1257,43 @@ function checkExistingCommand(options) {
   }
 }
 
+/**
+ * The publish job must not touch a release that is not the one stage-release
+ * verified, so both the read-only revalidation and the single write pin the id.
+ */
+function assertExpectedReleaseId(outcome, expectedId) {
+  const declared = String(expectedId ?? '').trim();
+  if (declared === '') return;
+  if (String(outcome.releaseId ?? '') !== declared) {
+    fail(
+      'release ' +
+        String(outcome.releaseId ?? '(none)') +
+        ' for this tag is not the draft stage-release verified (' +
+        declared +
+        ')',
+    );
+  }
+}
+
 function verifyDraftCommand(options) {
   const built = readBuiltRelease(options);
   const remote = fetchReleaseSnapshot({ repo: repoSlug(), tag: built.tag });
   if (remote.manifestError)
     console.log('note: ' + MANIFEST_NAME + ' is unreadable: ' + remote.manifestError);
   const outcome = decidePublishOutcome({ built, remote });
+  assertExpectedReleaseId(outcome, options['expect-release-id']);
   for (const note of outcome.notes ?? []) console.log('note: ' + note);
   if (outcome.action !== OUTCOME_PUBLISH) {
     for (const failure of outcome.failures) console.error('::error::' + failure);
     fail('the release for tag ' + built.tag + ' is not publishable and stays a draft');
   }
+  writeGithubOutputs({ releaseId: String(outcome.releaseId ?? ''), decision: outcome.action });
   console.log(
-    'OK the draft release for tag ' + built.tag + ' carries the complete built asset set',
+    'OK the draft release for tag ' +
+      built.tag +
+      ' (' +
+      outcome.releaseId +
+      ') carries the complete built asset set',
   );
 }
 
@@ -903,6 +1304,7 @@ function publishDraftCommand(options) {
     built,
     remote: fetchReleaseSnapshot({ repo, tag: built.tag }),
   });
+  assertExpectedReleaseId(outcome, options['expect-release-id']);
   for (const note of outcome.notes ?? []) console.log('note: ' + note);
   if (outcome.action !== OUTCOME_PUBLISH) {
     for (const failure of outcome.failures) console.error('::error::' + failure);
@@ -954,6 +1356,261 @@ function verifyPublishedCommand(options) {
   );
 }
 
+function appendStepSummary(lines) {
+  const path = process.env.GITHUB_STEP_SUMMARY;
+  const text = lines.join('\n') + '\n';
+  if (typeof path !== 'string' || path === '') {
+    console.log(text);
+    return;
+  }
+  appendFileSync(path, text);
+}
+
+/** A JSON read that never throws: the environment API is usually not readable. */
+function ghApiJsonTolerant(path) {
+  const result = runGh(['api', '--include', '--method', 'GET', path]);
+  const status = httpStatusOf(result.stdout);
+  if (status === null) {
+    return {
+      ok: false,
+      status: null,
+      body: null,
+      error: (result.stderr || result.stdout).trim().slice(0, 300),
+    };
+  }
+  if (status < 200 || status >= 300) return { ok: false, status, body: null, error: '' };
+  const text = bodyOf(result.stdout).trim();
+  if (text === '') return { ok: true, status, body: null, error: '' };
+  try {
+    return { ok: true, status, body: JSON.parse(text), error: '' };
+  } catch {
+    return { ok: false, status, body: null, error: 'unparseable JSON' };
+  }
+}
+
+function artifactsDirOf(options) {
+  const dir = resolve(REPO_ROOT, options['artifacts-dir'] ?? 'artifacts');
+  if (!existsSync(dir)) fail('the artifact directory ' + dir + ' does not exist');
+  return dir;
+}
+
+/**
+ * Install the identity stage-release staged into the artifacts directory, after
+ * proving it still describes the artifacts this job downloaded.
+ */
+function adoptStagedCommand(options) {
+  const artifacts = artifactsDirOf(options);
+  const stagedDir = resolve(REPO_ROOT, options['staged-dir'] ?? 'staged');
+  const stagedManifestPath = join(stagedDir, MANIFEST_NAME);
+  if (!existsSync(stagedManifestPath)) {
+    fail(
+      MANIFEST_NAME +
+        ' is missing from ' +
+        stagedDir +
+        ': the publish job cannot prove which build it is publishing',
+    );
+  }
+  const stagedText = readFileSync(stagedManifestPath, 'utf8').replace(/^\uFEFF/, '');
+  const manifestSha256 = createHash('sha256').update(stagedText).digest('hex');
+  const declared = String(process.env.STAGED_MANIFEST_SHA256 ?? '').trim();
+  const failures = [];
+  if (declared !== '' && declared !== manifestSha256) {
+    failures.push(
+      'the staged ' +
+        MANIFEST_NAME +
+        ' is not the one stage-release recorded (sha256 ' +
+        manifestSha256 +
+        ' != ' +
+        declared +
+        ')',
+    );
+  }
+  let stagedManifest = null;
+  try {
+    stagedManifest = JSON.parse(stagedText);
+  } catch (error) {
+    failures.push('the staged ' + MANIFEST_NAME + ' is unparseable: ' + error.message);
+  }
+  const adopted =
+    failures.length > 0
+      ? { ok: false, failures, notes: [], assets: [] }
+      : adoptStagedRelease({
+          stagedManifest,
+          inventory: readArtifactInventory(artifacts),
+          expected: {
+            tag: String(process.env.RELEASE_TAG ?? '').trim(),
+            version: normalizeVersion(String(process.env.ARTIFACT_VERSION ?? '').trim()),
+            tagCommitSHA: String(process.env.TAG_COMMIT_SHA ?? '').trim(),
+          },
+        });
+  for (const note of adopted.notes) console.log('note: ' + note);
+  if (!adopted.ok) {
+    for (const failure of adopted.failures) console.error('::error::' + failure);
+    fail(
+      'refusing to publish: the staged release identity does not describe this build (' +
+        adopted.failures.join(' | ') +
+        '); nothing was written',
+    );
+  }
+  const sumsSource = join(stagedDir, SUMS_NAME);
+  if (existsSync(sumsSource)) copyFileSync(sumsSource, join(artifacts, SUMS_NAME));
+  copyFileSync(stagedManifestPath, join(artifacts, MANIFEST_NAME));
+  console.log(
+    'OK adopted the staged release identity: ' +
+      MANIFEST_NAME +
+      ' sha256 ' +
+      manifestSha256 +
+      ', ' +
+      adopted.assets.length +
+      ' assets proven against the re-downloaded build outputs',
+  );
+  writeGithubOutputs({ manifestSha256 });
+}
+
+/**
+ * Evidence only: GitHub evaluates an environment approval before the job starts,
+ * so this command can report whether the gate is enforced but never proves it.
+ */
+function environmentGateCommand(options) {
+  const name = String(options.environment ?? ENVIRONMENT_NAME).trim() || ENVIRONMENT_NAME;
+  let inspection = null;
+  try {
+    const probe = ghApiJsonTolerant(
+      'repos/' + repoSlug() + '/environments/' + encodeURIComponent(name),
+    );
+    inspection = {
+      ok: probe.ok && probe.body !== null,
+      status: probe.status,
+      protectionRules: Array.isArray(probe.body?.protection_rules)
+        ? probe.body.protection_rules
+        : [],
+    };
+    if (probe.error) console.log('note: the environment read reported: ' + probe.error);
+  } catch (error) {
+    console.log('note: the environment could not be read: ' + error.message);
+    inspection = { ok: false, status: null, protectionRules: [] };
+  }
+  const decision = decideEnvironmentGate({ environmentName: name, inspection });
+  for (const note of decision.notes) console.log('note: ' + note);
+  const reviewers = environmentReviewers(inspection?.protectionRules ?? []);
+  console.log(
+    'environment ' +
+      name +
+      ': gate=' +
+      decision.gate +
+      ' enforced=' +
+      String(decision.enforced) +
+      ' reviewers=' +
+      (reviewers.join(', ') || '(none recorded)'),
+  );
+  console.log(
+    '::notice::the environment gate is a repository setting (Settings -> Environments -> ' +
+      name +
+      ' -> Required reviewers); this run does not treat the pipeline as release-ready',
+  );
+  appendStepSummary([
+    '## Environment gate: ' + name,
+    '',
+    '| fact | value |',
+    '| --- | --- |',
+    '| gate | ' + decision.gate + ' |',
+    '| enforced by GitHub | ' + String(decision.enforced) + ' |',
+    '| required reviewers | ' + (reviewers.join(', ') || '(none recorded)') + ' |',
+    '',
+    'Maintainer action: configure the ' +
+      name +
+      ' environment in the repository settings and add at least one required reviewer; without ' +
+      'it the publish job is not gated by an approval.',
+  ]);
+  writeGithubOutputs({
+    gate: decision.gate,
+    enforced: String(decision.enforced),
+    reviewers: reviewers.join(','),
+  });
+}
+
+/** Write the reviewable evidence record of this job, success or failure. */
+function writeEvidenceCommand(options) {
+  const phase = String(options.phase ?? '').trim();
+  if (!EVIDENCE_PHASES.includes(phase)) {
+    fail('--phase must be one of ' + EVIDENCE_PHASES.join(', '));
+  }
+  const artifacts = resolve(REPO_ROOT, options['artifacts-dir'] ?? 'artifacts');
+  const outDir = resolve(REPO_ROOT, options['out-dir'] ?? 'evidence-' + phase);
+  mkdirSync(outDir, { recursive: true });
+  const failures = [];
+  const notes = [];
+  let manifestSha256 = null;
+  const manifestPath = join(artifacts, MANIFEST_NAME);
+  if (existsSync(manifestPath)) {
+    manifestSha256 = createHash('sha256').update(readFileSync(manifestPath)).digest('hex');
+    copyFileSync(manifestPath, join(outDir, MANIFEST_NAME));
+    const sumsPath = join(artifacts, SUMS_NAME);
+    if (existsSync(sumsPath)) copyFileSync(sumsPath, join(outDir, SUMS_NAME));
+    else failures.push(SUMS_NAME + ' is missing from ' + artifacts);
+  } else {
+    failures.push(
+      MANIFEST_NAME + ' is missing from ' + artifacts + ': this run has no release identity to show',
+    );
+  }
+  const declared = String(options['manifest-sha256'] ?? '').trim();
+  if (declared !== '' && manifestSha256 !== null && declared !== manifestSha256) {
+    failures.push(
+      'the local ' +
+        MANIFEST_NAME +
+        ' (sha256 ' +
+        manifestSha256 +
+        ') is not the staged one (' +
+        declared +
+        ')',
+    );
+  }
+  const jobStatus = String(options['job-status'] ?? process.env.RELEASE_JOB_STATUS ?? 'unknown');
+  const stageDecision = options.decision ?? process.env.STAGE_DECISION ?? null;
+  let outcome = options.outcome ?? process.env.PUBLISH_OUTCOME ?? null;
+  if (phase === EVIDENCE_PHASE_PUBLISH && (outcome === null || outcome === '')) {
+    if (jobStatus === 'success') outcome = stageDecision === DECISION_NOOP ? 'noop' : 'published';
+    else outcome = 'failed';
+  }
+  if (phase === EVIDENCE_PHASE_STAGE && (outcome === null || outcome === '')) outcome = null;
+  const evidence = buildReleaseEvidence({
+    phase,
+    context: {
+      releaseVersion: process.env.RELEASE_VERSION ?? '',
+      releaseTag: process.env.RELEASE_TAG ?? '',
+      tagCommitSHA: process.env.TAG_COMMIT_SHA ?? '',
+      buildCommitSHA: process.env.BUILD_COMMIT_SHA ?? '',
+      artifactVersion: process.env.ARTIFACT_VERSION ?? '',
+      releaseChannel: process.env.RELEASE_CHANNEL ?? '',
+      workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? '',
+      runId: process.env.GITHUB_RUN_ID ?? '',
+    },
+    jobStatus,
+    decision: stageDecision,
+    outcome,
+    environment: {
+      name: process.env.RELEASE_ENVIRONMENT_NAME ?? ENVIRONMENT_NAME,
+      gate: process.env.RELEASE_ENVIRONMENT_GATE ?? GATE_UNVERIFIED,
+      enforced: String(process.env.RELEASE_ENVIRONMENT_ENFORCED ?? '') === 'true',
+    },
+    manifestSha256,
+    failures,
+    notes,
+    generatedAt: new Date().toISOString(),
+  });
+  writeFileSync(join(outDir, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n');
+  const lines = renderReleaseEvidence(evidence);
+  writeFileSync(join(outDir, 'evidence.md'), lines.join('\n') + '\n');
+  appendStepSummary(lines);
+  writeGithubOutputs({
+    manifestSha256: manifestSha256 ?? '',
+    evidenceDir: outDir,
+    evidencePhase: phase,
+  });
+  console.log('evidence written to ' + outDir + ' (phase ' + phase + ')');
+  for (const failure of failures) console.log('::warning::' + failure);
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
@@ -978,6 +1635,9 @@ const COMMANDS = {
   'verify-draft': (options) => verifyDraftCommand(options),
   'publish-draft': (options) => publishDraftCommand(options),
   'verify-published': (options) => verifyPublishedCommand(options),
+  'adopt-staged': (options) => adoptStagedCommand(options),
+  'environment-gate': (options) => environmentGateCommand(options),
+  'write-evidence': (options) => writeEvidenceCommand(options),
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

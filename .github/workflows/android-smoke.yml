@@ -48,6 +48,7 @@ on:
       # this workflow's own verification surface: the shared config resolver and
       # the assertions the smoke steps run
       - 'scripts/release/android-smoke.mjs'
+      - 'scripts/release/android-sdk-provision.mjs'
       - 'scripts/release/release-context.mjs'
 
 permissions:
@@ -116,44 +117,14 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
 
-      # Tauri CLI 2.12.4 generates a Gradle project whose compileSdk is pinned by
-      # the CLI itself (SDK_VERSION = 37 in tauri-cli's src/mobile/android/mod.rs),
-      # so that platform is installed explicitly here rather than left to AGP's
-      # SDK auto-download in the middle of the build. No second NDK is needed: the
-      # CLI uses the newest NDK under $ANDROID_HOME/ndk, which is the pinned 27.
-      - name: Install the SDK platform the 2.12.4 Gradle template compiles against
+      # ONE shared provisioning step (RC2-D.15 Phase C): the same entry point and
+      # the same package list the release path calls, so this proven path and
+      # .github/workflows/release-dev.yml cannot drift apart again. The compile-SDK
+      # platform the CLI template needs, the channel fallback and the package list
+      # live in scripts/release/android-sdk-provision.mjs, never in this file.
+      - name: Provision the Android SDK (shared step)
         shell: bash
-        run: |
-          set -euo pipefail
-          command -v sdkmanager >/dev/null 2>&1 || {
-            echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
-            exit 1
-          }
-          # android-37 is not in the stable channel yet (the first CI run
-          # reported "Failed to find package 'platforms;android-37'"), so try
-          # the stable channel first and then the preview channels. Provisioning
-          # is best effort on purpose: if no channel carries it, AGP's own SDK
-          # auto-download still gets a chance and the build step is the gate
-          # that decides. A provisioning warning is never a passing build.
-          install_platform() {
-            sdkmanager --install 'platforms;android-37' "$@" >/dev/null 2>&1 || return 1
-            test -d "${ANDROID_HOME}/platforms/android-37"
-          }
-          if install_platform; then
-            echo "platforms;android-37 installed from the stable channel"
-          elif install_platform --channel=3; then
-            echo "platforms;android-37 installed from a preview channel"
-          else
-            echo "::warning::platforms;android-37 is unavailable from every channel; leaving it to the build step"
-          fi
-          test -d "${ANDROID_HOME}/platforms" || {
-            echo "::error::no Android platform is installed at all under $ANDROID_HOME" >&2
-            exit 1
-          }
-          echo "android platforms:"
-          ls -1 "${ANDROID_HOME}/platforms"
-          echo "android ndk:"
-          ls -1 "${ANDROID_HOME}/ndk"
+        run: node scripts/release/android-sdk-provision.mjs provision
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -189,6 +160,13 @@ jobs:
       - name: Assert the Gradle project recorded the resolved versionName
         shell: bash
         run: node scripts/release/android-smoke.mjs check-gradle --phase build --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      # A provisioning warning is never a passing build: this gate fails unless
+      # platforms;android-37 is really installed, and it records whether the
+      # shared step or AGP's own SDK auto-download supplied it.
+      - name: Gate the Android SDK provisioning before any result is reported
+        shell: bash
+        run: node scripts/release/android-sdk-provision.mjs check-platform --gradle-file apps/native/src-tauri/gen/android/app/build.gradle.kts
 
       - name: Verify the APK with aapt2 dump badging
         shell: bash
@@ -330,36 +308,14 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
 
-      # same platform reason as stage 1: tauri-cli 2.12.4 compiles against SDK 37
-      - name: Install the SDK platform the 2.12.4 Gradle template compiles against
+      # ONE shared provisioning step (RC2-D.15 Phase C): the same entry point and
+      # the same package list the release path calls, so this proven path and
+      # .github/workflows/release-dev.yml cannot drift apart again. The compile-SDK
+      # platform the CLI template needs, the channel fallback and the package list
+      # live in scripts/release/android-sdk-provision.mjs, never in this file.
+      - name: Provision the Android SDK (shared step)
         shell: bash
-        run: |
-          set -euo pipefail
-          command -v sdkmanager >/dev/null 2>&1 || {
-            echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
-            exit 1
-          }
-          # android-37 is not in the stable channel yet (the first CI run
-          # reported "Failed to find package 'platforms;android-37'"), so try
-          # the stable channel first and then the preview channels. Provisioning
-          # is best effort on purpose: if no channel carries it, AGP's own SDK
-          # auto-download still gets a chance and the build step is the gate
-          # that decides. A provisioning warning is never a passing build.
-          install_platform() {
-            sdkmanager --install 'platforms;android-37' "$@" >/dev/null 2>&1 || return 1
-            test -d "${ANDROID_HOME}/platforms/android-37"
-          }
-          if install_platform; then
-            echo "platforms;android-37 installed from the stable channel"
-          elif install_platform --channel=3; then
-            echo "platforms;android-37 installed from a preview channel"
-          else
-            echo "::warning::platforms;android-37 is unavailable from every channel; leaving it to the build step"
-          fi
-          test -d "${ANDROID_HOME}/platforms" || {
-            echo "::error::no Android platform is installed at all under $ANDROID_HOME" >&2
-            exit 1
-          }
+        run: node scripts/release/android-sdk-provision.mjs provision
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -394,6 +350,13 @@ jobs:
       - name: Assert the Gradle project recorded the resolved versionName
         shell: bash
         run: node scripts/release/android-smoke.mjs check-gradle --phase build --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      # A provisioning warning is never a passing build: this gate fails unless
+      # platforms;android-37 is really installed, and it records whether the
+      # shared step or AGP's own SDK auto-download supplied it.
+      - name: Gate the Android SDK provisioning before any result is reported
+        shell: bash
+        run: node scripts/release/android-sdk-provision.mjs check-platform --gradle-file apps/native/src-tauri/gen/android/app/build.gradle.kts
 
       - name: Verify the APK and the AAB for ${{ matrix.token }}
         shell: bash

@@ -847,7 +847,7 @@ const KNOWN_EXPRESSION_ROOTS = new Set([
 ]);
 
 function tokenizeExpression(body) {
-  const tokens = [];
+  const raw = [];
   let cursor = 0;
   for (const match of body.matchAll(EXPRESSION_TOKEN)) {
     const gap = body.slice(cursor, match.index);
@@ -860,12 +860,63 @@ function tokenizeExpression(body) {
         : /^\d/.test(value)
           ? 'number'
           : 'punct';
-    tokens.push({ kind, value });
+    raw.push({ kind, value, start: match.index, end: match.index + value.length });
     cursor = match.index + value.length;
   }
   const tail = body.slice(cursor);
   if (tail.trim() !== '') return { error: 'unexpected text ' + JSON.stringify(tail.trim()) };
-  return { tokens };
+  return { tokens: mergeHyphenatedNames(raw) };
+}
+
+/**
+ * A GitHub job id may carry a hyphen, so "needs.stage-release.outputs.X" is one
+ * property path; the lexer reads "-" as an operator. A hyphen that touches an
+ * identifier on both sides with no whitespace belongs to the name.
+ */
+function mergeHyphenatedNames(tokens) {
+  const merged = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const hyphen = tokens[index + 1];
+    const next = tokens[index + 2];
+    if (
+      token.kind === 'ident' &&
+      hyphen &&
+      hyphen.kind === 'punct' &&
+      hyphen.value === '-' &&
+      hyphen.start === token.end &&
+      next &&
+      next.kind === 'ident' &&
+      next.start === hyphen.end
+    ) {
+      let value = token.value + '-' + next.value;
+      let end = next.end;
+      let position = index + 2;
+      for (;;) {
+        const moreHyphen = tokens[position + 1];
+        const moreName = tokens[position + 2];
+        if (
+          !moreHyphen ||
+          moreHyphen.kind !== 'punct' ||
+          moreHyphen.value !== '-' ||
+          moreHyphen.start !== end ||
+          !moreName ||
+          moreName.kind !== 'ident' ||
+          moreName.start !== moreHyphen.end
+        ) {
+          break;
+        }
+        value = value + '-' + moreName.value;
+        end = moreName.end;
+        position += 2;
+      }
+      merged.push({ ...token, value, end });
+      index = position;
+      continue;
+    }
+    merged.push(token);
+  }
+  return merged;
 }
 
 /** Problems in one expression body; an empty array means it is well formed. */
