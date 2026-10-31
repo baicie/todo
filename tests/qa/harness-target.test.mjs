@@ -731,4 +731,3 @@ test('build.rs, commands.rs and run-windows.ps1 share one commit marker and wire
     '-DiscoverOnly must print the commit provenance line',
   );
 });
-
