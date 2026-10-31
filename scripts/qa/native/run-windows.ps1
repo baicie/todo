@@ -320,6 +320,20 @@ try {
   # QA data root and must never coincide with the production root.
   $qaDataRoot = $decision.qa.dataRoot
   $productionDataRoot = $decision.qa.productionDataRoot
+  # `pnpm dlx` writes progress to stderr, which Windows PowerShell 5.1 turns
+  # into a terminating NativeCommandError while $ErrorActionPreference is
+  # 'Stop'. The CLI version is diagnostic only, so the probe must never abort a
+  # run: the same guard the build call uses is applied here.
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $tauriCliVersion = (& pnpm dlx @tauri-apps/cli@2.12.4 --version 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+  } catch {
+    $tauriCliVersion = "unknown ($($_.Exception.Message))"
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  if ([string]::IsNullOrWhiteSpace($tauriCliVersion)) { $tauriCliVersion = 'unknown' }
   $environment = [ordered]@{
     runId = $RunId
     capturedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -330,7 +344,7 @@ try {
     cargo = (& cargo --version 2>&1 | Out-String).Trim()
     node = (& node --version 2>&1 | Out-String).Trim()
     pnpm = (& pnpm --version 2>&1 | Out-String).Trim()
-    tauriCli = (& pnpm dlx @tauri-apps/cli@2.12.4 --version 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+    tauriCli = $tauriCliVersion
     webview2 = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" -ErrorAction SilentlyContinue).pv
     qaIdentifier = "app.shishi.todo.qa"
     qaDataRoot = $qaDataRoot
