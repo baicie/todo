@@ -11,7 +11,13 @@ param(
   [int]$BenchRuns = 3,
   [switch]$AllowPartial,
   [switch]$DiscoverOnly,
-  [switch]$KeepRunning
+  [switch]$KeepRunning,
+  [string]$ExpectedSha256 = "",
+  [string]$ExpectedVersion = "",
+  [string]$ExpectedCommit = "",
+  [string]$ExpectedInstallerSha256 = "",
+  [switch]$AllowStaleTarget,
+  [switch]$AllowCommitMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +66,83 @@ function Get-GitCommitFallback {
   } catch { return "unknown" }
 }
 
+function Get-GitBranch {
+  try {
+    $headPath = Join-Path $RepoRoot ".git\HEAD"
+    if (-not (Test-Path -LiteralPath $headPath)) { return "unknown" }
+    $head = (Get-Content -LiteralPath $headPath -Raw).Trim()
+    if ($head -match '^ref:\s*refs/heads/(.+)$') { return $Matches[1] }
+    return "unknown"
+  } catch { return "unknown" }
+}
+
+function Get-GitDirty {
+  try {
+    $status = & git -C $RepoRoot status --porcelain 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return [bool](@($status | Where-Object { $_ }).Count -gt 0)
+  } catch { return $false }
+}
+
+# One probe entry per candidate: the policy module decides, this script only
+# observes (existence, ProductName, ProductVersion, sha256, mtime).
+function Get-ExeProbe([string]$Path, [string]$Source) {
+  $entry = [ordered]@{ path = $Path; source = $Source; exists = $false }
+  if ([string]::IsNullOrWhiteSpace($Path)) { return [pscustomobject]$entry }
+  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    $item = Get-Item -LiteralPath $Path
+    $entry.exists = $true
+    $entry.productName = $item.VersionInfo.ProductName
+    $entry.productVersion = $item.VersionInfo.ProductVersion
+    $entry.sha256 = Get-Sha256 $Path
+    $entry.mtimeMs = [int64](($item.LastWriteTimeUtc - $UnixEpoch).TotalMilliseconds)
+    $entry.sizeBytes = $item.Length
+    $identity = Get-BuildCommit $Path
+    $entry.buildCommit = $identity.commit
+    $entry.buildCommitSource = $identity.source
+  }
+  [pscustomobject]$entry
+}
+
+# Commit evidence (RC2-D.15 Phase C). The QA build embeds the git commit it was
+# built from as one compile-time string literal, "QA_BUILD_COMMIT:<sha>"
+# (build.rs -> commands.rs), so it can be read straight back out of the
+# executable bytes; replacing it means rewriting the binary, which changes the
+# sha256 the provenance records alongside. A <exe>.qa-build.json sidecar is
+# honoured as a fallback and labelled weaker by the policy module, because a
+# file beside the binary can be edited without touching the artifact.
+$BuildCommitMarker = "QA_BUILD_COMMIT:"
+function Get-BuildCommit([string]$Path) {
+  $result = [ordered]@{ commit = $null; source = "unknown" }
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return [pscustomobject]$result
+  }
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    # Latin-1 maps one byte to one character, so the search cannot miss the
+    # marker because of an encoding guess.
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    $found = [regex]::Match($text, [regex]::Escape($BuildCommitMarker) + "([0-9a-f]{40})")
+    if ($found.Success) {
+      $result.commit = $found.Groups[1].Value
+      $result.source = "embedded"
+      return [pscustomobject]$result
+    }
+  } catch { }
+  $sidecar = $Path + ".qa-build.json"
+  if (Test-Path -LiteralPath $sidecar -PathType Leaf) {
+    try {
+      $metadata = Get-Content -LiteralPath $sidecar -Raw | ConvertFrom-Json
+      if ($metadata.commit -match '^[0-9a-fA-F]{7,40}$') {
+        $result.commit = $metadata.commit.ToLowerInvariant()
+        $result.source = "sidecar"
+      }
+    } catch { }
+  }
+  [pscustomobject]$result
+}
+
+$UnixEpoch = [datetime]::SpecifyKind([datetime]'1970-01-01T00:00:00', [System.DateTimeKind]::Utc)
 $started = (Get-Date).ToUniversalTime()
 $buildLog = Join-Path $LogDir "build.log"
 $appOut = Join-Path $LogDir "app.stdout.log"
@@ -67,11 +150,18 @@ $appErr = Join-Path $LogDir "app.stderr.log"
 $faultEvidence = Join-Path $ArtifactRoot "fault-evidence.jsonl"
 $appPid = $null
 $installerHash = $null
+# Captured before the build because -Build embeds this commit into the binary.
+$gitCommit = Get-GitCommitFallback
+$gitBranch = Get-GitBranch
+$gitDirty = Get-GitDirty
 
 try {
   Push-Location (Join-Path $RepoRoot "apps\native")
   try {
     if ($Build) {
+      # build.rs turns this into the compile-time "QA_BUILD_COMMIT:<sha>" marker
+      # the target probe reads back out of the executable.
+      $env:QA_BUILD_COMMIT = $gitCommit
       $buildArgs = @(
         "dlx", "@tauri-apps/cli@2.12.4", "build",
         "--config", "src-tauri/tauri.qa.conf.json",
@@ -96,66 +186,154 @@ try {
     Pop-Location
   }
 
-  # Auto-discovery only makes sense when an install is actually requested: the
-  # bundle directory also holds Dev and Stable installers, and picking the
-  # newest one would refuse a run that never needed an installer at all (for
-  # example -DiscoverOnly). An explicitly passed -Installer is still validated
-  # below, so a caller cannot slip a non-QA package past the gate.
-  if ([string]::IsNullOrWhiteSpace($Installer) -and $Install) {
-    $found = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "apps\native\src-tauri\target\release\bundle\nsis") -Filter "*.exe" -ErrorAction SilentlyContinue |
-      Where-Object { $_.VersionInfo.ProductName -eq "Shishi QA RC2D" } |
-      Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($found) { $Installer = $found.FullName }
-  }
-  if ($Installer -and (Test-Path -LiteralPath $Installer)) {
-    $installerProduct = (Get-Item -LiteralPath $Installer).VersionInfo.ProductName
-    if ($installerProduct -ne "Shishi QA RC2D") {
-      throw "refusing non-QA installer ProductName=$installerProduct"
+  # ---- Harness target selection policy (RC2-D.14 Phase C) -------------------
+  # Why: this script used to prefer apps/native/.../release/todo-native.exe and
+  # only checked ProductName, so a stale build (older than the installed QA
+  # build, or built from another commit) could become the evidence for new code.
+  # The decision now lives in harness-target.mjs: it is pure, documented and
+  # unit tested (tests/qa/harness-target.test.mjs, pnpm test:qa-harness). This
+  # script only probes the file system, asks for a decision and executes it - it
+  # never selects a binary and never installs a non-QA package.
+  $TargetPolicy = Join-Path $PSScriptRoot "harness-target.mjs"
+  if (-not (Test-Path -LiteralPath $TargetPolicy)) { throw "harness target policy missing: $TargetPolicy" }
+  $probePath = Join-Path $ArtifactRoot "harness-target.probe.json"
+  $decisionPath = Join-Path $ArtifactRoot "harness-target.decision.json"
+  $bundleDir = Join-Path $RepoRoot "apps\native\src-tauri\target\release\bundle\nsis"
+  $releaseExe = Join-Path $RepoRoot "apps\native\src-tauri\target\release\todo-native.exe"
+  $installedExes = @(
+    (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\todo-native.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\todo-native.exe")
+  )
+  function Get-TargetDecision([string]$Phase) {
+    $appCandidates = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace($AppExe)) {
+      $appCandidates.Add((Get-ExeProbe $AppExe "explicit"))
     }
-    $installerHash = Get-Sha256 $Installer
+    # Cargo package name is todo-native, so the release build and the
+    # NSIS-installed app share the file name (ProductName stays Shishi QA RC2D).
+    $appCandidates.Add((Get-ExeProbe $releaseExe "release-build"))
+    foreach ($installedExe in $installedExes) {
+      $appCandidates.Add((Get-ExeProbe $installedExe "installed"))
+    }
+    $installerCandidates = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace($Installer)) {
+      $installerCandidates.Add((Get-ExeProbe $Installer "explicit"))
+    } elseif ($Install -and (Test-Path -LiteralPath $bundleDir)) {
+      foreach ($package in Get-ChildItem -LiteralPath $bundleDir -Filter "*.exe") {
+        $installerCandidates.Add((Get-ExeProbe $package.FullName "discovered"))
+      }
+    }
+    $probe = [ordered]@{
+      schemaVersion = 1
+      flags = [ordered]@{
+        discoverOnly = [bool]$DiscoverOnly
+        install = [bool]$Install
+        build = [bool]$Build
+        allowPartial = [bool]$AllowPartial
+        allowStaleTarget = [bool]$AllowStaleTarget
+        keepRunning = [bool]$KeepRunning
+        phase = $Phase
+        appExe = $AppExe
+        installer = $Installer
+        expectedSha256 = $ExpectedSha256
+        expectedVersion = $ExpectedVersion
+        expectedCommit = $ExpectedCommit
+        allowCommitMismatch = [bool]$AllowCommitMismatch
+        expectedInstallerSha256 = $ExpectedInstallerSha256
+      }
+      paths = [ordered]@{
+        repoRoot = $RepoRoot
+        releaseExe = $releaseExe
+        bundleDir = $bundleDir
+        appData = $env:APPDATA
+      }
+      git = [ordered]@{ commit = $gitCommit; branch = $gitBranch; dirty = $gitDirty }
+      appCandidates = @($appCandidates.ToArray())
+      installerCandidates = @($installerCandidates.ToArray())
+    }
+    Write-Json $probePath $probe
+    Remove-Item -LiteralPath $decisionPath -Force -ErrorAction SilentlyContinue
+    # PowerShell 5.1 turns native stderr into NativeCommandError; with
+    # ErrorActionPreference=Stop that aborts a healthy node run. Judge only the
+    # exit code and the decision file.
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+      # Same shape as the build call: node output is evidence, the exit code and
+      # the decision file are the verdict.
+      & node $TargetPolicy --input $probePath --output $decisionPath 2>&1 |
+        Tee-Object -FilePath (Join-Path $LogDir "harness-target.log") -Append | Out-Null
+      $decisionExit = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    if (-not (Test-Path -LiteralPath $decisionPath)) {
+      throw "harness target policy produced no decision (node exit $decisionExit)"
+    }
+    $result = [System.IO.File]::ReadAllText($decisionPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if (-not $result.ok) {
+      throw "$($result.errorCode): $($result.message)"
+    }
+    Write-Log (Join-Path $LogDir "launcher.log") ("target decision [" + $Phase + "] selection=" + $result.selection + " appExe=" + $result.appExe + " sha256=" + $result.appExeSha256 + " installer=" + $result.installer)
+    return $result
   }
 
-  if ($Install) {
-    if (-not $Installer) { throw "-Install requires an NSIS installer path" }
+  $decision = Get-TargetDecision "plan"
+  $installerHash = $decision.installerSha256
+
+  if ([bool]$decision.requireInstall) {
+    if ([string]::IsNullOrWhiteSpace($decision.installer)) { throw "-Install requires an NSIS installer path" }
+    $Installer = $decision.installer
     $installLog = Join-Path $LogDir "install.log"
-    Write-Log $installLog "installing $Installer"
+    Write-Log $installLog "installing $Installer (sha256 $($decision.installerSha256))"
     $installerProcess = Start-Process -FilePath $Installer -ArgumentList "/S" -PassThru -Wait
     Write-Log $installLog "installer exit code: $($installerProcess.ExitCode)"
     if ($installerProcess.ExitCode -ne 0) { throw "QA installer failed: $($installerProcess.ExitCode)" }
+    # The installed executable only exists after the install, so ask again.
+    $decision = Get-TargetDecision "resolve"
+    $installerHash = $decision.installerSha256
   }
 
-  if ([string]::IsNullOrWhiteSpace($AppExe)) {
-    # Cargo package name is todo-native, so both the release build and the
-    # NSIS-installed app use todo-native.exe (ProductName remains Shishi QA
-    # RC2D). Prefer the installed path when -Install was requested.
-    $releaseExe = Join-Path $RepoRoot "apps\native\src-tauri\target\release\todo-native.exe"
-    $installedExes = @(
-      (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\todo-native.exe"),
-      (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\todo-native.exe")
-    )
-    $candidates = if ($Install) {
-      $installedExes + $releaseExe
-    } else {
-      @($releaseExe) + $installedExes
-    }
-    $AppExe = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-  }
-  if (-not $AppExe -or -not (Test-Path -LiteralPath $AppExe)) {
+  $AppExe = $decision.appExe
+  if ([string]::IsNullOrWhiteSpace($AppExe) -or -not (Test-Path -LiteralPath $AppExe)) {
     throw "QA executable not found. Build with -Build or pass -AppExe."
   }
-
-  $appProduct = (Get-Item -LiteralPath $AppExe).VersionInfo.ProductName
+  $PartialExitCode = [int]$decision.exitCodes.partial
+  $appProduct = $decision.appExeProductName
   if ($appProduct -ne "Shishi QA RC2D") {
     throw "refusing non-QA app ProductName=$appProduct; QA harness never runs against production"
   }
   if ($DiscoverOnly) {
+    Write-Output "Policy: $($decision.policyVersion) selection=$($decision.selection)"
+    Write-Output "Exit codes: ok=$($decision.exitCodes.ok) fail=$($decision.exitCodes.fail) partial=$($decision.exitCodes.partial)"
     Write-Output "Discovered QA exe: $((Resolve-Path -LiteralPath $AppExe).Path)"
     Write-Output "ProductName: $appProduct"
+    Write-Output "ProductVersion: $($decision.appExeProductVersion)"
+    Write-Output "Sha256: $($decision.appExeSha256)"
+    Write-Output "GitCommit: $($decision.git.commit) branch=$($decision.git.branch) dirty=$($decision.git.dirty)"
+    Write-Output "CommitProvenance: binaryCommit=$($decision.buildCommit) source=$($decision.buildCommitSource) trust=$($decision.buildCommitTrust) expectedCommit=$($decision.expectedCommit) matched=$($decision.commitMatched) status=$($decision.commitStatus) mismatchAllowed=$($decision.commitMismatchAllowed)"
+    foreach ($note in @($decision.warnings)) { if ($note) { Write-Output "Note: $note" } }
     Write-Output "Next: native qa_build_identity must report identifier app.shishi.todo.qa"
-    exit 0
+    exit $decision.exitCodes.ok
   }
-  $qaDataRoot = Join-Path $env:APPDATA "app.shishi.todo.qa"
-  $productionDataRoot = Join-Path $env:APPDATA "app.shishi.todo"
+  # Both roots come from the policy decision: QA evidence must stay inside the
+  # QA data root and must never coincide with the production root.
+  $qaDataRoot = $decision.qa.dataRoot
+  $productionDataRoot = $decision.qa.productionDataRoot
+  # `pnpm dlx` writes progress to stderr, which Windows PowerShell 5.1 turns
+  # into a terminating NativeCommandError while $ErrorActionPreference is
+  # 'Stop'. The CLI version is diagnostic only, so the probe must never abort a
+  # run: the same guard the build call uses is applied here.
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $tauriCliVersion = (& pnpm dlx @tauri-apps/cli@2.12.4 --version 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+  } catch {
+    $tauriCliVersion = "unknown ($($_.Exception.Message))"
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  if ([string]::IsNullOrWhiteSpace($tauriCliVersion)) { $tauriCliVersion = 'unknown' }
   $environment = [ordered]@{
     runId = $RunId
     capturedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -166,7 +344,7 @@ try {
     cargo = (& cargo --version 2>&1 | Out-String).Trim()
     node = (& node --version 2>&1 | Out-String).Trim()
     pnpm = (& pnpm --version 2>&1 | Out-String).Trim()
-    tauriCli = (& pnpm dlx @tauri-apps/cli@2.12.4 --version 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+    tauriCli = $tauriCliVersion
     webview2 = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" -ErrorAction SilentlyContinue).pv
     qaIdentifier = "app.shishi.todo.qa"
     qaDataRoot = $qaDataRoot
@@ -174,9 +352,28 @@ try {
     productionDataRootPresent = (Test-Path -LiteralPath $productionDataRoot)
     qaDataRootPresentBefore = (Test-Path -LiteralPath $qaDataRoot)
     appExe = $AppExe
-    appExeSha256 = Get-Sha256 $AppExe
+    appExeSha256 = $decision.appExeSha256
+    appExeProductName = $decision.appExeProductName
+    appExeProductVersion = $decision.appExeProductVersion
+    appExeMtime = $decision.appExeMtime
+    appExeSelection = $decision.selection
+    appExeExplicitlyChosen = [bool]$decision.provenance.explicitlyChosen
+    appExeBuildCommit = $decision.buildCommit
+    appExeBuildCommitSource = $decision.buildCommitSource
+    appExeBuildCommitTrust = $decision.buildCommitTrust
+    expectedCommit = $decision.expectedCommit
+    commitMatched = $decision.commitMatched
+    commitStatus = $decision.commitStatus
+    commitMismatchAllowed = [bool]$decision.commitMismatchAllowed
     installer = $Installer
     installerSha256 = $installerHash
+    installerProductVersion = $decision.installerProductVersion
+    targetPolicyVersion = $decision.policyVersion
+    targetDecision = "harness-target.decision.json"
+    targetWarnings = @($decision.warnings)
+    gitCommit = $gitCommit
+    gitBranch = $gitBranch
+    gitDirty = $gitDirty
     cdpPort = $CdpPort
     faultConfig = $FaultConfig
     build = [bool]$Build
@@ -192,7 +389,12 @@ try {
   $env:QA_ARTIFACT_ROOT = $ArtifactRoot
   $env:QA_RUN_ID = $RunId
   $env:QA_APP_EXE = $AppExe
-  $env:QA_APP_SHA256 = Get-Sha256 $AppExe
+  $env:QA_APP_SHA256 = $decision.appExeSha256
+  $env:QA_APP_PRODUCT_NAME = $decision.appExeProductName
+  $env:QA_APP_PRODUCT_VERSION = $decision.appExeProductVersion
+  $env:QA_TARGET_SELECTION = $decision.selection
+  $env:QA_TARGET_POLICY = $decision.policyVersion
+  $env:QA_TARGET_EXPLICIT = "$([bool]$decision.provenance.explicitlyChosen)"
   $env:QA_INSTALLER = if ($Installer) { $Installer } else { "" }
   $env:QA_INSTALLER_SHA256 = if ($installerHash) { $installerHash } else { "" }
   $faultEvidenceSource = Join-Path $qaDataRoot ("evidence\fault-" + $RunId + ".jsonl")
@@ -263,9 +465,23 @@ try {
     startedAt = $started.ToString("o")
     finishedAt = $finished.ToString("o")
     appExe = $AppExe
-    appExeSha256 = Get-Sha256 $AppExe
+    appExeSha256 = $decision.appExeSha256
+    appExeProductName = $decision.appExeProductName
+    appExeProductVersion = $decision.appExeProductVersion
+    appExeMtime = $decision.appExeMtime
+    appExeSelection = $decision.selection
+    appExeExplicitlyChosen = [bool]$decision.provenance.explicitlyChosen
+    appExeBuildCommit = $decision.buildCommit
+    appExeBuildCommitSource = $decision.buildCommitSource
+    appExeBuildCommitTrust = $decision.buildCommitTrust
+    expectedCommit = $decision.expectedCommit
+    commitMatched = $decision.commitMatched
+    commitStatus = $decision.commitStatus
+    commitMismatchAllowed = [bool]$decision.commitMismatchAllowed
     installer = $Installer
     installerSha256 = $installerHash
+    installerProductVersion = $decision.installerProductVersion
+    targetPolicyVersion = $decision.policyVersion
     faultConfig = $FaultConfig
     faultEvidencePresent = (Test-Path -LiteralPath $faultEvidence)
     gitCommit = if ($env:QA_GIT_COMMIT) { $env:QA_GIT_COMMIT } else { "unknown" }
@@ -275,8 +491,10 @@ try {
     status = $testStatus
     files = @(
       "environment.json", "provenance.json", "manifest.json", "tests.json",
+      "harness-target.probe.json", "harness-target.decision.json",
       "timeline.json", "performance.json", "summary.md", "manual-platform.json",
-      "logs/build.log", "logs/app.stdout.log", "logs/app.stderr.log", "logs/harness.log"
+      "logs/build.log", "logs/app.stdout.log", "logs/app.stderr.log", "logs/harness.log",
+      "logs/harness-target.log"
     )
   }
   $manualScenariosPath = Join-Path $PSScriptRoot "manual-scenarios.json"
@@ -365,7 +583,9 @@ try {
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $manifest
   if ($testStatus -notin @("PASS", "BENCH_ONLY") -and -not $AllowPartial) {
     Write-Log (Join-Path $LogDir "launcher.log") "PARTIAL/NOT_RUN evidence is not a successful gate; pass -AllowPartial only for investigative runs"
-    exit 2
+    # The PARTIAL exit code comes from the policy module (EXIT_CODES.PARTIAL = 2)
+    # so the semantics are documented and asserted in the harness target tests.
+    exit $PartialExitCode
   }
 } catch {
   $failure = [ordered]@{
@@ -376,6 +596,7 @@ try {
     error = $_.Exception.Message
     appExe = $AppExe
     installer = $Installer
+    targetDecision = "harness-target.decision.json"
   }
   Write-Json (Join-Path $ArtifactRoot "manifest.json") $failure
   Write-Log (Join-Path $LogDir "launcher.log") "QA run failed: $($_.Exception.Message)"

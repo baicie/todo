@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "purpose": "Every third-party action used by the dev release path, pinned to a full 40-character commit SHA. release-dev.yml, release-acceptance.yml, release-desktop.yml and release-web.yml must use exactly these SHAs; tests/release/release-context.test.mjs fails if any action in the release path is not pinned.",
+  "purpose": "Every third-party action used by the dev release path, pinned to a full 40-character commit SHA. release-dev.yml, release-acceptance.yml, release-desktop.yml and release-web.yml must use exactly these SHAs; tests/release/release-context.test.mjs fails if any action in the release path is not pinned. .github/workflows/macos-smoke.yml reuses the same SHAs for the non-publishing macOS smoke build and needed no pin of its own.",
   "resolvedAt": "2026-10-30",
   "resolvedWith": "gh api repos/<owner>/<repo>/git/matching-refs/tags/<major> to find the newest patch tag, then gh api repos/<owner>/<repo>/git/tags/<sha> to dereference annotated tags to their commit; dtolnay/rust-toolchain is a branch, resolved with gh api repos/dtolnay/rust-toolchain/commits/stable",
   "actions": [

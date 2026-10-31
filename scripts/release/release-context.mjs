@@ -125,13 +125,53 @@ export function resolveVersionValue(raw, readVersionFile = null) {
   return resolveVersionValue(readVersionFile(value)?.version, readVersionFile);
 }
 
+function isConfigObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
- * Effective app config: the dev config wins over the base config on top-level
- * keys, which is the merge performed by `tauri build --config <file>`.
+ * RFC 7396 JSON Merge Patch, one layer: objects merge recursively, a `null` in
+ * the patch deletes the key, arrays and scalars replace wholesale. This is the
+ * merge Tauri performs when several config files are combined, so it — not a
+ * top-level spread — is the model of the effective config.
  */
-export function resolveAppConfig({ baseConfig, devConfig = null, readVersionFile = null } = {}) {
+export function applyMergePatch(target, patch) {
+  if (!isConfigObject(patch)) return patch;
+  const merged = isConfigObject(target) ? { ...target } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete merged[key];
+    else merged[key] = applyMergePatch(merged[key], value);
+  }
+  return merged;
+}
+
+/** Fold tauri configs left to right, base first: the merge `tauri build --config` performs. */
+export function mergeTauriConfig(...configs) {
+  let merged = {};
+  for (const config of configs) {
+    if (config === null || config === undefined) continue;
+    merged = applyMergePatch(merged, config);
+  }
+  return merged;
+}
+
+/**
+ * Effective app config: the base config folded with the dev override and any
+ * further configs in order, using the RFC 7396 merge `tauri build` performs — so
+ * a nested object the overrides do not mention (bundle.targets, bundle.macOS,
+ * app.security, ...) survives instead of being replaced by the last config.
+ */
+export function resolveAppConfig({
+  baseConfig,
+  devConfig = null,
+  extraConfigs = [],
+  readVersionFile = null,
+} = {}) {
   if (!baseConfig || typeof baseConfig !== 'object') fail('base tauri config is unreadable');
-  const merged = { ...baseConfig, ...(devConfig ?? {}) };
+  const overrides = [devConfig, ...(extraConfigs ?? [])].filter(
+    (config) => config !== null && config !== undefined,
+  );
+  const merged = mergeTauriConfig(baseConfig, ...overrides);
   return {
     version: resolveVersionValue(merged.version, readVersionFile),
     productName: typeof merged.productName === 'string' ? merged.productName.trim() : '',
@@ -141,7 +181,9 @@ export function resolveAppConfig({ baseConfig, devConfig = null, readVersionFile
       typeof merged.bundle?.windows?.nsis?.installMode === 'string'
         ? merged.bundle.windows.nsis.installMode
         : null,
-    overriddenKeys: Object.keys(devConfig ?? {}).sort(),
+    overriddenKeys: [...new Set(overrides.flatMap((config) => Object.keys(config)))].sort(),
+    /** The effective config model the fields above were derived from. */
+    config: merged,
   };
 }
 

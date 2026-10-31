@@ -1,6 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import {
+  assertNoUnobservableClaims,
+  buildLayerReport,
+  deliveryClaims,
+  layerSummary,
+  notificationAdvanced,
+  notificationDeltaMs,
+  NOTIFICATIONS_SETTINGS_KEY,
+  pollUntil,
+  readAppendedText,
+  readNotificationSettings,
+  reminderAttemptLines,
+  setLayer,
+} from './reminder-observer.mjs';
 
 const artifactRoot = process.env.QA_ARTIFACT_ROOT;
 const cdpPort = process.env.QA_CDP_PORT || '9345';
@@ -12,11 +26,27 @@ const logDir = path.join(artifactRoot, 'logs');
 fs.mkdirSync(screenshotDir, { recursive: true });
 fs.mkdirSync(logDir, { recursive: true });
 
+// RC2-D.15 Phase B: Windows records notifications per AUMID under the user's
+// notification settings key, and run-windows.ps1 redirects the QA app's stderr
+// into this log directory, so both sides of "did a reminder actually reach the
+// platform" are observable without a screen.
+const QA_NOTIFICATION_AUMID = 'app.shishi.todo.qa';
+const appStderrPath = path.join(logDir, 'app.stderr.log');
+
+// RC2-D.14 Phase C: evidence is only meaningful when the binary it exercised
+// is recorded together with how it was chosen (explicit -AppExe, freshly
+// installed QA build, or discovered). run-windows.ps1 exports these from the
+// harness-target.mjs decision and writes that decision next to this file.
 const provenance = {
   generatedAt: new Date().toISOString(),
+  policyVersion: process.env.QA_TARGET_POLICY || 'unknown',
   gitCommit: process.env.QA_GIT_COMMIT || 'unknown',
   gitBranch: process.env.QA_GIT_BRANCH || 'unknown',
+  targetSelection: process.env.QA_TARGET_SELECTION || 'unknown',
+  targetExplicitlyChosen: process.env.QA_TARGET_EXPLICIT === 'True',
   appExe: process.env.QA_APP_EXE || 'unknown',
+  appExeProductName: process.env.QA_APP_PRODUCT_NAME || null,
+  appExeProductVersion: process.env.QA_APP_PRODUCT_VERSION || null,
   appExeSha256: process.env.QA_APP_SHA256 || null,
   installer: process.env.QA_INSTALLER || null,
   installerSha256: process.env.QA_INSTALLER_SHA256 || null,
@@ -122,6 +152,87 @@ async function invoke(page, command, args = {}) {
 
 async function storage(page, action, payload = {}) {
   return invoke(page, 'todo_storage', { request: { action, payload } });
+}
+
+function currentLogOffset(file) {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+// One machine-readable block per reminder case: every layer with its status and
+// the evidence that justifies it. The interaction layers are asserted to stay
+// NOT_RUN here instead of trusting each call site.
+function recordReminderLayers(test, layers, extra = {}) {
+  assertNoUnobservableClaims(layers);
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    test,
+    aumid: QA_NOTIFICATION_AUMID,
+    registryKey: NOTIFICATIONS_SETTINGS_KEY + '\\' + QA_NOTIFICATION_AUMID,
+    summary: layerSummary(layers),
+    deliveryClaims: deliveryClaims(layers),
+    layers,
+    ...extra,
+  };
+  const file = test + '.layers.json';
+  fs.writeFileSync(path.join(artifactRoot, file), JSON.stringify(payload, null, 2));
+  log(test + ' layers: ' + payload.summary);
+  if (payload.deliveryClaims.length > 0) {
+    log(test + ' delivery claims: ' + payload.deliveryClaims.join(', '));
+  }
+  event(test + '_layers', { file, deliveryClaims: payload.deliveryClaims });
+  return payload;
+}
+
+// A bounded, state-polling observation window. It probes the per-AUMID registry
+// counter and the app's own platform diagnostics, and returns the moment either
+// side says something instead of sleeping for the whole bound.
+async function observeReminderDelivery({ baseline, stderrOffset, timeoutMs, stopOnAttempt }) {
+  const result = await pollUntil({
+    timeoutMs,
+    intervalMs: 2500,
+    probe: () => {
+      const settings = readNotificationSettings(QA_NOTIFICATION_AUMID);
+      const appended = readAppendedText(appStderrPath, stderrOffset);
+      return {
+        settings,
+        advanced: notificationAdvanced(baseline, settings),
+        deltaMs: notificationDeltaMs(baseline, settings),
+        attemptLines: reminderAttemptLines(appended.text),
+        stderrPresent: appended.exists,
+      };
+    },
+    satisfied: (state) => state.advanced || (stopOnAttempt && state.attemptLines.length > 0),
+  });
+  return {
+    satisfied: result.satisfied,
+    polls: result.polls,
+    elapsedMs: result.elapsedMs,
+    settings: result.last.settings,
+    advanced: result.last.advanced,
+    deltaMs: result.last.deltaMs,
+    attemptLines: result.last.attemptLines,
+    stderrPresent: result.last.stderrPresent,
+  };
+}
+
+// Remove only what the current case created, and report whether it worked.
+async function cleanupReminderFixtures({ reminderId, taskId }) {
+  const cleanup = { reminderCancelled: false, taskDeleted: false };
+  if (reminderId) {
+    const cancelled = await invoke(page, 'cancel_reminder', { reminderId });
+    cleanup.reminderCancelled = cancelled.ok === true;
+    cleanup.cancelDetail = cancelled.ok ? 'ok' : cancelled.error;
+  }
+  if (taskId) {
+    const deleted = await storage(page, 'delete_task', { id: taskId });
+    cleanup.taskDeleted = deleted.ok === true;
+    if (!deleted.ok) cleanup.deleteDetail = deleted.error;
+  }
+  return cleanup;
 }
 
 const { browser, page } = await connect();
@@ -238,6 +349,666 @@ await run('qa_reminder_schedule_cancel', async () => {
   }
   unwrap(await invoke(page, 'cancel_reminder', { reminderId }), 'cancel_reminder');
   return { reminderId, mode };
+});
+
+// RC2-D.15 Phase B: qa_reminder_schedule_cancel only proves the queue accepts
+// and drops an entry. These cases observe the per-AUMID counter Windows writes
+// when it accepts a notification, so delivery stops being NOT_RUN by default.
+// A changed counter is evidence for OS_NOTIFICATION_OBSERVED and nothing more:
+// no path in this harness can see a banner, the notification center or a click,
+// so those four layers stay NOT_RUN even when a toast is accepted.
+const REMINDER_FIRE_LEAD_MS = 20000;
+const REMINDER_OBSERVATION_BOUND_MS = 120000;
+const REMINDER_CANCEL_LEAD_MS = 10000;
+const REMINDER_TIMEOUT_CASE_LEAD_MS = 90000;
+const REMINDER_TIMEOUT_CASE_BOUND_MS = 20000;
+
+await run('qa_reminder_fires_toast', async () => {
+  const layers = buildLayerReport();
+  const evidence = {
+    aumid: QA_NOTIFICATION_AUMID,
+    reminderLeadMs: REMINDER_FIRE_LEAD_MS,
+    observationBoundMs: REMINDER_OBSERVATION_BOUND_MS,
+  };
+  let primaryError = null;
+  try {
+    const permission = unwrap(await invoke(page, 'reminder_permission'), 'reminder_permission');
+    evidence.permission = permission;
+    if (permission !== 'granted') {
+      skip('desktop notification permission is ' + permission + '; no toast can reach Windows');
+    }
+    const context = unwrap(await invoke(page, 'native_account_context'), 'native_account_context');
+    const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
+    evidence.registryBefore = baseline;
+    if (!baseline.exists) throw new Error('cannot read ' + baseline.key + ': ' + baseline.error);
+    if (!baseline.lastNotificationAddedTimeTicks) {
+      throw new Error(
+        'LastNotificationAddedTime is absent, so no before/after change can be proven',
+      );
+    }
+    const stderrOffset = currentLogOffset(appStderrPath);
+    const scheduledAtMs = Date.now();
+    const fireAtMs = scheduledAtMs + REMINDER_FIRE_LEAD_MS;
+    const fireAtUtc = new Date(fireAtMs).toISOString();
+    const title = 'QA reminder fires ' + scheduledAtMs;
+    const task = unwrap(await storage(page, 'create_task', { input: { title } }), 'create_task');
+    evidence.taskId = task.id;
+    evidence.scheduledAt = new Date(scheduledAtMs).toISOString();
+    evidence.fireAtUtc = fireAtUtc;
+    evidence.reminderId = 'account:' + context.accountId + ':' + task.id;
+    const mode = unwrap(
+      await invoke(page, 'schedule_reminder', {
+        reminderId: task.id,
+        fireAtUtc,
+        title,
+        body: 'QA fire-toast probe',
+        exact: false,
+      }),
+      'schedule_reminder',
+    );
+    evidence.scheduleMode = mode;
+    if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for a future fireAtUtc ' + fireAtUtc,
+      );
+      throw new Error(
+        'schedule_reminder returned ' + mode + ' instead of arming a future reminder',
+      );
+    }
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed ' +
+        evidence.reminderId +
+        ' for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        '); deliberately not cancelled',
+    );
+    // No cancel here on purpose: the assertion is that the platform fires it.
+    const observation = await observeReminderDelivery({
+      baseline,
+      stderrOffset,
+      timeoutMs: REMINDER_OBSERVATION_BOUND_MS,
+      stopOnAttempt: true,
+    });
+    evidence.observation = {
+      satisfied: observation.satisfied,
+      polls: observation.polls,
+      elapsedMs: observation.elapsedMs,
+      appStderrPresent: observation.stderrPresent,
+    };
+    evidence.filetimeBaselineHex = baseline.lastNotificationAddedTimeHex;
+    evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
+    evidence.filetimeDeltaMs = observation.deltaMs;
+    evidence.notificationAddedAt = observation.settings.lastNotificationAddedAt;
+    evidence.notificationAddedAfterFireMs =
+      observation.settings.lastNotificationAddedAtMs === null
+        ? null
+        : observation.settings.lastNotificationAddedAtMs - fireAtMs;
+    evidence.registryAfter = observation.settings;
+    evidence.appAttemptLines = observation.attemptLines;
+    const permissionAfter = await invoke(page, 'reminder_permission');
+    const contextAfter = await invoke(page, 'native_account_context');
+    evidence.cdpAfter = {
+      permission: permissionAfter.ok ? permissionAfter.value : permissionAfter.error,
+      accountId: contextAfter.ok ? contextAfter.value?.accountId : contextAfter.error,
+    };
+    if (observation.advanced) {
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'PASS',
+        'the scheduler thread ran: Windows recorded a notification at ' +
+          observation.settings.lastNotificationAddedAt +
+          ', ' +
+          evidence.notificationAddedAfterFireMs +
+          ' ms after the fire instant ' +
+          fireAtUtc,
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'PASS',
+        'Windows advanced LastNotificationAddedTime for ' +
+          QA_NOTIFICATION_AUMID +
+          ': ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex +
+          ' within ' +
+          observation.elapsedMs +
+          ' ms',
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'PASS',
+        'per-AUMID counter moved by ' +
+          observation.deltaMs +
+          ' ms and read ' +
+          observation.settings.lastNotificationAddedAt +
+          ' (' +
+          observation.polls +
+          ' polls)',
+      );
+    } else if (observation.attemptLines.length > 0) {
+      const reason = observation.attemptLines.join(' | ');
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'PASS',
+        'the timer thread ran and attempted the platform call: ' + reason,
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'FAIL',
+        'the app reported a platform rejection instead of an accepted toast: ' + reason,
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'LastNotificationAddedTime stayed ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' over ' +
+          observation.polls +
+          ' polls in ' +
+          observation.elapsedMs +
+          ' ms',
+      );
+      throw new Error('the reminder never reached Windows: ' + reason);
+    } else {
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'NOT_RUN',
+        'no observable side effect within ' +
+          observation.elapsedMs +
+          ' ms: the in-process reminder queue has no readback, so a silent trigger cannot be told apart from a trigger that never ran',
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'FAIL',
+        'LastNotificationAddedTime stayed ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' for the whole ' +
+          observation.elapsedMs +
+          ' ms window after the fire instant ' +
+          fireAtUtc,
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'no notification was added for ' +
+          QA_NOTIFICATION_AUMID +
+          ' within the ' +
+          REMINDER_OBSERVATION_BOUND_MS +
+          ' ms bound of a ' +
+          REMINDER_FIRE_LEAD_MS +
+          ' ms deadline',
+      );
+      throw new Error(
+        'no Windows notification appeared within ' +
+          observation.elapsedMs +
+          ' ms (baseline ' +
+          baseline.lastNotificationAddedTimeHex +
+          ', after ' +
+          (observation.settings.lastNotificationAddedTimeHex ?? 'unreadable') +
+          ')',
+      );
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_fires_toast', layers, { ...evidence, cleanup });
+  if (primaryError) throw primaryError;
+  if (cleanup.reminderCancelled !== true || cleanup.taskDeleted !== true) {
+    throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
+  }
+  return { message: report.summary, layers, ...evidence };
+});
+
+await run('qa_reminder_cancelled_before_fire', async () => {
+  const layers = buildLayerReport();
+  const evidence = { aumid: QA_NOTIFICATION_AUMID, cancelLeadMs: REMINDER_CANCEL_LEAD_MS };
+  let primaryError = null;
+  try {
+    const permission = unwrap(await invoke(page, 'reminder_permission'), 'reminder_permission');
+    evidence.permission = permission;
+    if (permission !== 'granted') skip('desktop notification permission is ' + permission);
+    const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
+    evidence.registryBefore = baseline;
+    if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
+    }
+    const stderrOffset = currentLogOffset(appStderrPath);
+    const title = 'QA cancelled reminder ' + Date.now();
+    const task = unwrap(await storage(page, 'create_task', { input: { title } }), 'create_task');
+    evidence.taskId = task.id;
+    const fireAtUtc = new Date(Date.now() + REMINDER_CANCEL_LEAD_MS).toISOString();
+    evidence.fireAtUtc = fireAtUtc;
+    const mode = unwrap(
+      await invoke(page, 'schedule_reminder', {
+        reminderId: task.id,
+        fireAtUtc,
+        title,
+        body: 'must never reach Windows',
+        exact: false,
+      }),
+      'schedule_reminder',
+    );
+    evidence.scheduleMode = mode;
+    if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for ' + fireAtUtc,
+      );
+      throw new Error('schedule_reminder returned ' + mode + ' instead of arming the reminder');
+    }
+    // cancel_reminder verifies the platform queue no longer reports the entry,
+    // so a successful unwrap is proof the reminder is gone.
+    unwrap(await invoke(page, 'cancel_reminder', { reminderId: task.id }), 'cancel_reminder');
+    evidence.cancelledAt = new Date().toISOString();
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        ') and cancelled at ' +
+        evidence.cancelledAt +
+        '; cancel_reminder verified no residual queue entry',
+    );
+    const observation = await observeReminderDelivery({
+      baseline,
+      stderrOffset,
+      timeoutMs: REMINDER_CANCEL_LEAD_MS + 12000,
+      stopOnAttempt: false,
+    });
+    evidence.observation = {
+      satisfied: observation.satisfied,
+      polls: observation.polls,
+      elapsedMs: observation.elapsedMs,
+      appStderrPresent: observation.stderrPresent,
+    };
+    evidence.filetimeBaselineHex = baseline.lastNotificationAddedTimeHex;
+    evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
+    evidence.appAttemptLines = observation.attemptLines;
+    evidence.passedFireInstant = Date.now() > Date.parse(fireAtUtc);
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'the reminder was cancelled before its fire instant, so no trigger was expected and none is claimed',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'a cancelled reminder is never meant to reach the Windows notification API',
+    );
+    if (observation.advanced || observation.attemptLines.length > 0) {
+      const detail = observation.advanced
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
+        : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'a cancelled reminder still produced delivery evidence: ' + detail,
+      );
+      throw new Error('a cancelled reminder still produced delivery evidence: ' + detail);
+    }
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'not observed and not claimed: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms, past the fire instant',
+    );
+    if (!evidence.passedFireInstant) {
+      throw new Error(
+        'the observation window closed before the fire instant, so "no delivery" was not proven',
+      );
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_cancelled_before_fire', layers, {
+    ...evidence,
+    cleanup,
+  });
+  if (primaryError) throw primaryError;
+  if (cleanup.taskDeleted !== true) {
+    throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
+  }
+  return { message: report.summary, layers, ...evidence };
+});
+
+await run('qa_reminder_past_fire_time', async () => {
+  const layers = buildLayerReport();
+  const evidence = { aumid: QA_NOTIFICATION_AUMID, pastOffsetMs: 60000 };
+  let primaryError = null;
+  try {
+    const permission = unwrap(await invoke(page, 'reminder_permission'), 'reminder_permission');
+    evidence.permission = permission;
+    if (permission !== 'granted') skip('desktop notification permission is ' + permission);
+    const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
+    evidence.registryBefore = baseline;
+    if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
+    }
+    const stderrOffset = currentLogOffset(appStderrPath);
+    const title = 'QA past reminder ' + Date.now();
+    const task = unwrap(await storage(page, 'create_task', { input: { title } }), 'create_task');
+    evidence.taskId = task.id;
+    const fireAtUtc = new Date(Date.now() - 60000).toISOString();
+    evidence.fireAtUtc = fireAtUtc;
+    const result = await invoke(page, 'schedule_reminder', {
+      reminderId: task.id,
+      fireAtUtc,
+      title,
+      body: 'fire time already passed',
+      exact: false,
+    });
+    const observedBehaviour = result.ok ? String(result.value) : 'error:' + result.error;
+    evidence.observedPastBehaviour = observedBehaviour;
+    // DesktopTimerAdapter::schedule (apps/native/src-tauri/src/reminders.rs:144-148)
+    // drops a past fire time and answers "skipped-past"; it does not fire
+    // immediately. Assert that observed contract instead of assuming either.
+    if (observedBehaviour !== 'skipped-past') {
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'a past fire time produced ' +
+          observedBehaviour +
+          ' instead of the documented skipped-past refusal',
+      );
+      throw new Error(
+        'expected the skipped-past refusal for a past fire time, observed ' + observedBehaviour,
+      );
+    }
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'NOT_RUN',
+      'refused by design: schedule_reminder returned skipped-past for ' +
+        fireAtUtc +
+        ', so nothing was armed and no delivery is claimed',
+    );
+    const observation = await observeReminderDelivery({
+      baseline,
+      stderrOffset,
+      timeoutMs: 10000,
+      stopOnAttempt: false,
+    });
+    evidence.observation = {
+      satisfied: observation.satisfied,
+      polls: observation.polls,
+      elapsedMs: observation.elapsedMs,
+      appStderrPresent: observation.stderrPresent,
+    };
+    evidence.filetimeBaselineHex = baseline.lastNotificationAddedTimeHex;
+    evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
+    evidence.appAttemptLines = observation.attemptLines;
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'nothing was armed, so no trigger was expected; no platform attempt appeared in ' +
+        observation.elapsedMs +
+        ' ms',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'nothing was armed, so the Windows notification API was never asked to accept a toast',
+    );
+    if (observation.advanced || observation.attemptLines.length > 0) {
+      const detail = observation.advanced
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
+        : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'a refused past fire time still produced delivery evidence: ' + detail,
+      );
+      throw new Error(
+        'a past fire time produced delivery evidence even though schedule_reminder reported skipped-past: ' +
+          detail,
+      );
+    }
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'not observed and not claimed: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms, so the past fire time did not fire immediately',
+    );
+  } catch (error) {
+    primaryError = error;
+  }
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_past_fire_time', layers, {
+    ...evidence,
+    cleanup,
+  });
+  if (primaryError) throw primaryError;
+  if (cleanup.taskDeleted !== true) {
+    throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
+  }
+  return { message: report.summary, layers, ...evidence };
+});
+
+await run('qa_reminder_observation_timeout', async () => {
+  const layers = buildLayerReport();
+  const evidence = {
+    aumid: QA_NOTIFICATION_AUMID,
+    fireLeadMs: REMINDER_TIMEOUT_CASE_LEAD_MS,
+    observationBoundMs: REMINDER_TIMEOUT_CASE_BOUND_MS,
+  };
+  let primaryError = null;
+  try {
+    const permission = unwrap(await invoke(page, 'reminder_permission'), 'reminder_permission');
+    evidence.permission = permission;
+    if (permission !== 'granted') skip('desktop notification permission is ' + permission);
+    const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
+    evidence.registryBefore = baseline;
+    if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
+    }
+    const stderrOffset = currentLogOffset(appStderrPath);
+    const title = 'QA timeout reminder ' + Date.now();
+    const task = unwrap(await storage(page, 'create_task', { input: { title } }), 'create_task');
+    evidence.taskId = task.id;
+    const fireAtMs = Date.now() + REMINDER_TIMEOUT_CASE_LEAD_MS;
+    const fireAtUtc = new Date(fireAtMs).toISOString();
+    evidence.fireAtUtc = fireAtUtc;
+    const mode = unwrap(
+      await invoke(page, 'schedule_reminder', {
+        reminderId: task.id,
+        fireAtUtc,
+        title,
+        body: 'bound expires before this fires',
+        exact: false,
+      }),
+      'schedule_reminder',
+    );
+    evidence.scheduleMode = mode;
+    if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for ' + fireAtUtc,
+      );
+      throw new Error('schedule_reminder returned ' + mode + ' instead of arming the reminder');
+    }
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        '), ' +
+        REMINDER_TIMEOUT_CASE_LEAD_MS +
+        ' ms out, with a ' +
+        REMINDER_TIMEOUT_CASE_BOUND_MS +
+        ' ms observation bound',
+    );
+    const observation = await observeReminderDelivery({
+      baseline,
+      stderrOffset,
+      timeoutMs: REMINDER_TIMEOUT_CASE_BOUND_MS,
+      stopOnAttempt: false,
+    });
+    evidence.observation = {
+      satisfied: observation.satisfied,
+      polls: observation.polls,
+      elapsedMs: observation.elapsedMs,
+      appStderrPresent: observation.stderrPresent,
+    };
+    evidence.filetimeBaselineHex = baseline.lastNotificationAddedTimeHex;
+    evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
+    evidence.appAttemptLines = observation.attemptLines;
+    evidence.fireInstantInsideWindow = Date.now() >= fireAtMs;
+    evidence.timedOut = observation.satisfied === false;
+    if (observation.advanced || observation.attemptLines.length > 0) {
+      const detail = observation.advanced
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
+        : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
+      setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'PASS', detail);
+      setLayer(layers, 'WINDOWS_API_ACCEPTED', observation.advanced ? 'PASS' : 'FAIL', detail);
+      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', observation.advanced ? 'PASS' : 'FAIL', detail);
+      throw new Error(
+        'the timeout case observed something inside its bound, its premise no longer holds: ' +
+          detail,
+      );
+    }
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'the ' +
+        observation.elapsedMs +
+        ' ms bound closed ' +
+        Math.max(0, fireAtMs - Date.now()) +
+        ' ms before the fire instant ' +
+        fireAtUtc +
+        ', so the timer never became due',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'the fire instant was still in the future, so the Windows notification API was never called',
+    );
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'timeout, not a delivery claim: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms',
+    );
+    if (observation.satisfied) throw new Error('the bound ended satisfied but no layer was set');
+    if (evidence.fireInstantInsideWindow) {
+      throw new Error(
+        'the fire instant fell inside the observation window, so this case did not exercise a timeout',
+      );
+    }
+    if (observation.elapsedMs > REMINDER_TIMEOUT_CASE_BOUND_MS + 10000) {
+      throw new Error('the polling loop overran its bound: ' + observation.elapsedMs + ' ms');
+    }
+    if (observation.polls < 2) {
+      throw new Error(
+        'the state loop polled only ' + observation.polls + ' time(s), so nothing was polled',
+      );
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_observation_timeout', layers, {
+    ...evidence,
+    cleanup,
+    deliveryClaimed: false,
+  });
+  if (primaryError) throw primaryError;
+  if (cleanup.reminderCancelled !== true || cleanup.taskDeleted !== true) {
+    throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
+  }
+  return { message: report.summary, layers, ...evidence };
 });
 
 await run('qa_credential_namespace', async () => {
@@ -414,6 +1185,7 @@ const summary = [
   '',
   `- Run: \`${process.env.QA_RUN_ID || 'unknown'}\``,
   `- App: \`${process.env.QA_APP_EXE || 'unknown'}\``,
+  `- Target: ${provenance.targetSelection} (version ${provenance.appExeProductVersion || 'unknown'}, sha256 ${provenance.appExeSha256 || 'unknown'})`,
   `- Status: **${status}**`,
   `- Tests: ${counts.PASS} PASS / ${counts.FAIL} FAIL / ${counts.NOT_RUN} NOT_RUN`,
   `- Duration: ${Date.now() - started} ms`,
@@ -428,6 +1200,7 @@ const summary = [
   }),
   '',
   'NOT_RUN is not a pass. Real toast click and two-account notification routing require an interactive desktop account fixture.',
+  'Reminder delivery layers are written to qa_reminder_*.layers.json. A changed LastNotificationAddedTime justifies OS_NOTIFICATION_OBSERVED only; NOTIFICATION_CENTER_VISIBLE, BANNER_VISIBLE, CLICK_ACTIVATED and DETAIL_OPENED_ACK stay NOT_RUN because nothing here can see a banner or a click.',
 ].join('\n');
 
 fs.writeFileSync(
