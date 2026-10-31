@@ -5,7 +5,7 @@
  * Three layers:
  *   1. pure resolution/validation/naming units of scripts/release/release-context.mjs;
  *   2. a build contract over the three real tauri config files, so the script's
- *      config model cannot drift away from tauri's own RFC 7386 merge again;
+ *      config model cannot drift away from tauri's own RFC 7396 merge again;
  *   3. static assertions over the release workflow text, so a mutable action ref
  *      or a second, independent version source cannot sneak back in unnoticed.
  */
@@ -614,7 +614,7 @@ function tauriConfig(path) {
 }
 
 /**
- * Independent RFC 7386 merge patch, written from the specification instead of
+ * Independent RFC 7396 merge patch, written from the specification instead of
  * from scripts/release/release-context.mjs, so the two interpreters cannot drift
  * together unnoticed.
  */
