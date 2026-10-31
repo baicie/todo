@@ -1,0 +1,246 @@
+name: macos-smoke (UNSIGNED, not notarised - not a production installer)
+
+# RC2-D.14 Phase E - non-publishing macOS smoke build.
+#
+# WHAT THIS PROVES: both macOS targets still compile and bundle end to end -
+# aarch64-apple-darwin (artifact arch arm64) and x86_64-apple-darwin (artifact
+# arch x64) - and that the bundle inside the DMG really carries the DEV identity
+# and the version resolved from apps/native/src-tauri/tauri.dev.conf.json, with
+# the Mach-O executable of the .app built for the matrix target and nothing else.
+#
+# WHAT THIS IS NOT: the DMG built here is UNSIGNED (no Developer ID) and NOT
+# notarised. A green run of this workflow is NOT a distributable macOS release:
+# Gatekeeper will refuse the bundle on a normal Mac and it must never be handed
+# to a user. Signing, notarisation and Apple credentials are out of scope for
+# this workflow and must not be added to it: no step here runs codesign,
+# notarytool or spctl, and a smoke result is never a signing claim.
+#
+# NON-PUBLISHING BY CONSTRUCTION: the only permission requested is
+# contents: read. There is no publishing job, no release action, no CLI release
+# command and no repository write of any kind - the DMG leaves this workflow as
+# a short-lived artifact only.
+#
+# Every action is pinned to the 40-hex commit SHA recorded in
+# scripts/release/actions.lock.json. This workflow needed no NEW pin: it reuses
+# only actions that are already locked for the release path.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-smoke.yml'
+      - 'apps/app/**'
+      - 'apps/native/plugins/**'
+      - 'apps/native/src-tauri/**'
+      - 'crates/**'
+      - 'packages/**'
+      - 'scripts/release/release-context.mjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAURI_CLI_VERSION: '2.12.4'
+
+jobs:
+  dmg-smoke:
+    name: Unsigned DMG smoke (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: arm64
+            target: aarch64-apple-darwin
+          - os: macos-14
+            label: x64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # release-context's "config" command refuses any identifier other than the
+      # dev identifier (assertDevConfig), so a resolved identifier is itself the
+      # proof that the dev identity is in force. Neither fact is hardcoded here.
+      - name: Resolve the dev identity and the version from the dev tauri config
+        shell: bash
+        run: |
+          set -euo pipefail
+          identifier=$(node scripts/release/release-context.mjs config --field identifier)
+          version=$(node scripts/release/release-context.mjs config --field version)
+          if [ -z "$identifier" ]; then
+            echo "::error::the dev tauri config resolved no identifier" >&2
+            exit 1
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::the dev tauri config resolved no version" >&2
+            exit 1
+          fi
+          echo "resolved identifier=$identifier version=$version"
+          echo "IDENTIFIER=$identifier" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10.34.3
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/native/src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Require the dev identity config
+        shell: bash
+        run: test -f apps/native/src-tauri/tauri.dev.conf.json
+
+      # Unsigned build on purpose. No signing identity, no notarisation and no
+      # Apple credential is requested anywhere in this workflow.
+      - name: Build the UNSIGNED DMG for ${{ matrix.label }} with the dev identity
+        working-directory: apps/native
+        run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" build --target ${{ matrix.target }} --bundles dmg --config src-tauri/tauri.dev.conf.json
+
+      - name: Verify the DMG carries the dev identity, the resolved version and the target architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG_DIR="apps/native/src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          shopt -s nullglob
+          DMGS=("$DMG_DIR"/*.dmg)
+          if [ "${#DMGS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one DMG under $DMG_DIR, found ${#DMGS[@]}" >&2
+            exit 1
+          fi
+          DMG="${DMGS[0]}"
+          test -s "$DMG" || { echo "::error::DMG $DMG is missing or empty" >&2; exit 1; }
+          echo "dmg=$DMG size=$(stat -f%z "$DMG") bytes"
+
+          # the expected Mach-O architecture is derived from the matrix target
+          # itself, so the check cannot drift from what was actually built
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) EXPECTED_ARCH=arm64 ;;
+            x86_64-apple-darwin) EXPECTED_ARCH=x86_64 ;;
+            *) echo "::error::unexpected matrix target ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          # the artifact label and the target must agree, or the DMG would be
+          # uploaded under the name of the other architecture
+          case "${{ matrix.label }}:$EXPECTED_ARCH" in
+            arm64:arm64|x64:x86_64) ;;
+            *) echo "::error::matrix label ${{ matrix.label }} does not match target ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+
+          MOUNT=$(mktemp -d "$RUNNER_TEMP/shishi-smoke.XXXXXX")
+          hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$MOUNT" >/dev/null
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+
+          APP_COUNT=$(find "$MOUNT" -maxdepth 2 -name '*.app' -type d | wc -l | tr -d ' ')
+          if [ "$APP_COUNT" -ne 1 ]; then
+            echo "::error::expected exactly one .app inside $DMG, found $APP_COUNT" >&2
+            exit 1
+          fi
+          APP=$(find "$MOUNT" -maxdepth 2 -name '*.app' -type d)
+          PLIST="$APP/Contents/Info.plist"
+          test -f "$PLIST" || { echo "::error::$APP has no Contents/Info.plist" >&2; exit 1; }
+          echo "app=$APP"
+
+          # the base tauri config carries an identifier that is NOT the dev one
+          # (release-context resolves and asserts the dev identity), so this
+          # equality is the proof that the dev config is what got bundled
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")
+          echo "CFBundleIdentifier=$BUNDLE_ID expected=$IDENTIFIER"
+          test "$BUNDLE_ID" = "$IDENTIFIER" || { echo "::error::CFBundleIdentifier $BUNDLE_ID != $IDENTIFIER" >&2; exit 1; }
+
+          SHORT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")
+          echo "CFBundleShortVersionString=$SHORT_VERSION expected=$VERSION"
+          test "$SHORT_VERSION" = "$VERSION" || { echo "::error::CFBundleShortVersionString $SHORT_VERSION != $VERSION" >&2; exit 1; }
+
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")
+          test -n "$EXECUTABLE" || { echo "::error::CFBundleExecutable is empty" >&2; exit 1; }
+          BIN="$APP/Contents/MacOS/$EXECUTABLE"
+          test -x "$BIN" || { echo "::error::CFBundleExecutable $EXECUTABLE is not an executable at $BIN" >&2; exit 1; }
+
+          LIPO_ARCHS=$(lipo -archs "$BIN")
+          echo "lipo -archs $BIN = $LIPO_ARCHS expected=$EXPECTED_ARCH"
+          test "$LIPO_ARCHS" = "$EXPECTED_ARCH" || { echo "::error::Mach-O archs '$LIPO_ARCHS' != '$EXPECTED_ARCH' for target ${{ matrix.target }}" >&2; exit 1; }
+
+          hdiutil detach "$MOUNT" >/dev/null
+          trap - EXIT
+          {
+            echo "SMOKE_ARCH=$LIPO_ARCHS"
+            echo "SMOKE_BUNDLE_ID=$BUNDLE_ID"
+            echo "SMOKE_VERSION=$SHORT_VERSION"
+          } >> "$GITHUB_ENV"
+
+      - name: Stage the DMG under its artifact name and record its SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=(apps/native/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ "${#DMGS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one DMG, found ${#DMGS[@]}" >&2
+            exit 1
+          fi
+          name=$(node scripts/release/release-context.mjs artifact-name macos-dmg --version "$VERSION" --arch "${{ matrix.label }}")
+          sums=$(node scripts/release/release-context.mjs artifact-name macos-sha256 --version "$VERSION" --arch "${{ matrix.label }}")
+          mkdir -p release-macos-smoke
+          cp "${DMGS[0]}" "release-macos-smoke/$name"
+          test -s "release-macos-smoke/$name"
+          DIGEST=$(shasum -a 256 "release-macos-smoke/$name" | awk '{print $1}')
+          printf '%s  %s\n' "$DIGEST" "$name" > "release-macos-smoke/$sums"
+          echo "artifact=$name sha256=$DIGEST"
+          {
+            echo "SMOKE_ARTIFACT=$name"
+            echo "SMOKE_SHA256=$DIGEST"
+          } >> "$GITHUB_ENV"
+          ls -l release-macos-smoke
+
+      - name: State the smoke result (UNSIGNED, not notarised, not a release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## macOS smoke: ${{ matrix.label }} - UNSIGNED and NOT notarised"
+            echo ""
+            echo "**This DMG is UNSIGNED (no Developer ID) and NOT notarised. A green"
+            echo "smoke run is NOT a distributable macOS release** - it must not be"
+            echo "published, linked or handed to a user."
+            echo ""
+            echo "| fact | value |"
+            echo "| --- | --- |"
+            echo "| runner | \`${{ matrix.os }}\` |"
+            echo "| rust target | \`${{ matrix.target }}\` |"
+            echo "| Mach-O arch (lipo) | \`$SMOKE_ARCH\` |"
+            echo "| CFBundleIdentifier | \`$SMOKE_BUNDLE_ID\` |"
+            echo "| CFBundleShortVersionString | \`$SMOKE_VERSION\` |"
+            echo "| artifact | \`$SMOKE_ARTIFACT\` |"
+            echo "| sha256 | \`$SMOKE_SHA256\` |"
+            echo ""
+            echo "No signing, no notarisation and no Apple credential is involved."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-smoke-${{ matrix.label }}
+          path: release-macos-smoke/*
+          if-no-files-found: error
+          retention-days: 7
