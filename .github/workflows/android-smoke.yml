@@ -1,0 +1,474 @@
+name: android-smoke (debug build, non-publishing)
+
+# RC2-D.14 Phase D - the Android CI smoke workflow.
+#
+# WHAT THIS PROVES: the Android toolchain path of this repository really works.
+# The dev identity config (apps/native/src-tauri/tauri.dev.conf.json) is resolved
+# by running scripts/release/release-context.mjs, the Android project the Tauri
+# CLI generates from it carries that identifier and version, a debug APK is built
+# from it, and the built APK/AAB really carry the resolved package name, the
+# resolved versionName and the expected native ABI - proven from the artifact
+# itself (aapt2 badging, the AAB protobuf manifest), never from the config it was
+# built from. Nothing here is hardcoded: the dev package identifier and the dev
+# version are whatever release-context.mjs resolves from that config, and every
+# assertion compares the built artifact against those resolved values.
+#
+# WHY IT EXISTS: the Android job of release-dev.yml has never executed
+# successfully, so this workflow is the cheap, non-tagging gate that exercises
+# the same toolchain (Tauri CLI 2.12.4, SDK/NDK, Rust android targets, aapt2)
+# on every pull request instead of discovering breakage during a release.
+#
+# WHAT THIS IS NOT: not a release, not a signed artifact, not a publishing
+# workflow. The only permission requested is contents: read - there is no
+# publishing job, no release action, no release CLI invocation and no repository
+# write of any kind. The APK/AAB only ever exist as short-lived run artifacts.
+#
+# STAGES: stage 1 (apk-smoke) is the default and always runs - one ABI, debug APK
+# only. Stage 2 (matrix-smoke) builds all four ABIs as debug APK and AAB and only
+# runs when a workflow_dispatch run sets full_matrix to true, so ordinary pull
+# request runs stay cheap.
+#
+# Every action is pinned to the 40-hex commit SHA recorded in
+# scripts/release/actions.lock.json. This workflow needed no NEW pin: it reuses
+# only actions that are already locked for the release path.
+on:
+  workflow_dispatch:
+    inputs:
+      full_matrix:
+        description: 'Stage 2 too: all four ABIs as debug APK and AAB (expensive; pull request runs stay on stage 1)'
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - '.github/workflows/android-smoke.yml'
+      - 'apps/native/**'
+      - 'crates/**'
+      - 'pnpm-lock.yaml'
+      # this workflow's own verification surface: the shared config resolver and
+      # the assertions the smoke steps run
+      - 'scripts/release/android-smoke.mjs'
+      - 'scripts/release/release-context.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAURI_CLI_VERSION: '2.12.4'
+
+jobs:
+  apk-smoke:
+    name: Stage 1 - aarch64 debug APK (dev identity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # release-context's "config" command refuses any identifier other than the
+      # dev identifier (assertDevConfig), so a resolved identifier is itself the
+      # proof that the dev identity is in force. Neither fact is hardcoded.
+      - name: Resolve the dev identity and the version from the dev tauri config
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- effective dev tauri config'
+          node scripts/release/release-context.mjs config
+          identifier=$(node scripts/release/release-context.mjs config --field identifier)
+          version=$(node scripts/release/release-context.mjs config --field version)
+          if [ -z "${identifier}" ]; then
+            echo "::error::the dev tauri config resolved no identifier" >&2
+            exit 1
+          fi
+          if [ -z "${version}" ]; then
+            echo "::error::the dev tauri config resolved no version" >&2
+            exit 1
+          fi
+          case "${identifier}" in
+            *.*) ;;
+            *)
+              echo "::error::resolved identifier '${identifier}' is not a reverse-DNS package name" >&2
+              exit 1
+              ;;
+          esac
+          echo "resolved identifier=${identifier} version=${version}"
+          echo "DEV_IDENTIFIER=${identifier}" >> "$GITHUB_ENV"
+          echo "DEV_VERSION=${version}" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10.34.3
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
+
+      # Tauri CLI 2.12.4 generates a Gradle project whose compileSdk is pinned by
+      # the CLI itself (SDK_VERSION = 37 in tauri-cli's src/mobile/android/mod.rs),
+      # so that platform is installed explicitly here rather than left to AGP's
+      # SDK auto-download in the middle of the build. No second NDK is needed: the
+      # CLI uses the newest NDK under $ANDROID_HOME/ndk, which is the pinned 27.
+      - name: Install the SDK platform the 2.12.4 Gradle template compiles against
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sdkmanager >/dev/null 2>&1 || {
+            echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
+            exit 1
+          }
+          sdkmanager --install 'platforms;android-37'
+          test -d "${ANDROID_HOME}/platforms/android-37" || {
+            echo "::error::platforms;android-37 is still missing under $ANDROID_HOME" >&2
+            exit 1
+          }
+          echo "android platforms:"
+          ls -1 "${ANDROID_HOME}/platforms"
+          echo "android ndk:"
+          ls -1 "${ANDROID_HOME}/ndk"
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/native/src-tauri
+          key: aarch64-linux-android
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Require the dev identity config
+        shell: bash
+        run: test -f apps/native/src-tauri/tauri.dev.conf.json
+
+      # The dev config must be in force for init as well as for build: init bakes
+      # the identifier and the version into the generated Gradle project.
+      - name: Initialize the Android project with the dev identity
+        working-directory: apps/native
+        run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android init --ci --config src-tauri/tauri.dev.conf.json
+
+      - name: Assert the generated Gradle project carries the dev identity
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase init --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      - name: Build the debug APK for aarch64
+        working-directory: apps/native
+        run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android build --debug --apk --target aarch64 --config src-tauri/tauri.dev.conf.json
+
+      - name: Assert the Gradle project recorded the resolved versionName
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase build --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      - name: Verify the APK with aapt2 dump badging
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "${SDK_DIR}" ]; then
+            echo "::error::ANDROID_HOME/ANDROID_SDK_ROOT is unset: android-actions/setup-android did not run" >&2
+            exit 1
+          fi
+          AAPT2=$(find "${SDK_DIR}/build-tools" -maxdepth 2 -type f -name aapt2 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "${AAPT2}" ] || [ ! -x "${AAPT2}" ]; then
+            echo "::error::aapt2 is not installed under ${SDK_DIR}/build-tools" >&2
+            exit 1
+          fi
+          echo "aapt2=${AAPT2}"
+          mapfile -t APKS < <(find apps/native/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | sort)
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one debug APK under app/build/outputs/apk, found ${#APKS[@]}" >&2
+            find apps/native/src-tauri/gen/android/app/build/outputs -type f | sort >&2 || true
+            exit 1
+          fi
+          APK="${APKS[0]}"
+          test -s "${APK}" || {
+            echo "::error::APK ${APK} is missing or empty" >&2
+            exit 1
+          }
+          echo "apk=${APK} size=$(stat -c%s "${APK}") bytes"
+          "${AAPT2}" dump badging "${APK}" > "${RUNNER_TEMP}/apk-badging.txt"
+          cat "${RUNNER_TEMP}/apk-badging.txt"
+          node scripts/release/android-smoke.mjs verify-apk --badging "${RUNNER_TEMP}/apk-badging.txt" --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION" --abi-token arm64
+          echo "SMOKE_APK=${APK}" >> "$GITHUB_ENV"
+
+      - name: Stage the APK under its artifact name and record its SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${SMOKE_APK:-}" || {
+            echo "::error::no verified APK to stage: the verification step set no SMOKE_APK" >&2
+            exit 1
+          }
+          name=$(node scripts/release/release-context.mjs artifact-name android-apk --version "${DEV_VERSION}" --abi arm64)
+          mkdir -p release-android-smoke
+          cp "${SMOKE_APK}" "release-android-smoke/${name}"
+          test -s "release-android-smoke/${name}"
+          ( cd release-android-smoke && sha256sum "${name}" > SHA256SUMS.txt )
+          echo "artifact=${name}"
+          cat release-android-smoke/SHA256SUMS.txt
+          ls -l release-android-smoke
+
+      - name: State the smoke result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Android smoke: stage 1 (aarch64 debug APK)"
+            echo ""
+            echo "| fact | value |"
+            echo "| --- | --- |"
+            echo "| identifier (resolved) | \`${DEV_IDENTIFIER}\` |"
+            echo "| version (resolved) | \`${DEV_VERSION}\` |"
+            echo "| lib | \`libtodo_native_lib.so\` for \`arm64-v8a\` |"
+            echo "| apk | \`$(basename "${SMOKE_APK}")\` |"
+            echo ""
+            echo "Unsigned debug artifact: not a release, not published, not signed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-smoke-apk-arm64
+          path: release-android-smoke/*
+          if-no-files-found: error
+          retention-days: 7
+
+  matrix-smoke:
+    name: Stage 2 - ${{ matrix.token }} debug APK + AAB (dispatch only)
+    # no point building four ABIs before stage 1 has proven the toolchain path
+    needs: apk-smoke
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.full_matrix == true || inputs.full_matrix == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # token is the release contract's ABI name (release-context ANDROID_TARGETS),
+        # cli_target is what `tauri android build --target` accepts, rust_target is
+        # the cargo target triple. All three must describe the same ABI.
+        include:
+          - token: arm
+            cli_target: armv7
+            rust_target: armv7-linux-androideabi
+          - token: arm64
+            cli_target: aarch64
+            rust_target: aarch64-linux-android
+          - token: x86
+            cli_target: i686
+            rust_target: i686-linux-android
+          - token: x86_64
+            cli_target: x86_64
+            rust_target: x86_64-linux-android
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Resolve the dev identity and the version from the dev tauri config
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- effective dev tauri config'
+          node scripts/release/release-context.mjs config
+          identifier=$(node scripts/release/release-context.mjs config --field identifier)
+          version=$(node scripts/release/release-context.mjs config --field version)
+          if [ -z "${identifier}" ]; then
+            echo "::error::the dev tauri config resolved no identifier" >&2
+            exit 1
+          fi
+          if [ -z "${version}" ]; then
+            echo "::error::the dev tauri config resolved no version" >&2
+            exit 1
+          fi
+          echo "resolved identifier=${identifier} version=${version}"
+          echo "DEV_IDENTIFIER=${identifier}" >> "$GITHUB_ENV"
+          echo "DEV_VERSION=${version}" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10.34.3
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
+
+      # same platform reason as stage 1: tauri-cli 2.12.4 compiles against SDK 37
+      - name: Install the SDK platform the 2.12.4 Gradle template compiles against
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sdkmanager >/dev/null 2>&1 || {
+            echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
+            exit 1
+          }
+          sdkmanager --install 'platforms;android-37'
+          test -d "${ANDROID_HOME}/platforms/android-37" || {
+            echo "::error::platforms;android-37 is still missing under $ANDROID_HOME" >&2
+            exit 1
+          }
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/native/src-tauri
+          key: ${{ matrix.rust_target }}
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Require the dev identity config
+        shell: bash
+        run: test -f apps/native/src-tauri/tauri.dev.conf.json
+
+      - name: Initialize the Android project with the dev identity
+        working-directory: apps/native
+        run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android init --ci --config src-tauri/tauri.dev.conf.json
+
+      - name: Assert the generated Gradle project carries the dev identity
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase init --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      # one ABI per matrix job, split per ABI so the artifact really is per-ABI
+      - name: Build the debug APK and AAB for ${{ matrix.token }}
+        working-directory: apps/native
+        run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android build --debug --apk --aab --split-per-abi --target ${{ matrix.cli_target }} --config src-tauri/tauri.dev.conf.json
+
+      - name: Assert the Gradle project recorded the resolved versionName
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase build --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      - name: Verify the APK and the AAB for ${{ matrix.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "${SDK_DIR}" ]; then
+            echo "::error::ANDROID_HOME/ANDROID_SDK_ROOT is unset: android-actions/setup-android did not run" >&2
+            exit 1
+          fi
+          AAPT2=$(find "${SDK_DIR}/build-tools" -maxdepth 2 -type f -name aapt2 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "${AAPT2}" ] || [ ! -x "${AAPT2}" ]; then
+            echo "::error::aapt2 is not installed under ${SDK_DIR}/build-tools" >&2
+            exit 1
+          fi
+          echo "aapt2=${AAPT2}"
+
+          mapfile -t APKS < <(find apps/native/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | sort)
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one split APK for ${{ matrix.token }}, found ${#APKS[@]}" >&2
+            find apps/native/src-tauri/gen/android/app/build/outputs -type f | sort >&2 || true
+            exit 1
+          fi
+          APK="${APKS[0]}"
+          test -s "${APK}" || {
+            echo "::error::APK ${APK} is missing or empty" >&2
+            exit 1
+          }
+          echo "apk=${APK} size=$(stat -c%s "${APK}") bytes"
+          "${AAPT2}" dump badging "${APK}" > "${RUNNER_TEMP}/apk-badging.txt"
+          cat "${RUNNER_TEMP}/apk-badging.txt"
+          node scripts/release/android-smoke.mjs verify-apk --badging "${RUNNER_TEMP}/apk-badging.txt" --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION" --abi-token ${{ matrix.token }}
+
+          mapfile -t AABS < <(find apps/native/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' | sort)
+          if [ "${#AABS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one AAB for ${{ matrix.token }}, found ${#AABS[@]}" >&2
+            find apps/native/src-tauri/gen/android/app/build/outputs -type f | sort >&2 || true
+            exit 1
+          fi
+          AAB="${AABS[0]}"
+          test -s "${AAB}" || {
+            echo "::error::AAB ${AAB} is missing or empty" >&2
+            exit 1
+          }
+          echo "aab=${AAB} size=$(stat -c%s "${AAB}") bytes"
+          # the AAB manifest is a protobuf: its string pool is what gets checked
+          unzip -l "${AAB}" > "${RUNNER_TEMP}/aab-entries.txt"
+          unzip -p "${AAB}" base/manifest/AndroidManifest.xml > "${RUNNER_TEMP}/aab-manifest.bin" || true
+          test -s "${RUNNER_TEMP}/aab-manifest.bin" || {
+            echo "::error::${AAB} carries no base/manifest/AndroidManifest.xml" >&2
+            exit 1
+          }
+          node scripts/release/android-smoke.mjs verify-aab --manifest "${RUNNER_TEMP}/aab-manifest.bin" --entries "${RUNNER_TEMP}/aab-entries.txt" --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION" --abi-token ${{ matrix.token }}
+
+          {
+            echo "SMOKE_APK=${APK}"
+            echo "SMOKE_AAB=${AAB}"
+          } >> "$GITHUB_ENV"
+
+      - name: Stage the APK and the AAB under their artifact names and record SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${SMOKE_APK:-}" || {
+            echo "::error::no verified APK to stage: the verification step set no SMOKE_APK" >&2
+            exit 1
+          }
+          test -s "${SMOKE_AAB:-}" || {
+            echo "::error::no verified AAB to stage: the verification step set no SMOKE_AAB" >&2
+            exit 1
+          }
+          apk_name=$(node scripts/release/release-context.mjs artifact-name android-apk --version "${DEV_VERSION}" --abi ${{ matrix.token }})
+          aab_name=$(node scripts/release/release-context.mjs artifact-name android-aab --version "${DEV_VERSION}" --abi ${{ matrix.token }})
+          mkdir -p release-android-smoke
+          cp "${SMOKE_APK}" "release-android-smoke/${apk_name}"
+          cp "${SMOKE_AAB}" "release-android-smoke/${aab_name}"
+          test -s "release-android-smoke/${apk_name}"
+          test -s "release-android-smoke/${aab_name}"
+          ( cd release-android-smoke && sha256sum "${apk_name}" "${aab_name}" > SHA256SUMS.txt )
+          echo "apk_artifact=${apk_name}"
+          echo "aab_artifact=${aab_name}"
+          cat release-android-smoke/SHA256SUMS.txt
+          ls -l release-android-smoke
+
+      - name: State the smoke result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Android smoke: stage 2 (${{ matrix.token }})"
+            echo ""
+            echo "| fact | value |"
+            echo "| --- | --- |"
+            echo "| identifier (resolved) | \`${DEV_IDENTIFIER}\` |"
+            echo "| version (resolved) | \`${DEV_VERSION}\` |"
+            echo "| abi token | \`${{ matrix.token }}\` |"
+            echo "| cli target | \`${{ matrix.cli_target }}\` |"
+            echo "| rust target | \`${{ matrix.rust_target }}\` |"
+            echo "| apk | \`$(basename "${SMOKE_APK}")\` |"
+            echo "| aab | \`$(basename "${SMOKE_AAB}")\` |"
+            echo ""
+            echo "Unsigned debug artifacts: not a release, not published, not signed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-smoke-${{ matrix.token }}
+          path: release-android-smoke/*
+          if-no-files-found: error
+          retention-days: 7
