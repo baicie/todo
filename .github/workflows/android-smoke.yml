@@ -129,9 +129,25 @@ jobs:
             echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
             exit 1
           }
-          sdkmanager --install 'platforms;android-37'
-          test -d "${ANDROID_HOME}/platforms/android-37" || {
-            echo "::error::platforms;android-37 is still missing under $ANDROID_HOME" >&2
+          # android-37 is not in the stable channel yet (the first CI run
+          # reported "Failed to find package 'platforms;android-37'"), so try
+          # the stable channel first and then the preview channels. Provisioning
+          # is best effort on purpose: if no channel carries it, AGP's own SDK
+          # auto-download still gets a chance and the build step is the gate
+          # that decides. A provisioning warning is never a passing build.
+          install_platform() {
+            sdkmanager --install 'platforms;android-37' "$@" >/dev/null 2>&1 || return 1
+            test -d "${ANDROID_HOME}/platforms/android-37"
+          }
+          if install_platform; then
+            echo "platforms;android-37 installed from the stable channel"
+          elif install_platform --channel=3; then
+            echo "platforms;android-37 installed from a preview channel"
+          else
+            echo "::warning::platforms;android-37 is unavailable from every channel; leaving it to the build step"
+          fi
+          test -d "${ANDROID_HOME}/platforms" || {
+            echo "::error::no Android platform is installed at all under $ANDROID_HOME" >&2
             exit 1
           }
           echo "android platforms:"
@@ -323,9 +339,25 @@ jobs:
             echo "::error::sdkmanager is not on PATH: android-actions/setup-android did not run" >&2
             exit 1
           }
-          sdkmanager --install 'platforms;android-37'
-          test -d "${ANDROID_HOME}/platforms/android-37" || {
-            echo "::error::platforms;android-37 is still missing under $ANDROID_HOME" >&2
+          # android-37 is not in the stable channel yet (the first CI run
+          # reported "Failed to find package 'platforms;android-37'"), so try
+          # the stable channel first and then the preview channels. Provisioning
+          # is best effort on purpose: if no channel carries it, AGP's own SDK
+          # auto-download still gets a chance and the build step is the gate
+          # that decides. A provisioning warning is never a passing build.
+          install_platform() {
+            sdkmanager --install 'platforms;android-37' "$@" >/dev/null 2>&1 || return 1
+            test -d "${ANDROID_HOME}/platforms/android-37"
+          }
+          if install_platform; then
+            echo "platforms;android-37 installed from the stable channel"
+          elif install_platform --channel=3; then
+            echo "platforms;android-37 installed from a preview channel"
+          else
+            echo "::warning::platforms;android-37 is unavailable from every channel; leaving it to the build step"
+          fi
+          test -d "${ANDROID_HOME}/platforms" || {
+            echo "::error::no Android platform is installed at all under $ANDROID_HOME" >&2
             exit 1
           }
 
