@@ -96,8 +96,14 @@ try {
     Pop-Location
   }
 
-  if ([string]::IsNullOrWhiteSpace($Installer)) {
+  # Auto-discovery only makes sense when an install is actually requested: the
+  # bundle directory also holds Dev and Stable installers, and picking the
+  # newest one would refuse a run that never needed an installer at all (for
+  # example -DiscoverOnly). An explicitly passed -Installer is still validated
+  # below, so a caller cannot slip a non-QA package past the gate.
+  if ([string]::IsNullOrWhiteSpace($Installer) -and $Install) {
     $found = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "apps\native\src-tauri\target\release\bundle\nsis") -Filter "*.exe" -ErrorAction SilentlyContinue |
+      Where-Object { $_.VersionInfo.ProductName -eq "Shishi QA RC2D" } |
       Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($found) { $Installer = $found.FullName }
   }

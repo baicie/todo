@@ -13,6 +13,7 @@ use todo_native_accounts::{
 use todo_native_core::{CloudInitializeRequest, StoreError, TodoStore};
 
 use crate::{
+    build_identity,
     db::{AppState, GateError},
     lifecycle::{self, DesktopSettings, LifecycleState},
     reminders::ReminderAdapter,
@@ -61,6 +62,8 @@ impl CommandError {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaBuildIdentity {
+    pub channel: String,
+    pub is_dev: bool,
     pub is_qa: bool,
     pub identifier: String,
     pub data_root: String,
@@ -71,21 +74,31 @@ pub struct QaBuildIdentity {
 /// A read-only identity probe used by the QA harness before any destructive
 /// fixture. A production build returns `isQa: false`; the harness must abort.
 /// This command cannot arm faults, change credentials or write data.
+///
+/// The channel comes from the runtime identifier. An identifier that matches no
+/// channel is rejected instead of being reported as Stable, so a mispackaged
+/// build can never be mistaken for one that may touch Stable credentials.
 #[tauri::command]
-pub fn qa_build_identity(app: AppHandle) -> QaBuildIdentity {
+pub fn qa_build_identity(app: AppHandle) -> Result<QaBuildIdentity, CommandError> {
     let identifier = app.config().identifier.clone();
+    let channel = build_identity::resolve(&identifier)
+        .map_err(|error| CommandError::new("BUILD_IDENTITY_UNKNOWN", error.to_string()))?;
     let data_root = app
         .path()
         .app_data_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    QaBuildIdentity {
-        is_qa: identifier == "app.shishi.todo.qa",
+    let credential_service = secure_tokens::service_name(&app)
+        .map_err(|error| CommandError::new("CREDENTIAL_NAMESPACE_UNAVAILABLE", error))?;
+    Ok(QaBuildIdentity {
+        channel: channel.as_str().to_owned(),
+        is_dev: channel.is_dev(),
+        is_qa: channel.is_qa(),
         identifier,
         data_root,
-        credential_service: secure_tokens::service_name().to_owned(),
+        credential_service: credential_service.to_owned(),
         fault_injection_enabled: cfg!(feature = "native-qa"),
-    }
+    })
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {

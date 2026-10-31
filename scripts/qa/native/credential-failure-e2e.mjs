@@ -18,7 +18,21 @@ let appExe = path.resolve(arg('app-exe'));
 const artifactRoot = path.resolve(arg('artifact-root'));
 const cdpPort = Number(arg('cdp-port', false) ?? 9349);
 const resultPath = path.join(artifactRoot, 'credential-failure.json');
-const evidencePath = path.join(artifactRoot, 'credential-fault-evidence.jsonl');
+// The native QA evidence writer only accepts an approved QA location, and the
+// app is spawned with its install directory as the working directory, so the
+// evidence file must live inside the QA application data root. This matches
+// run-windows.ps1, which also points evidencePath at the QA root. The script's
+// own artifacts (result, fault config) stay under --artifact-root.
+const qaEvidenceRoot = process.env.APPDATA
+  ? path.join(process.env.APPDATA, 'app.shishi.todo.qa', 'evidence')
+  : null;
+if (!qaEvidenceRoot) {
+  throw new Error(
+    'APPDATA is required: QA evidence must be written inside the QA application data root',
+  );
+}
+fs.mkdirSync(qaEvidenceRoot, { recursive: true });
+const evidencePath = path.join(qaEvidenceRoot, 'credential-fault-evidence.jsonl');
 const configPath = path.join(artifactRoot, 'credential-fault-config.json');
 const startedAt = new Date();
 const timeline = [];

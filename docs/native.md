@@ -89,6 +89,33 @@ cargo clippy -p todo-native --all-targets -- -D warnings
 cargo test --lib   # [profile.test] debug=0 规避 Windows PDB LNK1318
 ```
 
+### 构建身份：Stable / Dev / QA
+
+构建身份由 Tauri `identifier` 决定，并**逐层**推导出数据根、SQLite、Credential namespace、
+Windows AUMID、单实例标识、托盘/自启标识与安装程序身份。仅修改窗口标题或安装包文件名
+不构成隔离。
+
+| 通道   | 配置文件                                  | identifier            | Credential service                     | 数据根（Windows）               |
+| ------ | ----------------------------------------- | --------------------- | -------------------------------------- | ------------------------------- |
+| Stable | `tauri.conf.json`                         | `app.shishi.todo`     | `app.shishi.todo.secure-token`         | `%APPDATA%\app.shishi.todo`     |
+| Dev    | `tauri.conf.json` + `tauri.dev.conf.json` | `app.shishi.todo.dev` | `app.shishi.todo.dev.secure-token`     | `%APPDATA%\app.shishi.todo.dev` |
+| QA     | `tauri.conf.json` + `tauri.qa.conf.json`  | `app.shishi.todo.qa`  | `app.shishi.todo.rc2d-qa.secure-token` | `%APPDATA%\app.shishi.todo.qa`  |
+
+- Dev/QA 用 `--config` 做**深层合并**，不修改正式配置文件：
+  `cargo tauri build --config src-tauri/tauri.dev.conf.json`。
+- Credential service 由运行时 identifier 派生（`build_identity::resolve`），不再由 cargo feature
+  选择。**无法识别的 identifier 直接报错**，不会回退到任何命名空间——打包写错 identifier 的产物
+  无法读写其它通道的凭据。
+- `native-qa` feature 只保留“故障注入 + 可注入 credential backend”，与通道隔离正交：Dev 构建
+  **不**启用它，且必须是功能完整的正式产品形态。QA 构建启动时仍强制校验 identifier 为
+  `app.shishi.todo.qa`，否则拒绝 arm 注入并启动失败。
+- 运行时自检：`qa_build_identity` 命令返回 `channel` / `isDev` / `isQa` / `identifier` /
+  `dataRoot` / `credentialService` / `faultInjectionEnabled`，用于安装包验收时核对身份。
+- **已有 `0.0.1-dev.0` 兼容性**：该预发布使用 Stable 身份构建，其数据留在 Stable 数据根与
+  Stable 凭据命名空间。Dev 构建**不会**自动读取或迁移这些数据；需要时按
+  `docs/acceptance/v1.0-rc2d.11-native-reliability-and-distribution.md` 的手动步骤（关闭应用后
+  复制文件）显式迁移，旧数据原样保留、可撤销。
+
 ### 图标
 
 `icons/` 已包含 `32x32.png`、`64x64.png`、`128x128.png`、`128x128@2x.png`、`icon-512.png`、`icon.png`、`icon.ico`。`tauri.conf.json` 只引用这些实际存在的文件。需要重新生成时：
@@ -167,7 +194,7 @@ Action 集合定义在 `crates/native-core/src/dispatch.rs`，与需求一致：
 
 ### Secure token 命令
 
-注册了 `secure_token_get(key)`、`secure_token_set(key,value)`、`secure_token_remove(key)`。桌面通过 `keyring` crate 使用 Windows Credential Manager / macOS Keychain / Linux Secret Service，服务名为 `app.shishi.todo.secure-token`。Linux 构建需要可用的 Secret Service/DBus 运行环境；无桌面密钥环时应明确报错而不是降级明文。
+注册了 `secure_token_get(key)`、`secure_token_set(key,value)`、`secure_token_remove(key)`。桌面通过 `keyring` crate 使用 Windows Credential Manager / macOS Keychain / Linux Secret Service，服务名由运行时 identifier 派生（Stable `app.shishi.todo.secure-token`、Dev `app.shishi.todo.dev.secure-token`、QA `app.shishi.todo.rc2d-qa.secure-token`；见第 3 节“构建身份”）。无法识别的 identifier 会明确报错，不会回退到任何命名空间。Linux 构建需要可用的 Secret Service/DBus 运行环境；无桌面密钥环时应明确报错而不是降级明文。
 
 移动端通过同一个本地 Tauri 插件的 `secureTokenGet`、`secureTokenSet`、`secureTokenRemove` 命令写入系统安全存储，不暴露给 WebView：
 

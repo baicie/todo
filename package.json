@@ -1,6 +1,6 @@
 {
   "name": "todo-local-first",
-  "version": "0.0.1-dev.0",
+  "version": "0.0.1-dev.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.3",
@@ -12,6 +12,7 @@
     "build": "pnpm --filter @todo/app build",
     "preview": "pnpm --filter @todo/app preview",
     "test": "pnpm -r --if-present test",
+    "test:release": "node --test tests/release/*.test.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm rust:test",
     "test:e2e:install": "pnpm --dir tests/e2e install && pnpm --dir tests/e2e exec playwright install chromium",

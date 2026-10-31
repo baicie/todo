@@ -33,6 +33,7 @@ import {
   type TaskPatch,
   type TaskWithSteps,
 } from '@todo/domain';
+import type { DetailRenderReport } from '../lib/task-navigation';
 
 interface DetailPanelProps {
   task: TaskWithSteps;
@@ -49,6 +50,10 @@ interface DetailPanelProps {
   onDeleteStep: (id: string) => Promise<void>;
   onPlan: (planned: boolean) => Promise<void>;
   onReorder: (direction: 'up' | 'down') => Promise<void>;
+  /** Generation of the navigator commit that owns this selection; 0 when none. */
+  navigationGeneration?: number;
+  /** Reports what this panel committed to its rendered output; null once it is torn down. */
+  onRenderedDetail?: (report: DetailRenderReport | null) => void;
 }
 
 export function DetailPanel(props: DetailPanelProps) {
@@ -66,6 +71,45 @@ export function DetailPanel(props: DetailPanelProps) {
     element.style.height = 'auto';
     element.style.height = `${element.scrollHeight}px`;
   };
+
+  /**
+   * Confirmation contract: the detail component is the only party that may
+   * confirm a notification navigation. It reports from its own lifecycle and
+   * always reports its own `props.task.id`, so an App-side selection change can
+   * never stand in for a rendered task.
+   *
+   * "Rendered" means this component committed the task into its output. Whether
+   * that output is visible is a separate question: occlusion by a modal, a
+   * backdrop or the mobile layout is explicitly out of scope for the ACK and is
+   * covered by the Playwright visibility assertion instead. No selector, no
+   * timer and no polling live here.
+   */
+  let detached = false;
+  const reportRender = (report: DetailRenderReport | null) => {
+    // A torn-down panel may still have a queued effect or microtask behind it;
+    // the null report is the last thing it is allowed to emit.
+    if (detached && report) return;
+    props.onRenderedDetail?.(report);
+  };
+  const renderedReport = (): DetailRenderReport => ({
+    taskId: props.task.id,
+    generation: props.navigationGeneration ?? 0,
+  });
+
+  onMount(() => reportRender(renderedReport()));
+
+  createEffect(
+    on(
+      () => [props.task.id, props.navigationGeneration] as const,
+      () => reportRender(renderedReport()),
+      { defer: true },
+    ),
+  );
+
+  onCleanup(() => {
+    detached = true;
+    reportRender(null);
+  });
 
   createEffect(
     on(

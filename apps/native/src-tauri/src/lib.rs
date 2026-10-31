@@ -1,3 +1,4 @@
+mod build_identity;
 mod commands;
 mod db;
 #[cfg(desktop)]

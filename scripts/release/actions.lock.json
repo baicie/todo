@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Every third-party action used by the dev release path, pinned to a full 40-character commit SHA. release-dev.yml, release-acceptance.yml, release-desktop.yml and release-web.yml must use exactly these SHAs; tests/release/release-context.test.mjs fails if any action in the release path is not pinned.",
+  "resolvedAt": "2026-10-30",
+  "resolvedWith": "gh api repos/<owner>/<repo>/git/matching-refs/tags/<major> to find the newest patch tag, then gh api repos/<owner>/<repo>/git/tags/<sha> to dereference annotated tags to their commit; dtolnay/rust-toolchain is a branch, resolved with gh api repos/dtolnay/rust-toolchain/commits/stable",
+  "actions": [
+    {
+      "action": "actions/checkout",
+      "tag": "v4.4.0",
+      "sha": "11d5960a326750d5838078e36cf38b85af677262",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "actions/setup-node",
+      "tag": "v4.4.0",
+      "sha": "49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "actions/upload-artifact",
+      "tag": "v4.6.2",
+      "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "actions/download-artifact",
+      "tag": "v4.3.0",
+      "sha": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "actions/setup-java",
+      "tag": "v4.9.1",
+      "sha": "cf277c60eb25467037889841efdb72551f06f6c3",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "pnpm/action-setup",
+      "tag": "v4.4.0",
+      "sha": "fc06bc1257f339d1d5d8b3a19a8cae5388b55320",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "dtolnay/rust-toolchain",
+      "tag": "stable",
+      "sha": "b725eda525362e7cf34af9a7243cac1e3f01a7ec",
+      "resolvedAt": "2026-10-30",
+      "note": "branch ref, not a tag; pin resolves to the stable branch head at resolution time"
+    },
+    {
+      "action": "Swatinem/rust-cache",
+      "tag": "v2.9.3",
+      "sha": "d1527c8f67ef9af357290475d4af4b0fab8f12e0",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "android-actions/setup-android",
+      "tag": "v3.2.2",
+      "sha": "9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407",
+      "resolvedAt": "2026-10-30"
+    },
+    {
+      "action": "softprops/action-gh-release",
+      "tag": "v2.6.2",
+      "sha": "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+      "resolvedAt": "2026-10-30"
+    }
+  ]
+}

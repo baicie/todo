@@ -26,9 +26,11 @@
   CLI、Web 云同步双设备 E2E、多账号本地隔离、Web Push 后端、共享清单 API、Web 虚拟滚动与
   10k/100k 性能基准、Playwright 回归与 axe 零违规、桌面/Web 发布工作流。
 - **平台/范围边界**：共享清单 Web 端是在线协作 v1（15 秒轮询、revision 冲突保护），尚未
-  接入 native 本地共享 outbox；多账号切换目前只在 Web 端启用独立 IndexedDB，Tauri 仍使用
-  单一 SQLite 数据空间。真实 Android/iOS 构建需在对应环境初始化并签名；本机没有
-  Android SDK/NDK/adb 和 macOS/Xcode。
+  接入 native 本地共享 outbox。多账号隔离两端都已落地：Web 端每账号独立 IndexedDB，Tauri 端
+  每账号独立 SQLite（`accounts/<accountId>/shishi.sqlite3`，切换走原子 switch journal），且
+  Dev / Stable / QA 三种构建身份各自拥有独立标识、数据根与 Credential namespace
+  （见 [docs/native.md](docs/native.md#构建身份stabledev--qa)）。真实 Android/iOS 构建需在对应
+  环境初始化并签名；本机没有 Android SDK/NDK/adb 和 macOS/Xcode。
 - **外部服务边界**：未使用真实 SMTP 凭据发信；生产发信前应做一次人工验证。未申请公网
   Caddy 证书；证书、备份异地复制和密钥托管由部署侧完成。
 
