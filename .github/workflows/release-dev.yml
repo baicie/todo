@@ -68,9 +68,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Existing dev tag to publish, e.g. 0.0.1-dev.0'
+        description: 'Existing dev tag to publish; the tag must already exist, e.g. 0.0.1-dev.1'
         required: true
-        default: '0.0.1-dev.0'
+        default: '0.0.1-dev.1'
         type: string
       allow_foreign_workflow:
         description: 'Acknowledge publishing with workflow logic from a commit other than the release tag commit (refused by default)'
