@@ -130,7 +130,7 @@ function isConfigObject(value) {
 }
 
 /**
- * RFC 7386 JSON Merge Patch, one layer: objects merge recursively, a `null` in
+ * RFC 7396 JSON Merge Patch, one layer: objects merge recursively, a `null` in
  * the patch deletes the key, arrays and scalars replace wholesale. This is the
  * merge Tauri performs when several config files are combined, so it — not a
  * top-level spread — is the model of the effective config.
@@ -157,7 +157,7 @@ export function mergeTauriConfig(...configs) {
 
 /**
  * Effective app config: the base config folded with the dev override and any
- * further configs in order, using the RFC 7386 merge `tauri build` performs — so
+ * further configs in order, using the RFC 7396 merge `tauri build` performs — so
  * a nested object the overrides do not mention (bundle.targets, bundle.macOS,
  * app.security, ...) survives instead of being replaced by the last config.
  */
