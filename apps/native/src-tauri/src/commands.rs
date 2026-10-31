@@ -59,6 +59,23 @@ impl CommandError {
     }
 }
 
+/// Compile-time marker embedded by `build.rs`: `QA_BUILD_COMMIT:<sha>`.
+///
+/// The QA harness target probe (scripts/qa/native/run-windows.ps1) reads this
+/// string back out of the executable bytes, so the value below and the value in
+/// the file cannot drift apart. Trust boundary: a metadata file next to the
+/// artifact can be edited, this string cannot - rewriting it changes the
+/// executable sha256 that the provenance records alongside it.
+const QA_BUILD_COMMIT_MARKER: &str = concat!("QA_BUILD_COMMIT:", env!("QA_BUILD_COMMIT"));
+const QA_BUILD_COMMIT_MARKER_PREFIX: &str = "QA_BUILD_COMMIT:";
+
+/// The commit part of the marker, reported over IPC by `qa_build_identity`.
+fn qa_build_commit() -> &'static str {
+    QA_BUILD_COMMIT_MARKER
+        .strip_prefix(QA_BUILD_COMMIT_MARKER_PREFIX)
+        .unwrap_or(QA_BUILD_COMMIT_MARKER)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaBuildIdentity {
@@ -69,6 +86,9 @@ pub struct QaBuildIdentity {
     pub data_root: String,
     pub credential_service: String,
     pub fault_injection_enabled: bool,
+    /// Git commit this binary was built from; `unknown` when the build could
+    /// not determine one.
+    pub build_commit: String,
 }
 
 /// A read-only identity probe used by the QA harness before any destructive
@@ -98,6 +118,7 @@ pub fn qa_build_identity(app: AppHandle) -> Result<QaBuildIdentity, CommandError
         data_root,
         credential_service: credential_service.to_owned(),
         fault_injection_enabled: cfg!(feature = "native-qa"),
+        build_commit: qa_build_commit().to_owned(),
     })
 }
 

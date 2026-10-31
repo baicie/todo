@@ -41,7 +41,18 @@
  *      unless -AllowStaleTarget was passed deliberately. Discovery can never
  *      trip this rule by construction (it selects the newest build), which is
  *      exactly the guarantee the old preference order did not have.
- *   4. Provenance: the decision always carries git commit/branch, the binary
+ *   4. Commit binding (every selection mode): the QA build embeds the git
+ *      commit it was built from as a compile-time string (build.rs, reported by
+ *      the qa_build_identity command); the probe reads that marker back out of
+ *      the executable bytes. With -ExpectedCommit the selected binary must
+ *      report that commit or the run fails closed with COMMIT_MISMATCH naming
+ *      both values. -AllowCommitMismatch is for historical-package testing and
+ *      is recorded as a deliberate different-commit run. A binary with no
+ *      embedded marker may carry a sidecar <exe>.qa-build.json instead; that
+ *      mechanism is labelled weaker, because a file beside the binary can be
+ *      edited. A missing commit source degrades to unknown with a NOT_RUN note:
+ *      never a crash, never a silent match.
+ *   5. Provenance: the decision always carries git commit/branch, the binary
  *      path, sha256, ProductVersion and ProductName, the installer path and
  *      sha256 when one is used, and whether the target was explicit or
  *      discovered. run-windows.ps1 copies those into environment.json,
@@ -59,7 +70,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const POLICY_VERSION = 'harness-target/v1';
+// v2 adds the commit binding gate: a decision now records whether the selected
+// binary was built from the commit the run claims to validate.
+export const POLICY_VERSION = 'harness-target/v2';
 export const QA_PRODUCT_NAME = 'Shishi QA RC2D';
 export const QA_IDENTIFIER = 'app.shishi.todo.qa';
 export const QA_DATA_ROOT_DIRNAME = 'app.shishi.todo.qa';
@@ -84,6 +97,43 @@ export const SELECTION_MODES = Object.freeze({
 
 export const PHASES = Object.freeze({ PLAN: 'plan', RESOLVE: 'resolve' });
 
+/**
+ * The QA build embeds its git commit as one compile-time string literal,
+ * `QA_BUILD_COMMIT:<sha>` (apps/native/src-tauri/build.rs -> commands.rs), so
+ * the harness can read it straight out of the executable bytes. Shared with
+ * run-windows.ps1 and asserted against build.rs/commands.rs by the tests.
+ */
+export const BUILD_COMMIT_MARKER = 'QA_BUILD_COMMIT:';
+
+/** How the binary's reported commit was obtained, weakest last. */
+export const COMMIT_SOURCES = Object.freeze({
+  EMBEDDED: 'embedded',
+  SIDECAR: 'sidecar',
+  UNKNOWN: 'unknown',
+});
+
+export const COMMIT_STATUS = Object.freeze({
+  MATCH: 'MATCH',
+  MISMATCH: 'MISMATCH',
+  MISMATCH_ALLOWED: 'MISMATCH_ALLOWED',
+  NOT_REQUESTED: 'NOT_REQUESTED',
+  NOT_RUN: 'NOT_RUN',
+});
+
+const COMMIT_TRUST = Object.freeze({
+  embedded: 'embedded-in-binary',
+  sidecar: 'sidecar-file-weaker',
+  unknown: 'unknown',
+});
+
+const COMMIT_TRUST_NOTES = Object.freeze({
+  embedded:
+    'embedded at compile time: the commit is part of the executable, so it cannot change without changing the sha256 this provenance records',
+  sidecar:
+    'read from the .qa-build.json sidecar file next to the executable; a file beside the binary can be edited, so this is weaker evidence than an embedded commit',
+  unknown: 'no embedded marker and no sidecar file were found for this binary',
+});
+
 export const ERROR_CODES = Object.freeze({
   PROBE_INVALID: 'PROBE_INVALID',
   QA_ROOT_INVALID: 'QA_ROOT_INVALID',
@@ -102,6 +152,8 @@ export const ERROR_CODES = Object.freeze({
   INSTALLED_EXE_NOT_FOUND: 'INSTALLED_EXE_NOT_FOUND',
   INSTALLED_EXE_AMBIGUOUS: 'INSTALLED_EXE_AMBIGUOUS',
   STALE_TARGET: 'STALE_TARGET',
+  COMMIT_MISMATCH: 'COMMIT_MISMATCH',
+  EXPECTED_COMMIT_INVALID: 'EXPECTED_COMMIT_INVALID',
 });
 
 export class HarnessTargetError extends Error {
@@ -119,6 +171,13 @@ function sha256OrNull(value) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase();
   return isSha256(normalized) ? normalized : null;
+}
+
+/** A git commit as a build reports it: 7-40 hex characters, lowercased. */
+function commitOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return /^[0-9a-f]{7,40}$/.test(normalized) ? normalized : null;
 }
 
 function pathKey(value) {
@@ -147,6 +206,8 @@ function describeCandidate(candidate) {
     'product=' +
       (candidate.productName === null ? 'unknown' : JSON.stringify(candidate.productName)),
     'sha256=' + (candidate.sha256 || 'unknown'),
+    'buildCommit=' + (candidate.buildCommit || 'unknown'),
+    'buildCommitSource=' + (candidate.buildCommitSource || COMMIT_SOURCES.UNKNOWN),
   ];
   return parts.join(' ');
 }
@@ -167,6 +228,14 @@ function normalizeCandidate(raw, kind) {
   if (!path) throw new HarnessTargetError(kind + ' candidate has no path');
   const mtimeMs =
     typeof raw.mtimeMs === 'number' && Number.isFinite(raw.mtimeMs) ? raw.mtimeMs : null;
+  const buildCommit = commitOrNull(raw.buildCommit);
+  const declaredSource =
+    typeof raw.buildCommitSource === 'string' ? raw.buildCommitSource.trim().toLowerCase() : '';
+  const buildCommitSource =
+    buildCommit &&
+    (declaredSource === COMMIT_SOURCES.EMBEDDED || declaredSource === COMMIT_SOURCES.SIDECAR)
+      ? declaredSource
+      : COMMIT_SOURCES.UNKNOWN;
   return {
     kind,
     path,
@@ -177,6 +246,8 @@ function normalizeCandidate(raw, kind) {
     sha256: sha256OrNull(raw.sha256),
     mtimeMs,
     sizeBytes: Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : null,
+    buildCommit,
+    buildCommitSource,
   };
 }
 
@@ -199,6 +270,9 @@ function normalizeFlags(raw) {
     installer: text(flags.installer),
     expectedSha256: text(flags.expectedSha256),
     expectedVersion: text(flags.expectedVersion),
+    expectedCommitRaw: text(flags.expectedCommit),
+    expectedCommit: commitOrNull(flags.expectedCommit),
+    allowCommitMismatch: flags.allowCommitMismatch === true,
     expectedInstallerSha256: text(flags.expectedInstallerSha256),
   };
 }
@@ -413,6 +487,93 @@ function checkExpected(candidate, flags) {
   return null;
 }
 
+/**
+ * Commit binding for the selected binary. A build without any commit source is
+ * neither a match nor a failure: it is NOT_RUN and recorded as unknown, so the
+ * provenance never claims the source commit was proven when it was not.
+ */
+function evaluateCommit(target, flags) {
+  const source = target ? target.buildCommitSource : COMMIT_SOURCES.UNKNOWN;
+  const result = {
+    reported: target ? target.buildCommit : null,
+    source,
+    trust: COMMIT_TRUST[source] || COMMIT_TRUST.unknown,
+    trustNote: COMMIT_TRUST_NOTES[source] || COMMIT_TRUST_NOTES.unknown,
+    expected: flags.expectedCommit,
+    matched: null,
+    status: COMMIT_STATUS.NOT_RUN,
+    mismatchAllowed: false,
+    warning: null,
+    message: null,
+  };
+  const sidecarWarning =
+    source === COMMIT_SOURCES.SIDECAR
+      ? 'build commit for ' +
+        target.path +
+        ' came from the sidecar file ' +
+        target.path +
+        '.qa-build.json; a file beside the binary can be edited, so this is weaker evidence than an embedded commit'
+      : null;
+  if (!result.reported) {
+    if (flags.expectedCommit) {
+      result.warning =
+        'binary build commit is unknown (no embedded ' +
+        BUILD_COMMIT_MARKER +
+        '<sha> marker and no .qa-build.json sidecar for ' +
+        (target ? target.path : 'the selected binary') +
+        '): commit equality against expected ' +
+        flags.expectedCommit +
+        ' is NOT_RUN, not a match';
+    }
+    return result;
+  }
+  if (!flags.expectedCommit) {
+    result.status = COMMIT_STATUS.NOT_REQUESTED;
+    result.warning = sidecarWarning;
+    return result;
+  }
+  // Abbreviated shas (>=7 hex) are accepted, so equality is a prefix match.
+  result.matched = result.reported.startsWith(flags.expectedCommit);
+  if (result.matched) {
+    result.status = COMMIT_STATUS.MATCH;
+    result.warning = sidecarWarning;
+    return result;
+  }
+  if (flags.allowCommitMismatch) {
+    result.status = COMMIT_STATUS.MISMATCH_ALLOWED;
+    result.mismatchAllowed = true;
+    result.warning =
+      'validated a different commit deliberately: -AllowCommitMismatch was passed with expected ' +
+      flags.expectedCommit +
+      ' but ' +
+      target.path +
+      ' reports ' +
+      result.reported +
+      ' (source ' +
+      result.source +
+      ')';
+    return result;
+  }
+  result.status = COMMIT_STATUS.MISMATCH;
+  result.message =
+    'binary build commit mismatch: expected ' +
+    flags.expectedCommit +
+    ' (the commit this run validates) but ' +
+    target.path +
+    ' reports ' +
+    result.reported +
+    ' (obtained from ' +
+    result.source +
+    ' build metadata).\n' +
+    'The binary was not built from the commit this run claims to validate, so it cannot prove the new code works.\n' +
+    'Rebuild the QA binary from ' +
+    flags.expectedCommit +
+    ', or pass -AllowCommitMismatch to validate a historical package deliberately.\n' +
+    'selected: ' +
+    describeCandidate(target);
+  return result;
+}
+
 function findTie(sorted, distinct) {
   const newest = sorted[0];
   return (
@@ -580,6 +741,7 @@ function buildProvenance(context) {
   const flags = context.flags;
   const target = context.target;
   const installer = context.installer;
+  const commit = context.commit;
   return {
     policyVersion: POLICY_VERSION,
     gitCommit: context.git.commit,
@@ -599,6 +761,16 @@ function buildProvenance(context) {
     installerProductVersion: installer ? installer.productVersion : null,
     expectedSha256: flags.expectedSha256 ? flags.expectedSha256.toLowerCase() : null,
     expectedVersion: flags.expectedVersion || null,
+    // Commit binding: what the binary reports, how that was obtained, what the
+    // run demanded, and whether a difference was deliberate.
+    buildCommit: commit.reported,
+    buildCommitSource: commit.source,
+    buildCommitTrust: commit.trust,
+    buildCommitTrustNote: commit.trustNote,
+    expectedCommit: commit.expected,
+    commitMatched: commit.matched,
+    commitStatus: commit.status,
+    commitMismatchAllowed: commit.mismatchAllowed,
     allowStaleTarget: flags.allowStaleTarget,
   };
 }
@@ -634,6 +806,16 @@ export function resolveHarnessTarget(rawProbe) {
   }
   if (qa.productionDataRoot && pathKey(qa.productionDataRoot) === pathKey(qa.dataRoot)) {
     return refuse(ERROR_CODES.QA_ROOT_INVALID, 'QA and production data roots are not isolated');
+  }
+
+  if (flags.expectedCommitRaw && !flags.expectedCommit) {
+    return refuse(
+      ERROR_CODES.EXPECTED_COMMIT_INVALID,
+      '-ExpectedCommit must be a git commit sha (7-40 hex characters) but is "' +
+        flags.expectedCommitRaw +
+        '"; refusing to ignore a commit expectation that cannot be checked',
+      { git },
+    );
   }
 
   const installerResult = resolveInstaller({ flags, candidates: probe.installerCandidates });
@@ -672,6 +854,9 @@ export function resolveHarnessTarget(rawProbe) {
   }
 
   if (targetResult.pending) {
+    // No binary exists yet in the plan phase, so the commit verdict is NOT_RUN
+    // until the resolve phase probes the installed executable.
+    const pendingCommit = evaluateCommit(null, flags);
     return Object.assign({}, baseDecision(), {
       ok: true,
       errorCode: null,
@@ -684,6 +869,13 @@ export function resolveHarnessTarget(rawProbe) {
       installer: installerResult.installer ? installerResult.installer.path : null,
       installerSha256: installerResult.installer ? installerResult.installer.sha256 : null,
       requireInstall: true,
+      buildCommit: pendingCommit.reported,
+      buildCommitSource: pendingCommit.source,
+      buildCommitTrust: pendingCommit.trust,
+      expectedCommit: pendingCommit.expected,
+      commitMatched: pendingCommit.matched,
+      commitStatus: pendingCommit.status,
+      commitMismatchAllowed: pendingCommit.mismatchAllowed,
       qa,
       git,
       warnings,
@@ -693,11 +885,26 @@ export function resolveHarnessTarget(rawProbe) {
         installer: installerResult.installer,
         selection: SELECTION_MODES.INSTALLED,
         git,
+        commit: pendingCommit,
       }),
     });
   }
 
   const target = targetResult.target;
+  const commit = evaluateCommit(target, flags);
+  if (commit.status === COMMIT_STATUS.MISMATCH) {
+    return refuse(ERROR_CODES.COMMIT_MISMATCH, commit.message, {
+      selection: targetResult.selection,
+      installer: installerResult.installer,
+      candidates: probe.appCandidates.slice().sort(byNewest),
+      git,
+      expectedCommit: commit.expected,
+      buildCommit: commit.reported,
+      buildCommitSource: commit.source,
+    });
+  }
+  if (commit.warning) warnings.push(commit.warning);
+
   const freshness = checkFreshness({ flags, target, candidates: probe.appCandidates });
   if (freshness.stale) {
     return refuse(
@@ -755,6 +962,13 @@ export function resolveHarnessTarget(rawProbe) {
     appExeProductVersion: target.productVersion,
     appExeMtime: formatTime(target.mtimeMs),
     appExeSource: target.source,
+    buildCommit: commit.reported,
+    buildCommitSource: commit.source,
+    buildCommitTrust: commit.trust,
+    expectedCommit: commit.expected,
+    commitMatched: commit.matched,
+    commitStatus: commit.status,
+    commitMismatchAllowed: commit.mismatchAllowed,
     installer: installerResult.installer ? installerResult.installer.path : null,
     installerSha256: installerResult.installer ? installerResult.installer.sha256 : null,
     installerProductVersion: installerResult.installer
@@ -774,6 +988,7 @@ export function resolveHarnessTarget(rawProbe) {
       installer: installerResult.installer,
       selection: targetResult.selection,
       git,
+      commit,
     }),
   });
 }

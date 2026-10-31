@@ -4,6 +4,9 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  BUILD_COMMIT_MARKER,
+  COMMIT_SOURCES,
+  COMMIT_STATUS,
   ERROR_CODES,
   EXIT_CODES,
   MTIME_TOLERANCE_MS,
@@ -23,8 +26,11 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const ps1Path = join(here, '..', '..', 'scripts', 'qa', 'native', 'run-windows.ps1');
 const modulePath = join(here, '..', '..', 'scripts', 'qa', 'native', 'harness-target.mjs');
+const buildScriptPath = join(here, '..', '..', 'apps', 'native', 'src-tauri', 'build.rs');
+const commandsPath = join(here, '..', '..', 'apps', 'native', 'src-tauri', 'src', 'commands.rs');
 
 const HEAD = 'f9d4d9204b8715ae8969ab90635ae3f21a034114';
+const HISTORICAL_COMMIT = '9950eed4c8b2a15c1ee8ec3e2b47db1ee0d3a8c1';
 const RELEASE_EXE = 'D:\\repo\\apps\\native\\src-tauri\\target\\release\\todo-native.exe';
 const INSTALLED_EXE = 'C:\\Users\\qa\\AppData\\Local\\Shishi QA RC2D\\todo-native.exe';
 const INSTALLED_EXE_ALT =
@@ -518,3 +524,211 @@ test('PowerShell 5.1 compatibility: no pwsh-only constructs in run-windows.ps1',
     assert.ok(ps1.includes(parameter), 'missing existing parameter ' + parameter);
   }
 });
+
+// ---- RC2-D.15 Phase C: the binary's build commit ---------------------------
+// A QA run must prove it validated the intended source commit, not a binary
+// that merely has the right ProductName, sha256 or mtime.
+
+function exeWithCommit(overrides = {}) {
+  return exe({ buildCommit: HEAD, buildCommitSource: COMMIT_SOURCES.EMBEDDED, ...overrides });
+}
+
+test('Embedded build commit equal to -ExpectedCommit is verified and recorded', () => {
+  const decision = resolveHarnessTarget(
+    probe({ flags: { expectedCommit: HEAD }, appCandidates: [exeWithCommit()] }),
+  );
+  assert.equal(decision.ok, true, decision.message);
+  assert.equal(decision.buildCommit, HEAD);
+  assert.equal(decision.buildCommitSource, COMMIT_SOURCES.EMBEDDED);
+  assert.equal(decision.buildCommitTrust, 'embedded-in-binary');
+  assert.equal(decision.expectedCommit, HEAD);
+  assert.equal(decision.commitMatched, true);
+  assert.equal(decision.commitStatus, COMMIT_STATUS.MATCH);
+  assert.equal(decision.provenance.buildCommit, HEAD);
+  assert.equal(decision.provenance.commitMatched, true);
+  assert.equal(decision.provenance.commitStatus, 'MATCH');
+  assert.equal(decision.provenance.commitMismatchAllowed, false);
+  assert.ok(
+    !decision.warnings.some((line) => /NOT_RUN|mismatch/.test(line)),
+    'a verified commit must not be reported as unverified',
+  );
+});
+
+test('A build commit that differs from -ExpectedCommit is refused with COMMIT_MISMATCH naming both values', () => {
+  const decision = resolveHarnessTarget(
+    probe({ flags: { expectedCommit: HISTORICAL_COMMIT }, appCandidates: [exeWithCommit()] }),
+  );
+  assert.equal(decision.ok, false);
+  assert.equal(decision.errorCode, ERROR_CODES.COMMIT_MISMATCH);
+  assert.equal(decision.exitCode, EXIT_CODES.FAIL);
+  assert.ok(
+    decision.message.includes(HISTORICAL_COMMIT),
+    'the expected commit must be named: ' + decision.message,
+  );
+  assert.ok(decision.message.includes(HEAD), 'the reported commit must be named');
+  assert.ok(decision.message.includes(INSTALLED_EXE), 'the binary path must be named');
+  assert.match(decision.message, /not built from the commit this run claims to validate/);
+  assert.match(decision.message, /-AllowCommitMismatch/);
+  assert.equal(decision.expectedCommit, HISTORICAL_COMMIT);
+  assert.equal(decision.buildCommit, HEAD);
+});
+
+test('An allowed commit mismatch is recorded as a deliberate different-commit run', () => {
+  const decision = resolveHarnessTarget(
+    probe({
+      flags: { expectedCommit: HISTORICAL_COMMIT, allowCommitMismatch: true },
+      appCandidates: [exeWithCommit()],
+    }),
+  );
+  assert.equal(decision.ok, true, decision.message);
+  assert.equal(decision.buildCommit, HEAD);
+  assert.equal(decision.commitMatched, false);
+  assert.equal(decision.commitStatus, COMMIT_STATUS.MISMATCH_ALLOWED);
+  assert.equal(decision.commitMismatchAllowed, true);
+  assert.equal(decision.provenance.commitMismatchAllowed, true);
+  assert.equal(decision.provenance.expectedCommit, HISTORICAL_COMMIT);
+  assert.equal(decision.provenance.buildCommit, HEAD);
+  assert.ok(
+    decision.warnings.some((line) => line.includes('deliberately')),
+    'the deliberate mismatch must be visible in the warnings',
+  );
+});
+
+test('A missing commit source degrades to unknown with a NOT_RUN note instead of failing', () => {
+  const decision = resolveHarnessTarget(
+    probe({ flags: { expectedCommit: HEAD }, appCandidates: [exe()] }),
+  );
+  assert.equal(decision.ok, true, decision.message);
+  assert.equal(decision.buildCommit, null);
+  assert.equal(decision.buildCommitSource, COMMIT_SOURCES.UNKNOWN);
+  assert.equal(decision.buildCommitTrust, 'unknown');
+  assert.equal(decision.commitMatched, null, 'unknown must never be recorded as a match');
+  assert.equal(decision.commitStatus, COMMIT_STATUS.NOT_RUN);
+  assert.equal(decision.provenance.commitMatched, null);
+  assert.equal(decision.provenance.commitStatus, 'NOT_RUN');
+  assert.ok(
+    decision.warnings.some((line) => line.includes('NOT_RUN')),
+    'an unverified commit must produce a NOT_RUN note',
+  );
+  assert.ok(
+    decision.warnings.some((line) => line.includes(HEAD)),
+    'the unverified expectation must still be named',
+  );
+
+  // Even without -ExpectedCommit the decision must not invent a commit.
+  const noExpectation = resolveHarnessTarget(probe({ appCandidates: [exe()] }));
+  assert.equal(noExpectation.ok, true, noExpectation.message);
+  assert.equal(noExpectation.commitStatus, COMMIT_STATUS.NOT_RUN);
+  assert.equal(noExpectation.commitMatched, null);
+  assert.equal(noExpectation.expectedCommit, null);
+});
+
+test('A sidecar commit is labelled as weaker evidence than an embedded commit', () => {
+  const sidecar = resolveHarnessTarget(
+    probe({
+      flags: { expectedCommit: HEAD },
+      appCandidates: [exe({ buildCommit: HEAD, buildCommitSource: COMMIT_SOURCES.SIDECAR })],
+    }),
+  );
+  assert.equal(sidecar.ok, true, sidecar.message);
+  assert.equal(sidecar.commitMatched, true);
+  assert.equal(sidecar.provenance.buildCommitSource, COMMIT_SOURCES.SIDECAR);
+  assert.equal(sidecar.provenance.buildCommitTrust, 'sidecar-file-weaker');
+  assert.match(
+    sidecar.provenance.buildCommitTrustNote,
+    /can be edited/,
+    'the sidecar trust boundary must be documented in the provenance',
+  );
+  assert.match(sidecar.provenance.buildCommitTrustNote, /weaker/);
+  assert.ok(
+    sidecar.warnings.some((line) => /sidecar/i.test(line) && /weaker/i.test(line)),
+    'a sidecar commit must be flagged as weaker evidence',
+  );
+
+  const embedded = resolveHarnessTarget(
+    probe({ flags: { expectedCommit: HEAD }, appCandidates: [exeWithCommit()] }),
+  );
+  assert.notEqual(embedded.provenance.buildCommitTrust, sidecar.provenance.buildCommitTrust);
+  assert.match(embedded.provenance.buildCommitTrustNote, /embedded at compile time/);
+});
+
+test('Commit provenance records source, match and allowed while keeping every existing field', () => {
+  const decision = resolveHarnessTarget(
+    probe({
+      flags: { appExe: INSTALLED_EXE, expectedCommit: HEAD, expectedVersion: '1.0.0-rc2d' },
+      appCandidates: [exeWithCommit()],
+    }),
+  );
+  assert.equal(decision.ok, true, decision.message);
+  const provenance = decision.provenance;
+  for (const field of [
+    'buildCommit',
+    'buildCommitSource',
+    'buildCommitTrust',
+    'buildCommitTrustNote',
+    'expectedCommit',
+    'commitMatched',
+    'commitStatus',
+    'commitMismatchAllowed',
+  ]) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(provenance, field),
+      'provenance must record ' + field,
+    );
+  }
+  assert.equal(provenance.buildCommit, HEAD);
+  assert.equal(provenance.buildCommitSource, COMMIT_SOURCES.EMBEDDED);
+  assert.equal(provenance.expectedCommit, HEAD);
+  assert.equal(provenance.commitMatched, true);
+  // The existing provenance contract is untouched.
+  assert.equal(provenance.appExe, INSTALLED_EXE);
+  assert.match(provenance.appExeSha256, /^[0-9a-f]{64}$/);
+  assert.equal(provenance.appExeProductName, QA_PRODUCT_NAME);
+  assert.equal(provenance.gitCommit, HEAD);
+  assert.equal(provenance.selection, SELECTION_MODES.EXPLICIT);
+  assert.equal(provenance.policyVersion, POLICY_VERSION);
+});
+
+test('An unusable -ExpectedCommit is refused instead of silently ignored', () => {
+  const decision = resolveHarnessTarget(
+    probe({ flags: { expectedCommit: 'not-a-commit' }, appCandidates: [exeWithCommit()] }),
+  );
+  assert.equal(decision.ok, false);
+  assert.equal(decision.errorCode, ERROR_CODES.EXPECTED_COMMIT_INVALID);
+  assert.match(decision.message, /not-a-commit/);
+});
+
+test('build.rs, commands.rs and run-windows.ps1 share one commit marker and wire the new flags', () => {
+  assert.equal(BUILD_COMMIT_MARKER, 'QA_BUILD_COMMIT:');
+  const buildScript = readFileSync(buildScriptPath, 'utf8');
+  assert.ok(buildScript.includes('cargo:rustc-env'), 'build.rs must embed a compile-time value');
+  assert.ok(buildScript.includes('QA_BUILD_COMMIT'), 'build.rs must read QA_BUILD_COMMIT');
+  assert.ok(buildScript.includes('rerun-if-env-changed'), 'build.rs must track the commit env');
+
+  const commands = readFileSync(commandsPath, 'utf8');
+  assert.ok(commands.includes(BUILD_COMMIT_MARKER), 'the app must embed the shared marker');
+  assert.ok(commands.includes('build_commit'), 'qa_build_identity must report the commit');
+  assert.ok(
+    /build_commit:\s*qa_build_commit\(\)/.test(commands),
+    'the reported commit must come from the embedded marker',
+  );
+
+  const ps1 = readFileSync(ps1Path, 'utf8');
+  assert.ok(ps1.includes('[string]$ExpectedCommit'), 'missing -ExpectedCommit parameter');
+  assert.ok(ps1.includes('[switch]$AllowCommitMismatch'), 'missing -AllowCommitMismatch switch');
+  assert.ok(
+    ps1.includes('expectedCommit = $ExpectedCommit'),
+    'the probe must carry the expected commit',
+  );
+  assert.ok(
+    ps1.includes('allowCommitMismatch = [bool]$AllowCommitMismatch'),
+    'the probe must carry the mismatch allowance',
+  );
+  assert.ok(ps1.includes(BUILD_COMMIT_MARKER), 'the probe must search for the embedded marker');
+  assert.ok(ps1.includes('.qa-build.json'), 'the weaker sidecar fallback must be probed');
+  assert.ok(
+    ps1.includes('CommitProvenance:'),
+    '-DiscoverOnly must print the commit provenance line',
+  );
+});
+
