@@ -382,7 +382,9 @@ await run('qa_reminder_fires_toast', async () => {
     evidence.registryBefore = baseline;
     if (!baseline.exists) throw new Error('cannot read ' + baseline.key + ': ' + baseline.error);
     if (!baseline.lastNotificationAddedTimeTicks) {
-      throw new Error('LastNotificationAddedTime is absent, so no before/after change can be proven');
+      throw new Error(
+        'LastNotificationAddedTime is absent, so no before/after change can be proven',
+      );
     }
     const stderrOffset = currentLogOffset(appStderrPath);
     const scheduledAtMs = Date.now();
@@ -406,10 +408,28 @@ await run('qa_reminder_fires_toast', async () => {
     );
     evidence.scheduleMode = mode;
     if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
-      setLayer(layers, 'REMINDER_SCHEDULED', 'FAIL', 'schedule_reminder returned ' + mode + ' for a future fireAtUtc ' + fireAtUtc);
-      throw new Error('schedule_reminder returned ' + mode + ' instead of arming a future reminder');
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for a future fireAtUtc ' + fireAtUtc,
+      );
+      throw new Error(
+        'schedule_reminder returned ' + mode + ' instead of arming a future reminder',
+      );
     }
-    setLayer(layers, 'REMINDER_SCHEDULED', 'PASS', 'armed ' + evidence.reminderId + ' for ' + fireAtUtc + ' (mode ' + mode + '); deliberately not cancelled');
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed ' +
+        evidence.reminderId +
+        ' for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        '); deliberately not cancelled',
+    );
     // No cancel here on purpose: the assertion is that the platform fires it.
     const observation = await observeReminderDelivery({
       baseline,
@@ -440,25 +460,119 @@ await run('qa_reminder_fires_toast', async () => {
       accountId: contextAfter.ok ? contextAfter.value?.accountId : contextAfter.error,
     };
     if (observation.advanced) {
-      setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'PASS', 'the scheduler thread ran: Windows recorded a notification at ' + observation.settings.lastNotificationAddedAt + ', ' + evidence.notificationAddedAfterFireMs + ' ms after the fire instant ' + fireAtUtc);
-      setLayer(layers, 'WINDOWS_API_ACCEPTED', 'PASS', 'Windows advanced LastNotificationAddedTime for ' + QA_NOTIFICATION_AUMID + ': ' + baseline.lastNotificationAddedTimeHex + ' -> ' + observation.settings.lastNotificationAddedTimeHex + ' within ' + observation.elapsedMs + ' ms');
-      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'PASS', 'per-AUMID counter moved by ' + observation.deltaMs + ' ms and read ' + observation.settings.lastNotificationAddedAt + ' (' + observation.polls + ' polls)');
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'PASS',
+        'the scheduler thread ran: Windows recorded a notification at ' +
+          observation.settings.lastNotificationAddedAt +
+          ', ' +
+          evidence.notificationAddedAfterFireMs +
+          ' ms after the fire instant ' +
+          fireAtUtc,
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'PASS',
+        'Windows advanced LastNotificationAddedTime for ' +
+          QA_NOTIFICATION_AUMID +
+          ': ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex +
+          ' within ' +
+          observation.elapsedMs +
+          ' ms',
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'PASS',
+        'per-AUMID counter moved by ' +
+          observation.deltaMs +
+          ' ms and read ' +
+          observation.settings.lastNotificationAddedAt +
+          ' (' +
+          observation.polls +
+          ' polls)',
+      );
     } else if (observation.attemptLines.length > 0) {
       const reason = observation.attemptLines.join(' | ');
-      setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'PASS', 'the timer thread ran and attempted the platform call: ' + reason);
-      setLayer(layers, 'WINDOWS_API_ACCEPTED', 'FAIL', 'the app reported a platform rejection instead of an accepted toast: ' + reason);
-      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'FAIL', 'LastNotificationAddedTime stayed ' + baseline.lastNotificationAddedTimeHex + ' over ' + observation.polls + ' polls in ' + observation.elapsedMs + ' ms');
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'PASS',
+        'the timer thread ran and attempted the platform call: ' + reason,
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'FAIL',
+        'the app reported a platform rejection instead of an accepted toast: ' + reason,
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'LastNotificationAddedTime stayed ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' over ' +
+          observation.polls +
+          ' polls in ' +
+          observation.elapsedMs +
+          ' ms',
+      );
       throw new Error('the reminder never reached Windows: ' + reason);
     } else {
-      setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'NOT_RUN', 'no observable side effect within ' + observation.elapsedMs + ' ms: the in-process reminder queue has no readback, so a silent trigger cannot be told apart from a trigger that never ran');
-      setLayer(layers, 'WINDOWS_API_ACCEPTED', 'FAIL', 'LastNotificationAddedTime stayed ' + baseline.lastNotificationAddedTimeHex + ' for the whole ' + observation.elapsedMs + ' ms window after the fire instant ' + fireAtUtc);
-      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'FAIL', 'no notification was added for ' + QA_NOTIFICATION_AUMID + ' within the ' + REMINDER_OBSERVATION_BOUND_MS + ' ms bound of a ' + REMINDER_FIRE_LEAD_MS + ' ms deadline');
-      throw new Error('no Windows notification appeared within ' + observation.elapsedMs + ' ms (baseline ' + baseline.lastNotificationAddedTimeHex + ', after ' + (observation.settings.lastNotificationAddedTimeHex ?? 'unreadable') + ')');
+      setLayer(
+        layers,
+        'NATIVE_TRIGGER_FIRED',
+        'NOT_RUN',
+        'no observable side effect within ' +
+          observation.elapsedMs +
+          ' ms: the in-process reminder queue has no readback, so a silent trigger cannot be told apart from a trigger that never ran',
+      );
+      setLayer(
+        layers,
+        'WINDOWS_API_ACCEPTED',
+        'FAIL',
+        'LastNotificationAddedTime stayed ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' for the whole ' +
+          observation.elapsedMs +
+          ' ms window after the fire instant ' +
+          fireAtUtc,
+      );
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'no notification was added for ' +
+          QA_NOTIFICATION_AUMID +
+          ' within the ' +
+          REMINDER_OBSERVATION_BOUND_MS +
+          ' ms bound of a ' +
+          REMINDER_FIRE_LEAD_MS +
+          ' ms deadline',
+      );
+      throw new Error(
+        'no Windows notification appeared within ' +
+          observation.elapsedMs +
+          ' ms (baseline ' +
+          baseline.lastNotificationAddedTimeHex +
+          ', after ' +
+          (observation.settings.lastNotificationAddedTimeHex ?? 'unreadable') +
+          ')',
+      );
     }
   } catch (error) {
     primaryError = error;
   }
-  const cleanup = await cleanupReminderFixtures({ reminderId: evidence.taskId, taskId: evidence.taskId });
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
   const report = recordReminderLayers('qa_reminder_fires_toast', layers, { ...evidence, cleanup });
   if (primaryError) throw primaryError;
   if (cleanup.reminderCancelled !== true || cleanup.taskDeleted !== true) {
@@ -478,7 +592,12 @@ await run('qa_reminder_cancelled_before_fire', async () => {
     const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
     evidence.registryBefore = baseline;
     if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
-      throw new Error('cannot read a baseline LastNotificationAddedTime: ' + baseline.key + ' ' + (baseline.error ?? ''));
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
     }
     const stderrOffset = currentLogOffset(appStderrPath);
     const title = 'QA cancelled reminder ' + Date.now();
@@ -498,14 +617,30 @@ await run('qa_reminder_cancelled_before_fire', async () => {
     );
     evidence.scheduleMode = mode;
     if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
-      setLayer(layers, 'REMINDER_SCHEDULED', 'FAIL', 'schedule_reminder returned ' + mode + ' for ' + fireAtUtc);
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for ' + fireAtUtc,
+      );
       throw new Error('schedule_reminder returned ' + mode + ' instead of arming the reminder');
     }
     // cancel_reminder verifies the platform queue no longer reports the entry,
     // so a successful unwrap is proof the reminder is gone.
     unwrap(await invoke(page, 'cancel_reminder', { reminderId: task.id }), 'cancel_reminder');
     evidence.cancelledAt = new Date().toISOString();
-    setLayer(layers, 'REMINDER_SCHEDULED', 'PASS', 'armed for ' + fireAtUtc + ' (mode ' + mode + ') and cancelled at ' + evidence.cancelledAt + '; cancel_reminder verified no residual queue entry');
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        ') and cancelled at ' +
+        evidence.cancelledAt +
+        '; cancel_reminder verified no residual queue entry',
+    );
     const observation = await observeReminderDelivery({
       baseline,
       stderrOffset,
@@ -522,24 +657,61 @@ await run('qa_reminder_cancelled_before_fire', async () => {
     evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
     evidence.appAttemptLines = observation.attemptLines;
     evidence.passedFireInstant = Date.now() > Date.parse(fireAtUtc);
-    setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'NOT_RUN', 'the reminder was cancelled before its fire instant, so no trigger was expected and none is claimed');
-    setLayer(layers, 'WINDOWS_API_ACCEPTED', 'NOT_RUN', 'a cancelled reminder is never meant to reach the Windows notification API');
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'the reminder was cancelled before its fire instant, so no trigger was expected and none is claimed',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'a cancelled reminder is never meant to reach the Windows notification API',
+    );
     if (observation.advanced || observation.attemptLines.length > 0) {
       const detail = observation.advanced
-        ? 'LastNotificationAddedTime moved ' + baseline.lastNotificationAddedTimeHex + ' -> ' + observation.settings.lastNotificationAddedTimeHex
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
         : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
-      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'FAIL', 'a cancelled reminder still produced delivery evidence: ' + detail);
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'a cancelled reminder still produced delivery evidence: ' + detail,
+      );
       throw new Error('a cancelled reminder still produced delivery evidence: ' + detail);
     }
-    setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'NOT_RUN', 'not observed and not claimed: LastNotificationAddedTime stayed ' + baseline.lastNotificationAddedTimeHex + ' over ' + observation.polls + ' polls in ' + observation.elapsedMs + ' ms, past the fire instant');
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'not observed and not claimed: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms, past the fire instant',
+    );
     if (!evidence.passedFireInstant) {
-      throw new Error('the observation window closed before the fire instant, so "no delivery" was not proven');
+      throw new Error(
+        'the observation window closed before the fire instant, so "no delivery" was not proven',
+      );
     }
   } catch (error) {
     primaryError = error;
   }
-  const cleanup = await cleanupReminderFixtures({ reminderId: evidence.taskId, taskId: evidence.taskId });
-  const report = recordReminderLayers('qa_reminder_cancelled_before_fire', layers, { ...evidence, cleanup });
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_cancelled_before_fire', layers, {
+    ...evidence,
+    cleanup,
+  });
   if (primaryError) throw primaryError;
   if (cleanup.taskDeleted !== true) {
     throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
@@ -558,7 +730,12 @@ await run('qa_reminder_past_fire_time', async () => {
     const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
     evidence.registryBefore = baseline;
     if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
-      throw new Error('cannot read a baseline LastNotificationAddedTime: ' + baseline.key + ' ' + (baseline.error ?? ''));
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
     }
     const stderrOffset = currentLogOffset(appStderrPath);
     const title = 'QA past reminder ' + Date.now();
@@ -579,10 +756,26 @@ await run('qa_reminder_past_fire_time', async () => {
     // drops a past fire time and answers "skipped-past"; it does not fire
     // immediately. Assert that observed contract instead of assuming either.
     if (observedBehaviour !== 'skipped-past') {
-      setLayer(layers, 'REMINDER_SCHEDULED', 'FAIL', 'a past fire time produced ' + observedBehaviour + ' instead of the documented skipped-past refusal');
-      throw new Error('expected the skipped-past refusal for a past fire time, observed ' + observedBehaviour);
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'a past fire time produced ' +
+          observedBehaviour +
+          ' instead of the documented skipped-past refusal',
+      );
+      throw new Error(
+        'expected the skipped-past refusal for a past fire time, observed ' + observedBehaviour,
+      );
     }
-    setLayer(layers, 'REMINDER_SCHEDULED', 'NOT_RUN', 'refused by design: schedule_reminder returned skipped-past for ' + fireAtUtc + ', so nothing was armed and no delivery is claimed');
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'NOT_RUN',
+      'refused by design: schedule_reminder returned skipped-past for ' +
+        fireAtUtc +
+        ', so nothing was armed and no delivery is claimed',
+    );
     const observation = await observeReminderDelivery({
       baseline,
       stderrOffset,
@@ -598,21 +791,61 @@ await run('qa_reminder_past_fire_time', async () => {
     evidence.filetimeBaselineHex = baseline.lastNotificationAddedTimeHex;
     evidence.filetimeAfterHex = observation.settings.lastNotificationAddedTimeHex;
     evidence.appAttemptLines = observation.attemptLines;
-    setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'NOT_RUN', 'nothing was armed, so no trigger was expected; no platform attempt appeared in ' + observation.elapsedMs + ' ms');
-    setLayer(layers, 'WINDOWS_API_ACCEPTED', 'NOT_RUN', 'nothing was armed, so the Windows notification API was never asked to accept a toast');
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'nothing was armed, so no trigger was expected; no platform attempt appeared in ' +
+        observation.elapsedMs +
+        ' ms',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'nothing was armed, so the Windows notification API was never asked to accept a toast',
+    );
     if (observation.advanced || observation.attemptLines.length > 0) {
       const detail = observation.advanced
-        ? 'LastNotificationAddedTime moved ' + baseline.lastNotificationAddedTimeHex + ' -> ' + observation.settings.lastNotificationAddedTimeHex
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
         : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
-      setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'FAIL', 'a refused past fire time still produced delivery evidence: ' + detail);
-      throw new Error('a past fire time produced delivery evidence even though schedule_reminder reported skipped-past: ' + detail);
+      setLayer(
+        layers,
+        'OS_NOTIFICATION_OBSERVED',
+        'FAIL',
+        'a refused past fire time still produced delivery evidence: ' + detail,
+      );
+      throw new Error(
+        'a past fire time produced delivery evidence even though schedule_reminder reported skipped-past: ' +
+          detail,
+      );
     }
-    setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'NOT_RUN', 'not observed and not claimed: LastNotificationAddedTime stayed ' + baseline.lastNotificationAddedTimeHex + ' over ' + observation.polls + ' polls in ' + observation.elapsedMs + ' ms, so the past fire time did not fire immediately');
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'not observed and not claimed: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms, so the past fire time did not fire immediately',
+    );
   } catch (error) {
     primaryError = error;
   }
-  const cleanup = await cleanupReminderFixtures({ reminderId: evidence.taskId, taskId: evidence.taskId });
-  const report = recordReminderLayers('qa_reminder_past_fire_time', layers, { ...evidence, cleanup });
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
+  const report = recordReminderLayers('qa_reminder_past_fire_time', layers, {
+    ...evidence,
+    cleanup,
+  });
   if (primaryError) throw primaryError;
   if (cleanup.taskDeleted !== true) {
     throw new Error('QA fixture cleanup incomplete: ' + JSON.stringify(cleanup));
@@ -635,7 +868,12 @@ await run('qa_reminder_observation_timeout', async () => {
     const baseline = readNotificationSettings(QA_NOTIFICATION_AUMID);
     evidence.registryBefore = baseline;
     if (!baseline.exists || !baseline.lastNotificationAddedTimeTicks) {
-      throw new Error('cannot read a baseline LastNotificationAddedTime: ' + baseline.key + ' ' + (baseline.error ?? ''));
+      throw new Error(
+        'cannot read a baseline LastNotificationAddedTime: ' +
+          baseline.key +
+          ' ' +
+          (baseline.error ?? ''),
+      );
     }
     const stderrOffset = currentLogOffset(appStderrPath);
     const title = 'QA timeout reminder ' + Date.now();
@@ -656,10 +894,28 @@ await run('qa_reminder_observation_timeout', async () => {
     );
     evidence.scheduleMode = mode;
     if (!['scheduled', 'exact', 'inexact'].includes(mode)) {
-      setLayer(layers, 'REMINDER_SCHEDULED', 'FAIL', 'schedule_reminder returned ' + mode + ' for ' + fireAtUtc);
+      setLayer(
+        layers,
+        'REMINDER_SCHEDULED',
+        'FAIL',
+        'schedule_reminder returned ' + mode + ' for ' + fireAtUtc,
+      );
       throw new Error('schedule_reminder returned ' + mode + ' instead of arming the reminder');
     }
-    setLayer(layers, 'REMINDER_SCHEDULED', 'PASS', 'armed for ' + fireAtUtc + ' (mode ' + mode + '), ' + REMINDER_TIMEOUT_CASE_LEAD_MS + ' ms out, with a ' + REMINDER_TIMEOUT_CASE_BOUND_MS + ' ms observation bound');
+    setLayer(
+      layers,
+      'REMINDER_SCHEDULED',
+      'PASS',
+      'armed for ' +
+        fireAtUtc +
+        ' (mode ' +
+        mode +
+        '), ' +
+        REMINDER_TIMEOUT_CASE_LEAD_MS +
+        ' ms out, with a ' +
+        REMINDER_TIMEOUT_CASE_BOUND_MS +
+        ' ms observation bound',
+    );
     const observation = await observeReminderDelivery({
       baseline,
       stderrOffset,
@@ -679,30 +935,70 @@ await run('qa_reminder_observation_timeout', async () => {
     evidence.timedOut = observation.satisfied === false;
     if (observation.advanced || observation.attemptLines.length > 0) {
       const detail = observation.advanced
-        ? 'LastNotificationAddedTime moved ' + baseline.lastNotificationAddedTimeHex + ' -> ' + observation.settings.lastNotificationAddedTimeHex
+        ? 'LastNotificationAddedTime moved ' +
+          baseline.lastNotificationAddedTimeHex +
+          ' -> ' +
+          observation.settings.lastNotificationAddedTimeHex
         : 'the app logged an attempt: ' + observation.attemptLines.join(' | ');
       setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'PASS', detail);
       setLayer(layers, 'WINDOWS_API_ACCEPTED', observation.advanced ? 'PASS' : 'FAIL', detail);
       setLayer(layers, 'OS_NOTIFICATION_OBSERVED', observation.advanced ? 'PASS' : 'FAIL', detail);
-      throw new Error('the timeout case observed something inside its bound, its premise no longer holds: ' + detail);
+      throw new Error(
+        'the timeout case observed something inside its bound, its premise no longer holds: ' +
+          detail,
+      );
     }
-    setLayer(layers, 'NATIVE_TRIGGER_FIRED', 'NOT_RUN', 'the ' + observation.elapsedMs + ' ms bound closed ' + Math.max(0, fireAtMs - Date.now()) + ' ms before the fire instant ' + fireAtUtc + ', so the timer never became due');
-    setLayer(layers, 'WINDOWS_API_ACCEPTED', 'NOT_RUN', 'the fire instant was still in the future, so the Windows notification API was never called');
-    setLayer(layers, 'OS_NOTIFICATION_OBSERVED', 'NOT_RUN', 'timeout, not a delivery claim: LastNotificationAddedTime stayed ' + baseline.lastNotificationAddedTimeHex + ' over ' + observation.polls + ' polls in ' + observation.elapsedMs + ' ms');
+    setLayer(
+      layers,
+      'NATIVE_TRIGGER_FIRED',
+      'NOT_RUN',
+      'the ' +
+        observation.elapsedMs +
+        ' ms bound closed ' +
+        Math.max(0, fireAtMs - Date.now()) +
+        ' ms before the fire instant ' +
+        fireAtUtc +
+        ', so the timer never became due',
+    );
+    setLayer(
+      layers,
+      'WINDOWS_API_ACCEPTED',
+      'NOT_RUN',
+      'the fire instant was still in the future, so the Windows notification API was never called',
+    );
+    setLayer(
+      layers,
+      'OS_NOTIFICATION_OBSERVED',
+      'NOT_RUN',
+      'timeout, not a delivery claim: LastNotificationAddedTime stayed ' +
+        baseline.lastNotificationAddedTimeHex +
+        ' over ' +
+        observation.polls +
+        ' polls in ' +
+        observation.elapsedMs +
+        ' ms',
+    );
     if (observation.satisfied) throw new Error('the bound ended satisfied but no layer was set');
     if (evidence.fireInstantInsideWindow) {
-      throw new Error('the fire instant fell inside the observation window, so this case did not exercise a timeout');
+      throw new Error(
+        'the fire instant fell inside the observation window, so this case did not exercise a timeout',
+      );
     }
     if (observation.elapsedMs > REMINDER_TIMEOUT_CASE_BOUND_MS + 10000) {
       throw new Error('the polling loop overran its bound: ' + observation.elapsedMs + ' ms');
     }
     if (observation.polls < 2) {
-      throw new Error('the state loop polled only ' + observation.polls + ' time(s), so nothing was polled');
+      throw new Error(
+        'the state loop polled only ' + observation.polls + ' time(s), so nothing was polled',
+      );
     }
   } catch (error) {
     primaryError = error;
   }
-  const cleanup = await cleanupReminderFixtures({ reminderId: evidence.taskId, taskId: evidence.taskId });
+  const cleanup = await cleanupReminderFixtures({
+    reminderId: evidence.taskId,
+    taskId: evidence.taskId,
+  });
   const report = recordReminderLayers('qa_reminder_observation_timeout', layers, {
     ...evidence,
     cleanup,

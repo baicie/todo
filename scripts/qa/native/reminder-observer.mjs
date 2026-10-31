@@ -119,13 +119,16 @@ export function notificationAdvanced(baseline, current) {
   if (!baseline.lastNotificationAddedTimeTicks || !current.lastNotificationAddedTimeTicks) {
     return false;
   }
-  return BigInt(current.lastNotificationAddedTimeTicks) > BigInt(baseline.lastNotificationAddedTimeTicks);
+  return (
+    BigInt(current.lastNotificationAddedTimeTicks) > BigInt(baseline.lastNotificationAddedTimeTicks)
+  );
 }
 
 export function notificationDeltaMs(baseline, current) {
   if (!notificationAdvanced(baseline, current)) return null;
   return Number(
-    (BigInt(current.lastNotificationAddedTimeTicks) - BigInt(baseline.lastNotificationAddedTimeTicks)) /
+    (BigInt(current.lastNotificationAddedTimeTicks) -
+      BigInt(baseline.lastNotificationAddedTimeTicks)) /
       FILETIME_TICKS_PER_MS,
   );
 }
