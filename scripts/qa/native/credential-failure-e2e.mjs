@@ -39,6 +39,17 @@ const timeline = [];
 let child;
 let browser;
 
+// RC2-D.14 Phase C: record which binary produced this evidence and how it was
+// chosen; run-windows.ps1 exports the same values it writes to provenance.json.
+result.provenance = {
+  policyVersion: process.env.QA_TARGET_POLICY || 'unknown',
+  targetSelection: process.env.QA_TARGET_SELECTION || 'unknown',
+  gitCommit: process.env.QA_GIT_COMMIT || 'unknown',
+  appExe: process.env.QA_APP_EXE || appExe,
+  appExeSha256: process.env.QA_APP_SHA256 || null,
+  appExeProductVersion: process.env.QA_APP_PRODUCT_VERSION || null,
+};
+
 const event = (name, detail = {}) =>
   timeline.push({ at: new Date().toISOString(), name, ...detail });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

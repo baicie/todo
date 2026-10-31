@@ -12,11 +12,20 @@ const logDir = path.join(artifactRoot, 'logs');
 fs.mkdirSync(screenshotDir, { recursive: true });
 fs.mkdirSync(logDir, { recursive: true });
 
+// RC2-D.14 Phase C: evidence is only meaningful when the binary it exercised
+// is recorded together with how it was chosen (explicit -AppExe, freshly
+// installed QA build, or discovered). run-windows.ps1 exports these from the
+// harness-target.mjs decision and writes that decision next to this file.
 const provenance = {
   generatedAt: new Date().toISOString(),
+  policyVersion: process.env.QA_TARGET_POLICY || 'unknown',
   gitCommit: process.env.QA_GIT_COMMIT || 'unknown',
   gitBranch: process.env.QA_GIT_BRANCH || 'unknown',
+  targetSelection: process.env.QA_TARGET_SELECTION || 'unknown',
+  targetExplicitlyChosen: process.env.QA_TARGET_EXPLICIT === 'True',
   appExe: process.env.QA_APP_EXE || 'unknown',
+  appExeProductName: process.env.QA_APP_PRODUCT_NAME || null,
+  appExeProductVersion: process.env.QA_APP_PRODUCT_VERSION || null,
   appExeSha256: process.env.QA_APP_SHA256 || null,
   installer: process.env.QA_INSTALLER || null,
   installerSha256: process.env.QA_INSTALLER_SHA256 || null,
@@ -414,6 +423,7 @@ const summary = [
   '',
   `- Run: \`${process.env.QA_RUN_ID || 'unknown'}\``,
   `- App: \`${process.env.QA_APP_EXE || 'unknown'}\``,
+  `- Target: ${provenance.targetSelection} (version ${provenance.appExeProductVersion || 'unknown'}, sha256 ${provenance.appExeSha256 || 'unknown'})`,
   `- Status: **${status}**`,
   `- Tests: ${counts.PASS} PASS / ${counts.FAIL} FAIL / ${counts.NOT_RUN} NOT_RUN`,
   `- Duration: ${Date.now() - started} ms`,
