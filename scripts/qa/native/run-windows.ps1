@@ -14,8 +14,10 @@ param(
   [switch]$KeepRunning,
   [string]$ExpectedSha256 = "",
   [string]$ExpectedVersion = "",
+  [string]$ExpectedCommit = "",
   [string]$ExpectedInstallerSha256 = "",
-  [switch]$AllowStaleTarget
+  [switch]$AllowStaleTarget,
+  [switch]$AllowCommitMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,8 +97,49 @@ function Get-ExeProbe([string]$Path, [string]$Source) {
     $entry.sha256 = Get-Sha256 $Path
     $entry.mtimeMs = [int64](($item.LastWriteTimeUtc - $UnixEpoch).TotalMilliseconds)
     $entry.sizeBytes = $item.Length
+    $identity = Get-BuildCommit $Path
+    $entry.buildCommit = $identity.commit
+    $entry.buildCommitSource = $identity.source
   }
   [pscustomobject]$entry
+}
+
+# Commit evidence (RC2-D.15 Phase C). The QA build embeds the git commit it was
+# built from as one compile-time string literal, "QA_BUILD_COMMIT:<sha>"
+# (build.rs -> commands.rs), so it can be read straight back out of the
+# executable bytes; replacing it means rewriting the binary, which changes the
+# sha256 the provenance records alongside. A <exe>.qa-build.json sidecar is
+# honoured as a fallback and labelled weaker by the policy module, because a
+# file beside the binary can be edited without touching the artifact.
+$BuildCommitMarker = "QA_BUILD_COMMIT:"
+function Get-BuildCommit([string]$Path) {
+  $result = [ordered]@{ commit = $null; source = "unknown" }
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return [pscustomobject]$result
+  }
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    # Latin-1 maps one byte to one character, so the search cannot miss the
+    # marker because of an encoding guess.
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    $found = [regex]::Match($text, [regex]::Escape($BuildCommitMarker) + "([0-9a-f]{40})")
+    if ($found.Success) {
+      $result.commit = $found.Groups[1].Value
+      $result.source = "embedded"
+      return [pscustomobject]$result
+    }
+  } catch { }
+  $sidecar = $Path + ".qa-build.json"
+  if (Test-Path -LiteralPath $sidecar -PathType Leaf) {
+    try {
+      $metadata = Get-Content -LiteralPath $sidecar -Raw | ConvertFrom-Json
+      if ($metadata.commit -match '^[0-9a-fA-F]{7,40}$') {
+        $result.commit = $metadata.commit.ToLowerInvariant()
+        $result.source = "sidecar"
+      }
+    } catch { }
+  }
+  [pscustomobject]$result
 }
 
 $UnixEpoch = [datetime]::SpecifyKind([datetime]'1970-01-01T00:00:00', [System.DateTimeKind]::Utc)
@@ -107,11 +150,18 @@ $appErr = Join-Path $LogDir "app.stderr.log"
 $faultEvidence = Join-Path $ArtifactRoot "fault-evidence.jsonl"
 $appPid = $null
 $installerHash = $null
+# Captured before the build because -Build embeds this commit into the binary.
+$gitCommit = Get-GitCommitFallback
+$gitBranch = Get-GitBranch
+$gitDirty = Get-GitDirty
 
 try {
   Push-Location (Join-Path $RepoRoot "apps\native")
   try {
     if ($Build) {
+      # build.rs turns this into the compile-time "QA_BUILD_COMMIT:<sha>" marker
+      # the target probe reads back out of the executable.
+      $env:QA_BUILD_COMMIT = $gitCommit
       $buildArgs = @(
         "dlx", "@tauri-apps/cli@2.12.4", "build",
         "--config", "src-tauri/tauri.qa.conf.json",
@@ -154,10 +204,6 @@ try {
     (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\todo-native.exe"),
     (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\todo-native.exe")
   )
-  $gitCommit = Get-GitCommitFallback
-  $gitBranch = Get-GitBranch
-  $gitDirty = Get-GitDirty
-
   function Get-TargetDecision([string]$Phase) {
     $appCandidates = New-Object System.Collections.Generic.List[object]
     if (-not [string]::IsNullOrWhiteSpace($AppExe)) {
@@ -191,6 +237,8 @@ try {
         installer = $Installer
         expectedSha256 = $ExpectedSha256
         expectedVersion = $ExpectedVersion
+        expectedCommit = $ExpectedCommit
+        allowCommitMismatch = [bool]$AllowCommitMismatch
         expectedInstallerSha256 = $ExpectedInstallerSha256
       }
       paths = [ordered]@{
@@ -263,6 +311,7 @@ try {
     Write-Output "ProductVersion: $($decision.appExeProductVersion)"
     Write-Output "Sha256: $($decision.appExeSha256)"
     Write-Output "GitCommit: $($decision.git.commit) branch=$($decision.git.branch) dirty=$($decision.git.dirty)"
+    Write-Output "CommitProvenance: binaryCommit=$($decision.buildCommit) source=$($decision.buildCommitSource) trust=$($decision.buildCommitTrust) expectedCommit=$($decision.expectedCommit) matched=$($decision.commitMatched) status=$($decision.commitStatus) mismatchAllowed=$($decision.commitMismatchAllowed)"
     foreach ($note in @($decision.warnings)) { if ($note) { Write-Output "Note: $note" } }
     Write-Output "Next: native qa_build_identity must report identifier app.shishi.todo.qa"
     exit $decision.exitCodes.ok
@@ -295,6 +344,13 @@ try {
     appExeMtime = $decision.appExeMtime
     appExeSelection = $decision.selection
     appExeExplicitlyChosen = [bool]$decision.provenance.explicitlyChosen
+    appExeBuildCommit = $decision.buildCommit
+    appExeBuildCommitSource = $decision.buildCommitSource
+    appExeBuildCommitTrust = $decision.buildCommitTrust
+    expectedCommit = $decision.expectedCommit
+    commitMatched = $decision.commitMatched
+    commitStatus = $decision.commitStatus
+    commitMismatchAllowed = [bool]$decision.commitMismatchAllowed
     installer = $Installer
     installerSha256 = $installerHash
     installerProductVersion = $decision.installerProductVersion
@@ -401,6 +457,13 @@ try {
     appExeMtime = $decision.appExeMtime
     appExeSelection = $decision.selection
     appExeExplicitlyChosen = [bool]$decision.provenance.explicitlyChosen
+    appExeBuildCommit = $decision.buildCommit
+    appExeBuildCommitSource = $decision.buildCommitSource
+    appExeBuildCommitTrust = $decision.buildCommitTrust
+    expectedCommit = $decision.expectedCommit
+    commitMatched = $decision.commitMatched
+    commitStatus = $decision.commitStatus
+    commitMismatchAllowed = [bool]$decision.commitMismatchAllowed
     installer = $Installer
     installerSha256 = $installerHash
     installerProductVersion = $decision.installerProductVersion
