@@ -2,9 +2,11 @@
  * Machine-checkable contract tests for the dev pre-release pipeline
  * (RC2-D.11 Phase E). Run with: node --test tests/release/
  *
- * Two layers:
+ * Three layers:
  *   1. pure resolution/validation/naming units of scripts/release/release-context.mjs;
- *   2. static assertions over the release workflow text, so a mutable action ref
+ *   2. a build contract over the three real tauri config files, so the script's
+ *      config model cannot drift away from tauri's own RFC 7386 merge again;
+ *   3. static assertions over the release workflow text, so a mutable action ref
  *      or a second, independent version source cannot sneak back in unnoticed.
  */
 
@@ -23,6 +25,7 @@ import {
   ReleaseContextError,
   SUMS_NAME,
   MANIFEST_NAME,
+  applyMergePatch,
   assertDevConfig,
   buildManifest,
   describeTag,
@@ -32,6 +35,7 @@ import {
   formatArtifactName,
   lintReleaseWorkflows,
   lintWorkflowExpressions,
+  mergeTauriConfig,
   normalizeVersion,
   parseSha256Sums,
   resolveAppConfig,
@@ -327,6 +331,360 @@ test('app config: the dev config overrides version, productName and identifier',
     '1.2.3-dev.4',
   );
   assert.throws(() => resolveVersionValue('../package.json'), /file reader/);
+});
+
+test('merge patch: objects merge recursively, null deletes, arrays and scalars replace', () => {
+  assert.deepEqual(
+    applyMergePatch(
+      { a: 1, b: { c: 2, d: [1, 2] }, e: 'keep' },
+      { b: { c: 3, d: [9] }, e: null, f: [1] },
+    ),
+    {
+      a: 1,
+      b: { c: 3, d: [9] },
+      f: [1],
+    },
+  );
+  // an empty patch object changes nothing, a scalar under an object becomes an object
+  assert.deepEqual(applyMergePatch({ a: { b: 1 } }, { a: {} }), { a: { b: 1 } });
+  assert.deepEqual(applyMergePatch({ a: 1 }, { a: { b: 2 } }), { a: { b: 2 } });
+  assert.deepEqual(applyMergePatch({ a: { b: 1, c: 2 } }, { a: { b: null } }), { a: { c: 2 } });
+  assert.deepEqual(applyMergePatch({ a: 1 }, 'scalar'), 'scalar');
+  assert.deepEqual(mergeTauriConfig({ a: 1 }, null, { b: 2 }, { a: 3 }), { a: 3, b: 2 });
+  assert.deepEqual(mergeTauriConfig(), {});
+});
+
+test('app config: a base config with no override resolves its own identity', () => {
+  const baseConfig = {
+    productName: 'Shishi',
+    version: '1.0.0',
+    identifier: 'app.shishi.todo',
+    bundle: { publisher: 'Shishi', targets: 'all', macOS: { minimumSystemVersion: '10.15' } },
+  };
+  const config = resolveAppConfig({ baseConfig });
+  assert.equal(config.version, '1.0.0');
+  assert.equal(config.productName, 'Shishi');
+  assert.equal(config.identifier, 'app.shishi.todo');
+  assert.equal(config.publisher, 'Shishi');
+  assert.equal(config.nsisInstallMode, null);
+  assert.deepEqual(config.overriddenKeys, []);
+  assert.deepEqual(config.config, baseConfig);
+});
+
+test('app config: an override replaces productName', () => {
+  const config = resolveAppConfig({
+    baseConfig: { productName: 'Shishi', version: '1.0.0', identifier: 'app.shishi.todo' },
+    devConfig: { productName: 'Shishi Dev' },
+  });
+  assert.equal(config.productName, 'Shishi Dev');
+  assert.equal(config.identifier, 'app.shishi.todo');
+  assert.equal(config.version, '1.0.0');
+  assert.deepEqual(config.overriddenKeys, ['productName']);
+});
+
+test('app config: an override replaces identifier', () => {
+  const config = resolveAppConfig({
+    baseConfig: { productName: 'Shishi', version: '0.0.1-dev.1', identifier: 'app.shishi.todo' },
+    devConfig: { identifier: DEV_IDENTIFIER },
+  });
+  assert.equal(config.identifier, DEV_IDENTIFIER);
+  assert.equal(config.productName, 'Shishi');
+  assert.equal(assertDevConfig(config).identifier, DEV_IDENTIFIER);
+});
+
+test('app config: an override replaces version', () => {
+  const config = resolveAppConfig({
+    baseConfig: { productName: 'Shishi', version: '0.0.1-dev.1', identifier: 'app.shishi.todo' },
+    devConfig: { version: 'v0.0.2-dev.3' },
+  });
+  assert.equal(config.version, '0.0.2-dev.3');
+  assert.equal(config.productName, 'Shishi');
+});
+
+test('app config: an override sets bundle.windows.nsis.installMode', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '0.0.1-dev.1',
+      identifier: 'app.shishi.todo',
+      bundle: { active: true, windows: { nsis: { installMode: 'currentUser' } } },
+    },
+    devConfig: { bundle: { windows: { nsis: { installMode: 'perMachine' } } } },
+  });
+  assert.equal(config.nsisInstallMode, 'perMachine');
+  assert.equal(config.config.bundle.active, true);
+});
+
+test('app config: bundle.publisher survives an override that does not mention it', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '0.0.1-dev.1',
+      identifier: 'app.shishi.todo',
+      bundle: { publisher: 'Shishi', targets: 'all' },
+    },
+    devConfig: { bundle: { windows: { nsis: { installMode: 'currentUser' } } } },
+  });
+  assert.equal(config.publisher, 'Shishi');
+  assert.equal(config.config.bundle.targets, 'all');
+  assert.equal(config.nsisInstallMode, 'currentUser');
+});
+
+test('app config: bundle.macOS survives an override that does not mention it', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '0.0.1-dev.1',
+      identifier: 'app.shishi.todo',
+      bundle: { macOS: { minimumSystemVersion: '10.15' }, icon: ['icons/base.png'] },
+    },
+    devConfig: { bundle: { icon: ['icons/dev.png'] } },
+  });
+  assert.equal(config.config.bundle.macOS.minimumSystemVersion, '10.15');
+  assert.deepEqual(config.config.bundle.icon, ['icons/dev.png']);
+});
+
+test('app config: nested objects merge deeply instead of replacing', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '0.0.1-dev.1',
+      identifier: 'app.shishi.todo',
+      app: {
+        windows: [{ label: 'main', title: 'Shishi' }],
+        security: { csp: "default-src 'self'" },
+      },
+      bundle: {
+        windows: {
+          nsis: { installMode: 'currentUser' },
+          webviewInstallMode: { type: 'downloadBootstrapper' },
+        },
+      },
+    },
+    devConfig: {
+      app: { windows: [{ label: 'main', title: 'Shishi Dev' }] },
+      bundle: { windows: { nsis: { languages: ['SimpChinese'] } } },
+    },
+  });
+  // an array is a value, not an object: the dev array replaces the base array
+  assert.deepEqual(config.config.app.windows, [{ label: 'main', title: 'Shishi Dev' }]);
+  // the sibling object the dev config never mentions survives the merge
+  assert.deepEqual(config.config.app.security, { csp: "default-src 'self'" });
+  assert.deepEqual(config.config.bundle.windows.nsis, {
+    installMode: 'currentUser',
+    languages: ['SimpChinese'],
+  });
+  assert.deepEqual(config.config.bundle.windows.webviewInstallMode, {
+    type: 'downloadBootstrapper',
+  });
+});
+
+test('app config: a JSON null in the override deletes the key', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '0.0.1-dev.1',
+      identifier: 'app.shishi.todo',
+      bundle: {
+        targets: 'all',
+        category: 'Productivity',
+        windows: { nsis: { installMode: 'currentUser' } },
+      },
+    },
+    devConfig: { bundle: { targets: null, windows: { nsis: null } } },
+  });
+  assert.equal('targets' in config.config.bundle, false);
+  assert.equal('nsis' in config.config.bundle.windows, false);
+  assert.equal(config.config.bundle.category, 'Productivity');
+  assert.equal(config.nsisInstallMode, null);
+});
+
+test('app config: multiple ordered configs merge left to right', () => {
+  const config = resolveAppConfig({
+    baseConfig: {
+      productName: 'Shishi',
+      version: '1.0.0',
+      identifier: 'app.shishi.todo',
+      bundle: { publisher: 'Shishi', category: 'Productivity', targets: 'all' },
+    },
+    devConfig: {
+      productName: 'Shishi Dev',
+      identifier: DEV_IDENTIFIER,
+      bundle: { windows: { nsis: { installMode: 'currentUser' } } },
+    },
+    extraConfigs: [
+      {
+        productName: 'Shishi QA',
+        identifier: 'app.shishi.todo.qa',
+        bundle: { category: 'Utilities', targets: null },
+      },
+    ],
+  });
+  assert.equal(config.productName, 'Shishi QA');
+  assert.equal(config.identifier, 'app.shishi.todo.qa');
+  assert.equal(config.publisher, 'Shishi');
+  assert.equal(config.config.bundle.category, 'Utilities');
+  assert.equal('targets' in config.config.bundle, false);
+  assert.equal(config.nsisInstallMode, 'currentUser');
+  assert.deepEqual(config.overriddenKeys, ['bundle', 'identifier', 'productName']);
+
+  // the order is the contract: the last config wins
+  const reversed = resolveAppConfig({
+    baseConfig: { version: '1.0.0', productName: 'Shishi' },
+    devConfig: { productName: 'First' },
+    extraConfigs: [{ productName: 'Second' }],
+  });
+  assert.equal(reversed.productName, 'Second');
+});
+
+test('app config: a wrong version is rejected', () => {
+  const baseConfig = {
+    productName: 'Shishi',
+    version: '0.0.1-dev.1',
+    identifier: 'app.shishi.todo',
+  };
+  assert.throws(
+    () => resolveAppConfig({ baseConfig, devConfig: { version: 'not-a-version' } }),
+    /not a semver version/,
+  );
+  assert.throws(
+    () => resolveAppConfig({ baseConfig: { ...baseConfig, version: '1.0' } }),
+    /not a semver version/,
+  );
+  assert.throws(
+    () => resolveAppConfig({ baseConfig: { ...baseConfig, version: undefined } }),
+    /no version/,
+  );
+  assert.throws(() => resolveAppConfig({}), /base tauri config is unreadable/);
+
+  // an override version that resolves is still bound to the release tag
+  const config = resolveAppConfig({ baseConfig, devConfig: { version: '0.0.2-dev.3' } });
+  assert.equal(config.version, '0.0.2-dev.3');
+  assert.throws(
+    () =>
+      resolveReleaseContext({
+        eventName: 'push',
+        refType: 'tag',
+        refName: 'v0.0.1-dev.1',
+        tagCommitSHA: TAG_SHA,
+        appVersion: config.version,
+      }),
+    /app version 0\.0\.2-dev\.3 != release version 0\.0\.1-dev\.1/,
+  );
+});
+
+test('app config: a Stable/Dev/QA identity conflict is rejected', () => {
+  const baseConfig = {
+    productName: 'Shishi',
+    version: '0.0.1-dev.1',
+    identifier: 'app.shishi.todo',
+  };
+  const devConfig = { productName: 'Shishi Dev', identifier: DEV_IDENTIFIER };
+  const qaConfig = { productName: 'Shishi QA', identifier: 'app.shishi.todo.qa' };
+
+  assert.equal(
+    assertDevConfig(resolveAppConfig({ baseConfig, devConfig })).identifier,
+    DEV_IDENTIFIER,
+  );
+  // the stable base identity alone is never publishable as dev
+  assert.throws(() => assertDevConfig(resolveAppConfig({ baseConfig })), /identifier/);
+  // a QA override that wins the identity is refused
+  assert.throws(
+    () => assertDevConfig(resolveAppConfig({ baseConfig, devConfig: qaConfig })),
+    /identifier/,
+  );
+  assert.throws(
+    () => assertDevConfig(resolveAppConfig({ baseConfig, devConfig, extraConfigs: [qaConfig] })),
+    /identifier/,
+  );
+  assert.throws(
+    () => assertDevConfig({ ...resolveAppConfig({ baseConfig, devConfig }), productName: '' }),
+    /productName/,
+  );
+});
+
+const TAURI_CONFIGS = Object.freeze({
+  base: 'apps/native/src-tauri/tauri.conf.json',
+  dev: 'apps/native/src-tauri/tauri.dev.conf.json',
+  qa: 'apps/native/src-tauri/tauri.qa.conf.json',
+});
+
+function tauriConfig(path) {
+  return JSON.parse(readFileSync(join(REPO_ROOT, path), 'utf8').replace(/^\uFEFF/, ''));
+}
+
+/**
+ * Independent RFC 7386 merge patch, written from the specification instead of
+ * from scripts/release/release-context.mjs, so the two interpreters cannot drift
+ * together unnoticed.
+ */
+function referenceMergePatch(target, patch) {
+  const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isObject(patch)) return patch;
+  const merged = isObject(target) ? { ...target } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete merged[key];
+    else merged[key] = referenceMergePatch(merged[key], value);
+  }
+  return merged;
+}
+
+test('build contract: the merged model equals an independent merge of the real configs', () => {
+  const base = tauriConfig(TAURI_CONFIGS.base);
+  const dev = tauriConfig(TAURI_CONFIGS.dev);
+  const qa = tauriConfig(TAURI_CONFIGS.qa);
+
+  assert.deepEqual(
+    resolveAppConfig({ baseConfig: base, devConfig: dev }).config,
+    referenceMergePatch(base, dev),
+  );
+  assert.deepEqual(
+    resolveAppConfig({ baseConfig: base, devConfig: dev, extraConfigs: [qa] }).config,
+    referenceMergePatch(referenceMergePatch(base, dev), qa),
+  );
+  assert.equal(
+    resolveAppConfig({ baseConfig: base, devConfig: qa }).identifier,
+    tauriConfig(TAURI_CONFIGS.qa).identifier,
+  );
+
+  // the top-level spread this model replaced must stay detectably wrong here,
+  // otherwise the assertions above would stop guarding anything
+  const naiveSpread = { ...base, ...dev };
+  assert.equal(naiveSpread.bundle.targets, undefined);
+  assert.equal(naiveSpread.app.security, undefined);
+  assert.notDeepEqual(resolveAppConfig({ baseConfig: base, devConfig: dev }).config, naiveSpread);
+});
+
+test('build contract: the dev merge keeps the base bundle and app facts tauri needs', () => {
+  const base = tauriConfig(TAURI_CONFIGS.base);
+  const dev = tauriConfig(TAURI_CONFIGS.dev);
+  const config = resolveAppConfig({ baseConfig: base, devConfig: dev });
+
+  assert.equal(config.identifier, DEV_IDENTIFIER);
+  assert.equal(config.productName, dev.productName);
+  assert.equal(config.version, base.version);
+  assert.deepEqual(config.overriddenKeys, Object.keys(dev).sort());
+
+  for (const key of ['active', 'targets', 'category', 'shortDescription', 'longDescription']) {
+    assert.deepEqual(
+      config.config.bundle[key],
+      base.bundle[key],
+      'bundle.' + key + ' must survive',
+    );
+  }
+  assert.equal(
+    config.config.bundle.macOS.minimumSystemVersion,
+    base.bundle.macOS.minimumSystemVersion,
+  );
+  // the dev config overrides the icon array wholesale; it must be the dev array
+  assert.deepEqual(config.config.bundle.icon, dev.bundle.icon);
+  assert.equal(config.config.bundle.icon.length, 6);
+  assert.equal(config.config.bundle.windows.nsis.installMode, dev.bundle.windows.nsis.installMode);
+  assert.equal(config.nsisInstallMode, 'currentUser');
+  // dev declares app.windows, so the whole app object used to be replaced
+  assert.deepEqual(config.config.app.security, base.app.security);
+  assert.equal(config.config.app.windows[0].title, dev.app.windows[0].title);
+  assert.equal(config.config.build.beforeBuildCommand, base.build.beforeBuildCommand);
 });
 
 test('publish gate: missing and empty assets fail before the release is created', () => {
