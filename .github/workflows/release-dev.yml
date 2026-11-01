@@ -5,10 +5,10 @@ name: release-dev
 # not triggered. Artifacts are unsigned QA/dev artifacts, not a production
 # signing claim.
 #
-# Release contract (RC2-D.11 Phase E):
+# Release contract (RC2-D.11 Phase E, extended by RC2-D.15 Phase C/D/E):
 #   * the "context" job resolves and validates ONE release context (version,
 #     tag, tag commit, build commit, app version, artifact version, channel) and
-#     every later job consumes those outputs — no job derives an artifact name
+#     every later job consumes those outputs - no job derives an artifact name
 #     or a version from the ref name or the dispatch input any more;
 #   * the tag must exist, it must be a *-dev.* tag, the app version resolved
 #     from the dev tauri config must equal the release version, and the tag
@@ -16,41 +16,72 @@ name: release-dev
 #     dispatch from a floating branch HEAD can never publish a different tree;
 #   * every build job checks out needs.context.outputs.TagCommitSHA and proves
 #     its HEAD is that commit before building;
-#   * the publish job refuses to create the release unless every expected asset
-#     exists, is non-empty and is covered by SHA256SUMS.txt, and it records a
-#     release manifest (commits, versions, toolchain, asset hashes, run id);
 #   * every third-party action is pinned to a 40-hex commit SHA recorded in
 #     scripts/release/actions.lock.json. Permissions are read-only except on the
-#     publishing job.
+#     staging job and the publishing job.
 #
-# Transactional publish (RC2-D.11): no remote state is modified before every
-# read-only validation has passed, and an incomplete release can never become
-# public.
-#   1. read-only first: the workflow provenance guard, the pre/final asset gates
-#      and "Check the existing release" (a GET by tag through the gh CLI) all run
-#      before anything is written, so a missing asset, a hash mismatch or a
-#      manifest refusal can no longer damage a release that is already public;
+# Android SDK (RC2-D.15 Phase C): the SDK is provisioned by ONE shared step,
+# scripts/release/android-sdk-provision.mjs, and the proven smoke path
+# (.github/workflows/android-smoke.yml) calls the exact same entry point with the
+# same package list - a shell snippet inside a workflow is not shareable, a CI
+# regression now fails when the two workflows diverge again. That step also
+# provisions platforms;android-37, the platform the pinned tauri CLI 2.12.4
+# Gradle template compiles against, which is not in the Android stable channel
+# (stable first, then a preview channel). The check-platform gate after the build
+# fails when the platform is missing: a provisioning warning is never a reported
+# PASS.
+#
+# Two-phase publish (RC2-D.15 Phase D): staging and publishing are separate jobs
+# so the GitHub Environment approval can gate the single write that makes a
+# release public.
+#   1. stage-release, read-only first: the workflow provenance guard, the
+#      pre/final asset gates and "Check the existing release" (a GET by tag
+#      through the gh CLI) all run before anything is written, so a missing
+#      asset, a hash mismatch or a manifest refusal can no longer damage a
+#      release that is already public;
 #   2. write #1 only: the release is created as a DRAFT by the pinned
 #      softprops/action-gh-release (draft: true). An existing release is never
 #      modified, renamed or stripped of assets: it is either a byte-identical
 #      repeat of the same build (no-op) or the run refuses and names the
 #      differences;
-#   3. read-only again: "Verify the published asset set" lists the draft assets
-#      through the gh CLI and compares name, size and sha256 with
+#   3. read-only again: "Verify the staged draft asset set" lists the draft
+#      assets through the gh CLI and compares name, size and sha256 with
 #      release-manifest.json, plus the release target commit and the commit the
-#      published manifest records;
-#   4. write #2, and only after that proof: the draft is flipped to a public
+#      published manifest records. The manifest, its sha256 and the staging
+#      evidence are then uploaded as the stage-evidence artifact;
+#   4. publish-release declares the "dev-pre-release" environment, so required
+#      reviewers - when the maintainer has configured them - block the job. After
+#      the approval it REVALIDATES read-only and only then writes: the same
+#      TagCommitSHA, the same draft release id, the staged manifest (sha256)
+#      against the re-downloaded build outputs, the remote draft asset set, and
+#      the workflow SHA guard;
+#   5. write #2, and only after that proof: the draft is flipped to a public
 #      pre-release with
 #      gh api -X PATCH .../releases/<id> --field draft=false --field prerelease=true
 #      (typed fields, so the API receives JSON booleans rather than strings);
-#   5. read-only last: "Verify the published release provenance" re-reads the
+#   6. read-only last: "Verify the published release provenance" re-reads the
 #      public release and proves it targets TagCommitSHA and carries a manifest
-#      that records the same commit.
+#      that records the same commit. A duplicate run for a version that is
+#      already public revalidates and performs no write at all.
 #
-# Failure residue: a failed or cancelled publish leaves a DRAFT release, which is
-# never publicly visible. Remove it by hand before retrying (a retry over a draft
-# that already carries the exact same build is allowed and only flips it public,
-# but a partial draft must be deleted first):
+# Both jobs share ONE release context: stage-release re-exports the context
+# outputs plus the decision, the release id and the staged manifest sha256
+# through needs.<job>.outputs, and publish-release reads them from there - it
+# never recomputes a version, a tag or an artifact name.
+#
+# The environment gate is a REPOSITORY SETTING, not a workflow fact. This file
+# declares environment: dev-pre-release and its evidence step prints and records
+# what the API reports (gate=enforced|not-configured|unverified); it never
+# pretends to have verified an approval it cannot see, and no step anywhere
+# claims release readiness. Maintainer action: Settings -> Environments ->
+# dev-pre-release -> Required reviewers, at least one reviewer. Without it the
+# publish job runs unapproved and the evidence says so.
+#
+# Failure residue: a failed, cancelled or unapproved run leaves a DRAFT release,
+# which is never publicly visible, plus the evidence artifact of the phase that
+# ran (and the step summary says the draft stays a draft). Remove a partial
+# draft by hand before retrying (a retry over a draft that already carries the
+# exact same build is allowed and only flips it public):
 #     gh release delete <tag> --yes --cleanup-tag=false
 #
 # MANUAL maintenance only, never part of this workflow: the pre-rename generic
@@ -426,6 +457,15 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
 
+      # ONE shared provisioning step (RC2-D.15 Phase C). The compile-SDK
+      # platform, the channel fallback and the package list live in
+      # scripts/release/android-sdk-provision.mjs, which the proven smoke path
+      # calls with the exact same package list; a CI regression fails when the
+      # two workflows drift apart again.
+      - name: Provision the Android SDK (shared step)
+        shell: bash
+        run: node scripts/release/android-sdk-provision.mjs provision
+
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.96.0
@@ -437,15 +477,42 @@ jobs:
         shell: bash
         run: test -f apps/native/src-tauri/tauri.dev.conf.json
 
+      - name: Resolve the dev identity and the version from the dev tauri config
+        shell: bash
+        run: |
+          set -euo pipefail
+          identifier=$(node scripts/release/release-context.mjs config --field identifier)
+          version=$(node scripts/release/release-context.mjs config --field version)
+          test -n "${identifier}" || { echo "::error::the dev tauri config resolved no identifier" >&2; exit 1; }
+          test -n "${version}" || { echo "::error::the dev tauri config resolved no version" >&2; exit 1; }
+          echo "resolved identifier=${identifier} version=${version}"
+          echo "DEV_IDENTIFIER=${identifier}" >> "$GITHUB_ENV"
+          echo "DEV_VERSION=${version}" >> "$GITHUB_ENV"
+
       # The dev config must be in force for init as well as for build: init bakes
       # the identifier and the version into the generated Gradle project.
       - name: Initialize Android project with the dev identity
         working-directory: apps/native
         run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android init --ci --config src-tauri/tauri.dev.conf.json
 
+      - name: Assert the generated Gradle project carries the dev identity
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase init --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
       - name: Build split debug APK/AAB with the dev identity
         working-directory: apps/native
         run: pnpm dlx "@tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}" android build --debug --apk --aab --split-per-abi --config src-tauri/tauri.dev.conf.json
+
+      - name: Assert the Gradle project recorded the resolved versionName
+        shell: bash
+        run: node scripts/release/android-smoke.mjs check-gradle --phase build --identifier "$DEV_IDENTIFIER" --version "$DEV_VERSION"
+
+      # A provisioning warning is never a passing build: this gate fails unless
+      # platforms;android-37 is really installed, and it records whether the
+      # shared step or AGP's own SDK auto-download supplied it.
+      - name: Gate the Android SDK provisioning before any result is reported
+        shell: bash
+        run: node scripts/release/android-sdk-provision.mjs check-platform --gradle-file apps/native/src-tauri/gen/android/app/build.gradle.kts
 
       - name: Verify and rename Android artifacts
         shell: bash
@@ -503,18 +570,33 @@ jobs:
           path: release-android/*
           if-no-files-found: error
 
-  release:
-    name: Verify the artifact set and publish the dev pre-release
+  stage-release:
+    name: Verify the artifact set and stage the draft release
     needs: [context, web, windows, macos, android]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
-    # Serialize publishes of the same resolved version and never cancel one: a
-    # cancelled publish could leave a draft or a half-verified release behind.
+    # Serialize staging of the same resolved version and never cancel one: a
+    # cancelled staging could leave a half-verified draft behind.
     concurrency:
-      group: release-dev-publish-${{ needs.context.outputs.ReleaseVersion }}
+      group: release-dev-stage-${{ needs.context.outputs.ReleaseVersion }}
       cancel-in-progress: false
+    # The one release context, plus what this job decided and staged, so the
+    # publish job never recomputes a version, a tag, an id or an artifact name.
+    outputs:
+      ReleaseVersion: ${{ needs.context.outputs.ReleaseVersion }}
+      ReleaseTag: ${{ needs.context.outputs.ReleaseTag }}
+      TagCommitSHA: ${{ needs.context.outputs.TagCommitSHA }}
+      BuildCommitSHA: ${{ needs.context.outputs.BuildCommitSHA }}
+      AppVersion: ${{ needs.context.outputs.AppVersion }}
+      ArtifactVersion: ${{ needs.context.outputs.ArtifactVersion }}
+      ReleaseChannel: ${{ needs.context.outputs.ReleaseChannel }}
+      Decision: ${{ steps.existing.outputs.decision }}
+      # The id is taken from the step that PROVED the draft after it was created,
+      # falling back to the id check-existing saw (the no-op path needs none).
+      ReleaseId: ${{ steps.staged.outputs.releaseId || steps.existing.outputs.releaseId }}
+      ManifestSHA256: ${{ steps.evidence.outputs.manifestSha256 }}
     env:
       RELEASE_VERSION: ${{ needs.context.outputs.ReleaseVersion }}
       RELEASE_TAG: ${{ needs.context.outputs.ReleaseTag }}
@@ -588,7 +670,7 @@ jobs:
         run: node scripts/release/release-transaction.mjs check-existing --artifacts-dir artifacts
 
       # ---------------------------------------------------------------------
-      # Write phase: the two and only two writes of this workflow.
+      # Write phase: the only write this job is allowed to perform.
       # ---------------------------------------------------------------------
       - name: Create the release as a draft
         if: steps.existing.outputs.decision == 'create-draft'
@@ -602,10 +684,27 @@ jobs:
           body: |
             ## Shishi ${{ needs.context.outputs.ReleaseVersion }}
 
-            Dev pre-release built entirely by GitHub Actions from tag ${{ needs.context.outputs.ReleaseTag }} at commit ${{ needs.context.outputs.TagCommitSHA }}.
+            Unsigned dev pre-release, built entirely by GitHub Actions from tag
+            `${{ needs.context.outputs.ReleaseTag }}` at commit
+            `${{ needs.context.outputs.TagCommitSHA }}`. QA/dev artifacts only: not signed,
+            not notarised, not distributed through a store.
+
+            ### Status
+            - RC2-D.11 through RC2-D.15 are integrated into `main`; this tag is cut from that tree.
+            - The Windows dev identity isolation is verified on a real Windows host.
+            - Every artifact below is verified by CI from the built file itself: the package
+              identifier, the versionName, the native ABI and the artifact names are read back
+              from the artifact, never from the config it was built from.
+
+            ### Not verified
+            - Windows basic reminders have OS-level activity evidence, but notification banners
+              and notification clicks were NOT verified on a host.
+            - The Android APK/AAB are built by CI, but no physical Android device was tested.
+            - The macOS DMGs build for both architectures (arm64 and x64), but they are unsigned
+              and not notarised.
+            - No production-distribution readiness is claimed.
 
             ### Downloads
-
             - **macOS Apple Silicon**: `Shishi-${{ needs.context.outputs.ArtifactVersion }}-macos-arm64.dmg`
             - **macOS Intel**: `Shishi-${{ needs.context.outputs.ArtifactVersion }}-macos-x64.dmg`
             - **Windows x64**: `Shishi_${{ needs.context.outputs.ArtifactVersion }}_x64-setup.exe`
@@ -613,32 +712,187 @@ jobs:
               armv7 (`android-arm`), arm64 (`android-arm64`), x86 (`android-x86`), x86_64 (`android-x86_64`).
             - **Web**: `shishi-web-${{ needs.context.outputs.ArtifactVersion }}.zip`
             - **Checksums**: `SHA256SUMS.txt` plus the macOS `.sha256` files.
-            - **Provenance**: `release-manifest.json` (commit SHA, tag SHA, app version, channel, toolchain versions, asset sizes and sha256, workflow run id).
+            - **Provenance**: `release-manifest.json` (commit SHA, tag SHA, app version, channel,
+              toolchain versions, asset sizes and sha256, workflow run id).
 
-            Unsigned QA/dev artifacts. Windows notification actions remain gated;
-            Windows platform is NOT_READY. This release does not merge PR #5 and
-            is not a production release. Tauri updater signatures/latest.json are
-            not published because no signing key is configured.
+            Publishing this draft is a separate, approval-gated job: it revalidates the tag
+            commit, the draft release id and every asset hash before the single call that makes
+            the release public. Tauri updater signatures and `latest.json` are not published
+            because no signing key is configured.
           files: |
             artifacts/*
           token: ${{ github.token }}
 
-      - name: Verify the published asset set
+      - name: Verify the staged draft asset set
+        id: staged
         if: steps.existing.outputs.decision != 'noop'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts
+          EXPECTED_RELEASE_ID: ${{ steps.existing.outputs.release-id }}
+        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts --expect-release-id "${EXPECTED_RELEASE_ID}"
 
-      - name: Publish the verified draft as a public pre-release
-        if: steps.existing.outputs.decision != 'noop'
+      # Reviewable evidence of this phase, success or failure: the manifest, its
+      # sha256, SHA256SUMS and a record that says whether the release is still a
+      # draft. It runs with if: always() on purpose.
+      - name: Write the staging evidence
+        id: evidence
+        if: always()
+        shell: bash
+        env:
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          STAGE_DECISION: ${{ steps.existing.outputs.decision }}
+          RELEASE_JOB_STATUS: ${{ job.status }}
+        run: node scripts/release/release-transaction.mjs write-evidence --phase stage --artifacts-dir artifacts --out-dir stage-evidence
+
+      - name: Upload the staging evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stage-evidence
+          path: stage-evidence/*
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish-release:
+    name: Publish the staged draft as a public pre-release (approval gate)
+    needs: stage-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The gate. GitHub pauses this job until a required reviewer of the
+    # "dev-pre-release" Environment approves it - WHEN the maintainer has
+    # configured that environment (Settings -> Environments -> dev-pre-release
+    # -> Required reviewers). The workflow cannot create or verify that setting;
+    # the evidence step below reports what the API says and no step claims
+    # release readiness.
+    environment: dev-pre-release
+    permissions:
+      contents: write
+    # Publishing must remain non-cancellable: a cancelled publish could leave a
+    # draft behind, or a release whose verification never ran.
+    concurrency:
+      group: release-dev-publish-${{ needs.stage-release.outputs.ReleaseVersion }}
+      cancel-in-progress: false
+    env:
+      RELEASE_VERSION: ${{ needs.stage-release.outputs.ReleaseVersion }}
+      RELEASE_TAG: ${{ needs.stage-release.outputs.ReleaseTag }}
+      APP_VERSION: ${{ needs.stage-release.outputs.AppVersion }}
+      ARTIFACT_VERSION: ${{ needs.stage-release.outputs.ArtifactVersion }}
+      TAG_COMMIT_SHA: ${{ needs.stage-release.outputs.TagCommitSHA }}
+      BUILD_COMMIT_SHA: ${{ needs.stage-release.outputs.BuildCommitSHA }}
+      RELEASE_CHANNEL: ${{ needs.stage-release.outputs.ReleaseChannel }}
+      STAGE_DECISION: ${{ needs.stage-release.outputs.Decision }}
+      STAGED_RELEASE_ID: ${{ needs.stage-release.outputs.ReleaseId }}
+      STAGED_MANIFEST_SHA256: ${{ needs.stage-release.outputs.ManifestSHA256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.stage-release.outputs.TagCommitSHA }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Assert the checkout is the release tag commit
+        shell: bash
+        run: node scripts/release/release-context.mjs assert-checkout
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: stage-evidence
+          path: staged
+
+      # ---------------------------------------------------------------------
+      # Read-only revalidation AFTER the approval. Everything below only reads
+      # until "Publish the verified draft"; any mismatch fails without writing.
+      # ---------------------------------------------------------------------
+      - name: Re-guard the workflow provenance
+        shell: bash
+        env:
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          INPUT_ALLOW_FOREIGN: ${{ inputs.allow_foreign_workflow }}
+        run: node scripts/release/release-transaction.mjs guard-workflow
+
+      - name: Adopt the staged release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${STAGE_DECISION}" != "noop" ] && [ -z "${STAGED_RELEASE_ID}" ]; then
+            echo "::error::stage-release recorded no draft release id for decision '${STAGE_DECISION}': the publish job cannot pin the release it would write to" >&2
+            exit 1
+          fi
+          echo "stage-release verified release ${STAGED_RELEASE_ID} of tag ${RELEASE_TAG} at ${TAG_COMMIT_SHA}"
+          node scripts/release/release-transaction.mjs adopt-staged --artifacts-dir artifacts --staged-dir staged
+
+      - name: Revalidate the staged asset set
+        shell: bash
+        run: node scripts/release/release-context.mjs verify-assets --artifacts-dir artifacts --stage final
+
+      - name: Revalidate the draft against the remote release
+        if: needs.stage-release.outputs.Decision != 'noop'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs publish-draft --artifacts-dir artifacts
+        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts --expect-release-id "${STAGED_RELEASE_ID}"
 
-      - name: Verify the published release provenance
+      # A duplicate run for a version that is already public must not write
+      # anything: it only proves the published release is byte-identical.
+      - name: Revalidate the already published release (duplicate run)
+        if: needs.stage-release.outputs.Decision == 'noop'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir artifacts
+
+      - name: Inspect the environment gate (evidence only)
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs environment-gate --environment dev-pre-release
+
+      # ---------------------------------------------------------------------
+      # Write phase: the single PATCH that publishes, and only after the proof.
+      # ---------------------------------------------------------------------
+      - name: Publish the verified draft
+        if: needs.stage-release.outputs.Decision != 'noop'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs publish-draft --artifacts-dir artifacts --expect-release-id "${STAGED_RELEASE_ID}"
+
+      - name: Verify the published release provenance
+        if: needs.stage-release.outputs.Decision != 'noop'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir artifacts
+
+      - name: Write the publishing evidence
+        id: evidence
+        if: always()
+        shell: bash
+        env:
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          STAGE_DECISION: ${{ needs.stage-release.outputs.Decision }}
+          RELEASE_JOB_STATUS: ${{ job.status }}
+          RELEASE_ENVIRONMENT_NAME: dev-pre-release
+          RELEASE_ENVIRONMENT_GATE: ${{ steps.gate.outputs.gate }}
+          RELEASE_ENVIRONMENT_ENFORCED: ${{ steps.gate.outputs.enforced }}
+        run: node scripts/release/release-transaction.mjs write-evidence --phase publish --artifacts-dir artifacts --out-dir publish-evidence
+
+      - name: Upload the publishing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publish-evidence
+          path: publish-evidence/*
+          if-no-files-found: warn
+          retention-days: 30

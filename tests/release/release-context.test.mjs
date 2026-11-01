@@ -56,7 +56,9 @@ const TAG_SHA = '3f4d2c1b0a99887766554433221100ffeeddccbb';
 const OTHER_SHA = '00112233445566778899aabbccddeeff00112233';
 
 function workflowText(path) {
-  return readFileSync(join(REPO_ROOT, path), 'utf8');
+  // A Windows checkout has CRLF in the working tree; every assertion below is
+  // about content, not about the line terminator git happens to check out.
+  return readFileSync(join(REPO_ROOT, path), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function jobBlock(text, jobId) {
@@ -840,16 +842,22 @@ test('workflow pins: no mutable action refs remain in the release path', () => {
 
 test('workflow pins: the publishing job only runs pinned actions', () => {
   const text = workflowText('.github/workflows/release-dev.yml');
-  const block = jobBlock(text, 'release');
-  assert.ok(block, 'release-dev.yml must keep a release job');
-  const refs = actionRefs(block);
-  assert.ok(refs.length >= 3, 'the publish job must checkout, download artifacts and publish');
+  const stage = jobBlock(text, 'stage-release');
+  const publish = jobBlock(text, 'publish-release');
+  assert.ok(stage, 'release-dev.yml must keep a staging job');
+  assert.ok(publish, 'release-dev.yml must keep a publishing job');
+  const refs = actionRefs(stage + '\n' + publish);
+  assert.ok(refs.length >= 5, 'both jobs must checkout, download artifacts and upload evidence');
   for (const entry of refs) {
-    assert.ok(isPinnedRef(entry.ref), 'publish job uses an unpinned action: ' + entry.ref);
+    assert.ok(isPinnedRef(entry.ref), 'release job uses an unpinned action: ' + entry.ref);
   }
   assert.ok(
-    refs.some((entry) => entry.ref.startsWith('softprops/action-gh-release@')),
-    'the publish job must create the release with a pinned gh-release action',
+    actionRefs(stage).some((entry) => entry.ref.startsWith('softprops/action-gh-release@')),
+    'the staging job must create the release with a pinned gh-release action',
+  );
+  assert.ok(
+    !actionRefs(publish).some((entry) => entry.ref.startsWith('softprops/action-gh-release@')),
+    'the publishing job must not create a release',
   );
 });
 
@@ -869,7 +877,7 @@ test('workflow wiring: every build job consumes the single release context', () 
   for (const output of outputs) {
     assert.ok(contextBlock.includes(output + ':'), 'context job must expose ' + output);
   }
-  for (const job of ['web', 'windows', 'macos', 'android', 'release']) {
+  for (const job of ['web', 'windows', 'macos', 'android', 'stage-release']) {
     const block = jobBlock(text, job);
     assert.ok(block, 'release-dev.yml must keep the ' + job + ' job');
     assert.ok(/needs:.*\bcontext\b/.test(block), job + ' must depend on context');
@@ -878,6 +886,35 @@ test('workflow wiring: every build job consumes the single release context', () 
       block.includes('assert-checkout'),
       job + ' must assert its checkout is the tag commit',
     );
+  }
+  // The publish job must not re-derive anything: it reads the single context the
+  // staging job re-exports, plus the decision, the release id and the manifest
+  // sha256 the staging job recorded.
+  const publish = jobBlock(text, 'publish-release');
+  assert.ok(publish, 'release-dev.yml must keep the publish-release job');
+  assert.ok(/needs:\s*stage-release\b/.test(publish), 'publish-release must depend on staging');
+  assert.ok(
+    publish.includes('needs.stage-release.outputs.'),
+    'publish-release must read the staging outputs',
+  );
+  for (const output of ['ReleaseVersion', 'ReleaseTag', 'TagCommitSHA', 'ArtifactVersion']) {
+    assert.ok(
+      publish.includes('needs.stage-release.outputs.' + output),
+      'publish-release must consume ' + output + ' from stage-release',
+    );
+  }
+  assert.ok(publish.includes('assert-checkout'), 'publish-release must assert its checkout too');
+  const staging = jobBlock(text, 'stage-release');
+  for (const output of [
+    'ReleaseVersion:',
+    'ReleaseTag:',
+    'TagCommitSHA:',
+    'ArtifactVersion:',
+    'Decision:',
+    'ReleaseId:',
+    'ManifestSHA256:',
+  ]) {
+    assert.ok(staging.includes(output), 'stage-release must expose ' + output);
   }
   for (const job of ['web', 'windows', 'macos', 'android']) {
     const block = jobBlock(text, job);
@@ -892,7 +929,10 @@ test('workflow wiring: release-dev.yml has exactly one source of truth for the v
   const text = workflowText('.github/workflows/release-dev.yml');
   const contextBlock = jobBlock(text, 'context');
   const others = Object.fromEntries(
-    ['web', 'windows', 'macos', 'android', 'release'].map((job) => [job, jobBlock(text, job)]),
+    ['web', 'windows', 'macos', 'android', 'stage-release', 'publish-release'].map((job) => [
+      job,
+      jobBlock(text, job),
+    ]),
   );
   assert.equal(
     text.split('github.event.inputs.version').length - 1,
@@ -932,8 +972,13 @@ test('workflow permissions: write access is limited to the publishing job', () =
     /^permissions:\n  contents: read$/m,
     'top-level permissions must be contents: read',
   );
-  assert.equal(text.split('contents: write').length - 1, 1, 'contents: write belongs to one job');
-  assert.ok(jobBlock(text, 'release').includes('contents: write'));
+  assert.equal(
+    text.split('contents: write').length - 1,
+    2,
+    'contents: write belongs to the staging and the publishing job',
+  );
+  assert.ok(jobBlock(text, 'stage-release').includes('contents: write'));
+  assert.ok(jobBlock(text, 'publish-release').includes('contents: write'));
   for (const job of ['context', 'web', 'windows', 'macos', 'android']) {
     assert.ok(
       !jobBlock(text, job).includes('contents: write'),
@@ -943,18 +988,31 @@ test('workflow permissions: write access is limited to the publishing job', () =
 });
 
 test('workflow gates: the publish job verifies assets and identity before publishing', () => {
-  const block = jobBlock(workflowText('.github/workflows/release-dev.yml'), 'release');
-  const verifyIndex = block.indexOf('verify-assets');
-  const manifestIndex = block.indexOf('manifest --artifacts-dir');
-  const publishIndex = block.indexOf('softprops/action-gh-release@');
-  assert.ok(verifyIndex !== -1, 'the publish job must run the asset gate');
-  assert.ok(manifestIndex !== -1, 'the publish job must write the release manifest');
-  assert.ok(publishIndex !== -1, 'the publish job must publish');
-  assert.ok(verifyIndex < publishIndex, 'the asset gate must run before publishing');
-  assert.ok(manifestIndex < publishIndex, 'the manifest must be written before publishing');
-  assert.ok(block.includes('fail_on_unmatched_files: true'));
-  assert.ok(block.includes('prerelease: true'));
-  assert.ok(block.includes(MANIFEST_NAME), 'the manifest must be attached to the release');
+  const text = workflowText('.github/workflows/release-dev.yml');
+  const stage = jobBlock(text, 'stage-release');
+  const verifyIndex = stage.indexOf('verify-assets');
+  const manifestIndex = stage.indexOf('manifest --artifacts-dir');
+  const createIndex = stage.indexOf('softprops/action-gh-release@');
+  assert.ok(verifyIndex !== -1, 'the staging job must run the asset gate');
+  assert.ok(manifestIndex !== -1, 'the staging job must write the release manifest');
+  assert.ok(createIndex !== -1, 'the staging job must create the draft');
+  assert.ok(verifyIndex < createIndex, 'the asset gate must run before the draft');
+  assert.ok(manifestIndex < createIndex, 'the manifest must be written before the draft');
+  assert.ok(stage.includes('fail_on_unmatched_files: true'));
+  assert.ok(stage.includes('prerelease: true'));
+  assert.ok(stage.includes(MANIFEST_NAME), 'the manifest must be attached to the release');
+
+  // After the approval the publish job revalidates every fact read-only and only
+  // then performs the single write.
+  const publish = jobBlock(text, 'publish-release');
+  const revalidateIndex = publish.indexOf('verify-assets');
+  const adoptIndex = publish.indexOf('adopt-staged');
+  const patchIndex = publish.indexOf('publish-draft');
+  assert.ok(adoptIndex !== -1, 'the publish job must adopt the staged identity');
+  assert.ok(revalidateIndex !== -1, 'the publish job must revalidate the asset set');
+  assert.ok(patchIndex !== -1, 'the publish job must flip the draft public');
+  assert.ok(adoptIndex < patchIndex, 'the staged identity must be proven before the write');
+  assert.ok(revalidateIndex < patchIndex, 'the asset gate must run before the write');
 });
 
 test('workflow expressions: all four release workflows pass the expression lint today', () => {
