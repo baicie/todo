@@ -1162,7 +1162,10 @@ test('workflow transaction: the publish job records the environment gate instead
   const publish = jobBlock(text, 'publish-release');
   assert.match(publish, /environment: dev-pre-release/, 'the gate must be declared');
   assert.ok(publish.includes('environment-gate'), 'the publish job must inspect the gate');
-  assert.ok(publish.includes('RELEASE_ENVIRONMENT_GATE'), 'the gate result must reach the evidence');
+  assert.ok(
+    publish.includes('RELEASE_ENVIRONMENT_GATE'),
+    'the gate result must reach the evidence',
+  );
   assert.ok(
     publish.includes('RELEASE_ENVIRONMENT_ENFORCED'),
     'the enforced flag must reach the evidence',
@@ -1170,7 +1173,10 @@ test('workflow transaction: the publish job records the environment gate instead
   assert.ok(publish.includes('write-evidence --phase publish'));
   assert.ok(stage.includes('write-evidence --phase stage'));
   assert.ok(stage.includes('name: stage-evidence'), 'staging must upload its evidence');
-  assert.ok(publish.includes('name: stage-evidence'), 'publishing must consume the staged evidence');
+  assert.ok(
+    publish.includes('name: stage-evidence'),
+    'publishing must consume the staged evidence',
+  );
   assert.ok(publish.includes('--staged-dir staged'));
   assert.ok(publish.includes('--expect-release-id'), 'the write must pin the staged release id');
   assert.match(

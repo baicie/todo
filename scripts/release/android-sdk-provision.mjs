@@ -367,15 +367,11 @@ function installed(dir, pkg) {
 }
 
 function installPackage(bin, dir, pkg, extraArgs = []) {
-  const result = spawnSync(
-    bin,
-    ['--sdk_root=' + dir, '--install', pkg, ...extraArgs],
-    {
-      encoding: 'utf8',
-      shell: process.platform === 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
+  const result = spawnSync(bin, ['--sdk_root=' + dir, '--install', pkg, ...extraArgs], {
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   if (result.error) return false;
   return result.status === 0;
 }
@@ -535,7 +531,9 @@ function checkPlatformCommand(options) {
     '| channels tried | ' + (channelsTried.join(', ') || '(none)') + ' |',
     '| ' + ANDROID_COMPILE_SDK_PACKAGE + ' present | ' + (present ? 'yes' : 'no') + ' |',
     '| provisioned by | ' + gate.provisionedBy + ' |',
-    '| gradle compileSdk | ' + (gradleCompileSdk === null ? '(not found)' : gradleCompileSdk) + ' |',
+    '| gradle compileSdk | ' +
+      (gradleCompileSdk === null ? '(not found)' : gradleCompileSdk) +
+      ' |',
     '',
     'A provisioning warning is never a passing build: this gate is what turns the platform presence',
     'into evidence, and it fails when the platform is missing.',

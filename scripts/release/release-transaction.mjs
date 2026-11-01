@@ -43,7 +43,14 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -754,11 +761,7 @@ export function environmentReviewers(protectionRules = []) {
  * artifacts re-downloaded for publishing and with the release context passed
  * through needs.<job>.outputs, so nothing is recomputed differently.
  */
-export function adoptStagedRelease({
-  stagedManifest = null,
-  inventory = [],
-  expected = {},
-} = {}) {
+export function adoptStagedRelease({ stagedManifest = null, inventory = [], expected = {} } = {}) {
   if (!stagedManifest || typeof stagedManifest !== 'object') {
     return {
       ok: false,
@@ -786,13 +789,23 @@ export function adoptStagedRelease({
     }
     if (file.size !== asset.size) {
       failures.push(
-        'the re-downloaded ' + name + ' is ' + file.size + ' bytes but the staged manifest records ' + asset.size,
+        'the re-downloaded ' +
+          name +
+          ' is ' +
+          file.size +
+          ' bytes but the staged manifest records ' +
+          asset.size,
       );
       continue;
     }
     if (hexOf(file.sha256) !== hexOf(asset.sha256)) {
       failures.push(
-        'the re-downloaded ' + name + ' has sha256 ' + file.sha256 + ' but the staged manifest records ' + asset.sha256,
+        'the re-downloaded ' +
+          name +
+          ' has sha256 ' +
+          file.sha256 +
+          ' but the staged manifest records ' +
+          asset.sha256,
       );
     }
   }
@@ -927,7 +940,9 @@ export function buildReleaseEvidence({
     fail('the evidence phase must be one of ' + EVIDENCE_PHASES.join(', '));
   }
   const pipeline = describePipelineOutcome({
-    stage: { decision: decision ?? (phase === EVIDENCE_PHASE_STAGE ? null : DECISION_PUBLISH_DRAFT) },
+    stage: {
+      decision: decision ?? (phase === EVIDENCE_PHASE_STAGE ? null : DECISION_PUBLISH_DRAFT),
+    },
     publish: phase === EVIDENCE_PHASE_STAGE ? null : { outcome: outcome ?? 'pending' },
   });
   const gate = environment
@@ -1550,7 +1565,10 @@ function writeEvidenceCommand(options) {
     else failures.push(SUMS_NAME + ' is missing from ' + artifacts);
   } else {
     failures.push(
-      MANIFEST_NAME + ' is missing from ' + artifacts + ': this run has no release identity to show',
+      MANIFEST_NAME +
+        ' is missing from ' +
+        artifacts +
+        ': this run has no release identity to show',
     );
   }
   const declared = String(options['manifest-sha256'] ?? '').trim();
