@@ -16,12 +16,40 @@
 - 权限矩阵：owner/editor/viewer/非成员。
 - 使用 cargo test 的 deterministic cases；可选 `cargo-fuzz` 目标不进入默认 CI。
 
+**状态（2026-11-01）**：`apps/api/tests/postgres_boundaries.rs`。
+
+- 无需数据库的 8 个用例（默认 `cargo test` 运行）：验证码/refresh 的 malformed JSON、
+  未知字段、Content-Type、带与不带 Content-Length 的超大 body（断言 JSON 413）、
+  缺失/伪造 token、不支持的 method。
+- 需要 PostgreSQL 的用例（`--ignored`）：sync 的 malformed 请求、`client_seq`
+  为 0/乱序/重复/有间隔（整批回滚）、`op_id` 回放返回原回执且不同 payload 不会被应用、
+  回执清理后以设备水位为准、跨设备/跨账号复用 `op_id`、跨账号 list/task 引用、
+  bootstrap/export 只返回本账号数据、refresh 轮换与重用撤销、push 路由错误契约；
+  共享清单 8 个路由 × owner/editor/viewer/非成员的权限矩阵（每格独立清单，断言状态码
+  与是否改动数据）、malformed body 与 revision、`op_id` 回放。
+- 发现并修复：sync 中含 NUL 的文本/标签/recurrence 与超出 PostgreSQL 日期范围的
+  日期原返回 500，现为 `VALIDATION_FAILED` 拒绝回执；设备名含 NUL 原返回 500，
+  现在含任何控制字符都返回 400；push 订阅路由原返回纯文本错误，现为 JSON。
+- 未修复：`shared.rs` 同类输入（NUL、超范围日期）仍返回 500，由
+  `known_defect_shared_routes_reject_values_postgres_cannot_store` 记录，CI 以
+  `--skip known_defect_` 跳过。`cargo-fuzz` 目标未实现。
+- 实测：本机 Windows + PostgreSQL 18.6 全部通过；CI（PostgreSQL 16）尚未运行。
+
 ## 3. 迁移测试
 
 - PostgreSQL：从每个历史 migration 版本升级到最新，验证数据保留。
 - SQLite：v1 schema 数据库升级到 tags/shared 表，验证 outbox/cursor 不丢。
 - IndexedDB：Dexie v1/v2 数据升级到 v3，旧任务仍可读取。
 - 备份恢复：导出 → 清空 → 恢复，任务/清单/步骤/日期完全一致。
+
+**状态（2026-11-01）**：PostgreSQL 部分由 `apps/api/tests/postgres_migrations.rs`
+覆盖。对每个历史版本新建随机名临时库（结束时删除，断言失败也会删除），只应用到该版本，
+写入该版本 schema 下的代表数据，再用 API 的 `MIGRATOR` 升级到最新，断言：原有行逐列
+保留、schema（列/约束/索引）与全新安装一致且无未验证约束、新增约束对旧行生效、当前 API
+可读取升级后的数据（readyz、export、sync 拉取、共享清单）、重复执行迁移无副作用。
+本机 PostgreSQL 18.6 实测通过（6 个版本，约 7.5s）；CI 尚未运行。新增迁移会自动纳入
+升级路径，但新表需在 `seed_for` 中补充种子数据才有数据保留断言。SQLite 与 IndexedDB
+部分不在本次范围内。
 
 ## 4. 备份恢复 CI
 
@@ -36,6 +64,17 @@
 7. 清理临时卷。
 
 CI 中作为可选 job，使用 Docker 服务和 `RESTORE_CONFIRM=YES`。
+
+**状态（2026-11-01）**：脚本已实现，复用 `backup.sh` / `restore.sh`。除上述步骤外还
+检查 `restore.sh` 拒绝未确认与 checksum 不符的 dump、恢复后每张表的行指纹与备份前一致、
+恢复后 API 就绪且 `ops all --dry-run` 通过、在已修改的库上再次恢复可回到备份状态。
+`.github/workflows/api.yml` 新增 `backup-restore` job：`workflow_dispatch` 时总是运行，
+push/PR 时仅在改动 `scripts/ops/`、`db/postgres/`、`docker-compose.yml` 或
+`apps/api/src/{db,ops}.rs` 时运行，使用 `--compose` 模式。
+
+- 实测：本机以现有服务器模式（PostgreSQL 18.6，Git Bash）完整通过。
+- NOT_RUN：`--compose` 模式（本机 Docker Desktop 无法启动）与 CI job（尚未推送），
+  需在 ubuntu runner 上首次验证。
 
 ## 5. SBOM 与依赖
 
