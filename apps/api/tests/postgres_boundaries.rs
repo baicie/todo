@@ -1588,3 +1588,306 @@ async fn shared_list_permission_matrix() {
         assert_eq!(listed, role.map(|role| json!(role)), "{actor:?}");
     }
 }
+
+fn with_header(mut request: Request<Body>, name: &'static str, value: &str) -> Request<Body> {
+    request
+        .headers_mut()
+        .insert(name, HeaderValue::from_str(value).unwrap());
+    request
+}
+
+async fn list_revision(pool: &PgPool, list_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT revision FROM shared_lists WHERE id = $1")
+        .bind(list_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn shared_routes_reject_malformed_bodies_and_revisions() {
+    let (app, pool) = pg_app().await;
+    let users = SharedUsers::login(&app, &pool).await;
+    let fixture = shared_fixture(&pool, &users).await;
+    let token = Some(users.owner.access.as_str());
+    let list = format!("/api/v1/shared/lists/{}", fixture.list_id);
+    let tasks = format!("{list}/tasks");
+    let task = format!("{tasks}/{}", fixture.task_id);
+    let member = format!("{list}/members/{}", fixture.target_id);
+    let owned_lists = "SELECT count(*) FROM shared_lists WHERE owner_id = $1";
+    let lists_before = count(&pool, owned_lists, users.owner.user_id).await;
+    let before = shared_state(&pool, fixture.list_id).await;
+
+    let writes = [
+        (Method::POST, "/api/v1/shared/lists".to_owned()),
+        (Method::DELETE, list.clone()),
+        (Method::POST, tasks.clone()),
+        (Method::PATCH, task.clone()),
+        (Method::DELETE, task.clone()),
+        (Method::POST, format!("{list}/members")),
+        (Method::PATCH, member.clone()),
+        (Method::DELETE, member),
+    ];
+    for (method, uri) in &writes {
+        for body in [
+            "{",
+            "null",
+            "[]",
+            "\"text\"",
+            "{\"revision\": \"1\"}",
+            "{\"revision\": 1, \"owner_id\": \"00000000-0000-0000-0000-000000000000\"}",
+        ] {
+            let request = request(
+                method.clone(),
+                uri,
+                token,
+                Some("application/json"),
+                body.to_owned(),
+            );
+            send(&app, request).await.assert_error_in(
+                &format!("{method} {uri} {body}"),
+                StatusCode::BAD_REQUEST,
+                "VALIDATION_FAILED",
+            );
+        }
+    }
+
+    let patch = |body: Value| json_request(Method::PATCH, &task, token, &body);
+    let cases = [
+        (
+            "missing revision",
+            patch(json!({ "title": "x" })),
+            StatusCode::BAD_REQUEST,
+            "REVISION_REQUIRED",
+        ),
+        (
+            "zero revision",
+            patch(json!({ "title": "x", "revision": 0 })),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "negative revision",
+            patch(json!({ "title": "x", "revision": -1 })),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "non-numeric If-Match",
+            with_header(patch(json!({ "title": "x" })), "if-match", "\"abc\""),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "If-Match disagrees with body",
+            with_header(
+                patch(json!({ "title": "x", "revision": 1 })),
+                "if-match",
+                "\"2\"",
+            ),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "no task fields",
+            patch(json!({ "revision": 1 })),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "stale revision",
+            patch(json!({ "title": "x", "revision": 2 })),
+            StatusCode::CONFLICT,
+            "REVISION_CONFLICT",
+        ),
+        (
+            "list id is not a UUID",
+            request(
+                Method::GET,
+                "/api/v1/shared/lists/not-a-uuid",
+                token,
+                None,
+                Body::empty(),
+            ),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "task id is not a UUID",
+            json_request(
+                Method::PATCH,
+                &format!("{tasks}/not-a-uuid"),
+                token,
+                &json!({ "title": "x", "revision": 1 }),
+            ),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        ),
+        (
+            "task in another list",
+            json_request(
+                Method::PATCH,
+                &format!("{tasks}/{}", Uuid::new_v4()),
+                token,
+                &json!({ "title": "x", "revision": 1 }),
+            ),
+            StatusCode::NOT_FOUND,
+            "SHARED_TASK_NOT_FOUND",
+        ),
+        (
+            "oversized create body without Content-Length",
+            oversized_request(Method::POST, &tasks, token, false),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+        ),
+        (
+            "oversized delete body without Content-Length",
+            oversized_request(Method::DELETE, &task, token, false),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+        ),
+    ];
+    for (context, request, status, code) in cases {
+        let reply = send(&app, request).await;
+        reply.assert_error_in(context, status, code);
+        if code == "REVISION_CONFLICT" {
+            assert_eq!(reply.body["current_revision"], 1, "{context}");
+        }
+    }
+
+    assert_eq!(shared_state(&pool, fixture.list_id).await, before);
+    assert_eq!(
+        count(&pool, owned_lists, users.owner.user_id).await,
+        lists_before
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn shared_op_ids_replay_the_original_result() {
+    let (app, pool) = pg_app().await;
+    let users = SharedUsers::login(&app, &pool).await;
+    let fixture = shared_fixture(&pool, &users).await;
+    let owner = Some(users.owner.access.as_str());
+    let editor = Some(users.editor.access.as_str());
+    let list = format!("/api/v1/shared/lists/{}", fixture.list_id);
+    let tasks = format!("{list}/tasks");
+    let task_id = Uuid::new_v4();
+    let task = format!("{tasks}/{task_id}");
+
+    // Create: a retry returns the original task even with a stale revision or
+    // a different payload, and never inserts or bumps the revision twice.
+    let create_op = Uuid::new_v4();
+    let create = json!({ "id": task_id, "title": "Replay", "revision": 1, "op_id": create_op });
+    let reply = send(&app, json_request(Method::POST, &tasks, owner, &create)).await;
+    reply.assert_status(StatusCode::OK);
+    assert_eq!(reply.body["revision"], 2);
+    let mut altered = create.clone();
+    altered["title"] = json!("Altered");
+    for body in [create, altered] {
+        let reply = send(&app, json_request(Method::POST, &tasks, owner, &body)).await;
+        reply.assert_status(StatusCode::OK);
+        assert_eq!(reply.body["id"], json!(task_id));
+        assert_eq!(reply.body["title"], "Replay");
+    }
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 2);
+    let task_rows = "SELECT count(*) FROM shared_tasks WHERE id = $1";
+    assert_eq!(count(&pool, task_rows, task_id).await, 1);
+
+    // Another member cannot reuse the op_id.
+    let reuse = json!({ "title": "Editor", "revision": 2, "op_id": create_op });
+    send(&app, json_request(Method::PATCH, &task, editor, &reuse))
+        .await
+        .assert_error(StatusCode::CONFLICT, "OP_ID_CONFLICT");
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 2);
+
+    // Patch.
+    let patch_op = Uuid::new_v4();
+    let patch = json!({ "title": "Patched", "revision": 2, "op_id": patch_op });
+    let reply = send(&app, json_request(Method::PATCH, &task, editor, &patch)).await;
+    reply.assert_status(StatusCode::OK);
+    assert_eq!(reply.body["title"], "Patched");
+    let mut altered = patch.clone();
+    altered["title"] = json!("Altered");
+    for body in [patch, altered] {
+        let reply = send(&app, json_request(Method::PATCH, &task, editor, &body)).await;
+        reply.assert_status(StatusCode::OK);
+        assert_eq!(reply.body["title"], "Patched");
+    }
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 3);
+
+    // Delete.
+    let delete = json!({ "revision": 3, "op_id": Uuid::new_v4() });
+    for _ in 0..2 {
+        let reply = send(&app, json_request(Method::DELETE, &task, editor, &delete)).await;
+        reply.assert_status(StatusCode::NO_CONTENT);
+    }
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 4);
+
+    // Member role change.
+    let member = format!("{list}/members/{}", fixture.target_id);
+    let role = json!({ "role": "editor", "revision": 4, "op_id": Uuid::new_v4() });
+    for _ in 0..2 {
+        let reply = send(&app, json_request(Method::PATCH, &member, owner, &role)).await;
+        reply.assert_status(StatusCode::OK);
+        assert_eq!(reply.body["role"], "editor");
+    }
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 5);
+    let receipts = "SELECT count(*) FROM shared_op_receipts WHERE list_id = $1";
+    assert_eq!(count(&pool, receipts, fixture.list_id).await, 4);
+}
+
+/// `apps/api/src/shared.rs` validates lengths but not NUL characters or the
+/// PostgreSQL date range, so these inputs reach the database and fail as 500.
+/// shared.rs is being changed in a parallel branch, so the fix is left to it.
+#[tokio::test]
+#[ignore = "known defect in shared.rs: NUL characters and out-of-range dates return 500 instead of 400; run explicitly"]
+async fn known_defect_shared_routes_reject_values_postgres_cannot_store() {
+    let (app, pool) = pg_app().await;
+    let users = SharedUsers::login(&app, &pool).await;
+    let fixture = shared_fixture(&pool, &users).await;
+    let token = Some(users.owner.access.as_str());
+    let list = format!("/api/v1/shared/lists/{}", fixture.list_id);
+    let tasks = format!("{list}/tasks");
+    let cases = [
+        (
+            "NUL in list name",
+            Method::POST,
+            "/api/v1/shared/lists".to_owned(),
+            json!({ "name": "a\u{0}b" }),
+        ),
+        (
+            "NUL in task title",
+            Method::POST,
+            tasks.clone(),
+            json!({ "title": "a\u{0}b", "revision": 1 }),
+        ),
+        (
+            "NUL in task note",
+            Method::POST,
+            tasks.clone(),
+            json!({ "title": "ok", "note": "a\u{0}b", "revision": 1 }),
+        ),
+        (
+            "due_on before PostgreSQL's date range",
+            Method::POST,
+            tasks.clone(),
+            json!({ "title": "ok", "due_on": "-5000-01-01", "revision": 1 }),
+        ),
+        (
+            "NUL in patched task title",
+            Method::PATCH,
+            format!("{tasks}/{}", fixture.task_id),
+            json!({ "title": "a\u{0}b", "revision": 1 }),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (context, method, uri, body) in cases {
+        let reply = send(&app, json_request(method, &uri, token, &body)).await;
+        if reply.status != StatusCode::BAD_REQUEST || reply.body["code"] != "VALIDATION_FAILED" {
+            failures.push(format!("{context}: {} {}", reply.status, reply.body));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
