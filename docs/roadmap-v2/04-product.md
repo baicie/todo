@@ -140,7 +140,7 @@ POST   /api/v1/shared/invitations/{id}/accept|decline
 
 ### 实施状态（2026-11-01）
 
-- ✅ 服务端：邀请表迁移、`GET /invitations`、`accept|decline`、移除成员 403；`postgres_shared` 2 个测试通过（本机临时 PostgreSQL 55433）。
+- ✅ 服务端：邀请表迁移、`GET /invitations`、`accept|decline`、移除成员 403；`postgres_shared` 2 个测试通过（本机 `initdb` 临时 PostgreSQL 18.6，Docker 不可用）。
 - ✅ Web：Dexie v5 共享表、`SharedSyncEngine`、离线 outbox 重放、409 rebase、同字段冲突拒绝、邀请 UI、viewer/移除成员只读。
 - ✅ 自动化：`shared-sync.test.ts` 17 项、`tests/e2e/tests/shared.spec.ts` 4 项通过（Playwright mock API）。
 - ⚠️ 未验证：真实多设备并发（需两台登录设备）、原生 Tauri 共享清单离线（本期仅在线内存存储）、真实 SMTP 邀请邮件（本期不发邮件）。
