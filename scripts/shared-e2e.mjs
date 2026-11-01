@@ -66,6 +66,16 @@ const invite = await json(
   },
   authA,
 );
+// Membership only exists after B accepts the pending invitation.
+const invitationsB = await json('/api/v1/shared/invitations', {}, authB);
+const acceptedInvitation = invitationsB.find((item) => item.id === invite.id);
+if (!acceptedInvitation) throw new Error('pending invitation not visible to invitee');
+const accepted = await json(
+  `/api/v1/shared/invitations/${invite.id}/accept`,
+  { method: 'POST', body: JSON.stringify({ op_id: randomUUID() }) },
+  authB,
+);
+if (accepted.id !== list.id) throw new Error('accept did not return the shared list');
 const snapshotB = await json(`/api/v1/shared/lists/${list.id}`, {}, authB);
 const task = await json(
   `/api/v1/shared/lists/${list.id}/tasks`,
@@ -93,6 +103,19 @@ if (!conflict?.includes('409')) throw new Error('expected revision conflict from
 if (!snapshotA.tasks.some((item) => item.id === task.id))
   throw new Error('editor task not visible to owner');
 if (invite.role !== 'editor') throw new Error('invite did not return editor role');
+// Removing B turns every later request into 403 SHARED_LIST_ACCESS_REVOKED.
+await json(
+  `/api/v1/shared/lists/${list.id}/members/${snapshotA.members.find((member) => member.email === emailB).user_id}`,
+  { method: 'DELETE', headers: { 'if-match': `"${snapshotA.revision}"` } },
+  authA,
+);
+let revoked = null;
+try {
+  await json(`/api/v1/shared/lists/${list.id}`, {}, authB);
+} catch (error) {
+  revoked = String(error.message);
+}
+if (!revoked?.includes('403')) throw new Error('expected 403 for a removed member');
 
 console.log(
   JSON.stringify(

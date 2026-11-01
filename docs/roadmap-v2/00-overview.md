@@ -69,9 +69,10 @@
 - ✅ 拒绝操作详情/单条回滚、云端备份、诊断包、Web 多账号隔离、Web Push 订阅与测试接口。
 - ✅ 100k 全量列表加载与虚拟滚动、性能预算脚本、PostgreSQL 同步集成测试。
 - ✅ 标签/筛选/保存视图、日历视图、ICS 导入导出、自然语言快速添加、模板、每周回顾。
-- ✅ 共享清单在线 v1：独立服务端表/API、owner/editor/viewer、revision 冲突、成员邀请、15s 轮询。
+- ✅ 共享清单 v1：独立服务端表/API、owner/editor/viewer、revision 冲突、待接受邀请、15s 轮询。
+- ✅ 共享清单 Web 端本地共享 outbox/离线编辑、409 rebase、同字段冲突显式拒绝、移除成员只读副本。
 - ✅ property tests、IndexedDB/SQLite 迁移覆盖、PostgreSQL 集成回归、SBOM、性能预算门禁。
-- ⚠️ 共享清单 Web 端尚未做本地共享 outbox/离线编辑；多账号隔离只在 Web IndexedDB 生效。
+- ⚠️ 多账号隔离只在 Web IndexedDB 生效；native 的共享清单仅在线使用内存存储，不落盘。
 - ⚠️ Web Push 未连接真实 FCM/浏览器推送服务；native 未接入共享清单和 Web Push。
 - ⚠️ 真实 Android/iOS 构建、真实 SMTP、公网 Caddy 证书、100k 滚动 FPS 未在本机验收。
 
