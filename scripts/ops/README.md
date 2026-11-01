@@ -22,9 +22,13 @@ maintenance host. They never print database passwords, tokens, or task data.
   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=todo PGPASSWORD=todo scripts/ops/backup-restore-test.sh
   ```
 
-  The second form needs a role with `CREATEDB` and PostgreSQL client tools at
-  least as new as the server. CI runs the `--compose` form in the
-  `backup-restore` job of `.github/workflows/api.yml`.
+  The second form needs a role with `CREATEDB`. Both forms need PostgreSQL
+  client tools of the same major version as the server; the drill stops with a
+  clear message when they differ, because a dump from a newer `pg_dump` carries
+  settings (such as `transaction_timeout`, added in PostgreSQL 17) that an
+  older server rejects on restore. CI runs the `--compose` form in the
+  `backup-restore` job of `.github/workflows/api.yml`, which installs the
+  client tools matching the Compose server image.
 
 See `docs/runbooks/operations.md` and `docs/runbooks/backup-restore.md`.
 

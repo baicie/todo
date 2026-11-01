@@ -73,8 +73,14 @@ push/PR 时仅在改动 `scripts/ops/`、`db/postgres/`、`docker-compose.yml` �
 `apps/api/src/{db,ops}.rs` 时运行，使用 `--compose` 模式。
 
 - 实测：本机以现有服务器模式（PostgreSQL 18.6，Git Bash）完整通过。
-- NOT_RUN：`--compose` 模式（本机 Docker Desktop 无法启动）与 CI job（尚未推送），
-  需在 ubuntu runner 上首次验证。
+- 工具版本：`pg_dump` 比服务器新时，dump 会带上旧服务器不认识的设置
+  （PostgreSQL 17 起写 `SET transaction_timeout`），恢复失败看起来却像备份损坏。
+  脚本现在从服务器读取 `server_version_num`，与 `psql`/`pg_dump`/`pg_restore`
+  的主版本逐一比对，不一致立即失败并说明原因。CI job 也不再依赖 runner 默认的
+  客户端：它从 `docker-compose.yml` 读取服务镜像主版本，按需从 apt.postgresql.org
+  安装同版本的 `postgresql-client-<major>`，与 `postgres:16-alpine` 配对。
+- NOT_RUN：`--compose` 模式（本机 Docker Desktop 无法启动）。CI job 首次运行
+  （run 41301207891）在恢复步骤因上述版本不匹配失败，修复后待重新运行验证。
 
 ## 5. SBOM 与依赖
 

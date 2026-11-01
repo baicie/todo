@@ -142,14 +142,36 @@ jobs:
       - name: Cache Cargo
         if: steps.scope.outputs.run == 'true'
         uses: Swatinem/rust-cache@v2
-      - name: PostgreSQL client tools
+      # The drill dumps with the host's client tools and restores into the
+      # Compose server, so both must be the same major version. A dump from a
+      # newer client sets options an older server rejects (PostgreSQL 17 added
+      # `SET transaction_timeout`), which fails the restore and looks like a
+      # broken backup. Install the client tools that match the server image
+      # instead of using whatever major the runner ships with.
+      - name: PostgreSQL client tools matching the server image
         if: steps.scope.outputs.run == 'true'
         run: |
-          if ! command -v pg_dump > /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client
+          server_major=$(sed -n \
+            's/^[[:space:]]*image:[[:space:]]*"\?postgres:\([0-9][0-9]*\).*/\1/p' \
+            docker-compose.yml | head -n 1)
+          if [ -z "$server_major" ]; then
+            echo "cannot read the postgres image major version from docker-compose.yml" >&2
+            exit 1
           fi
-          pg_dump --version
+          client_bin="/usr/lib/postgresql/$server_major/bin"
+          if [ ! -x "$client_bin/pg_dump" ]; then
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc
+            . /etc/os-release
+            echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
+              sudo tee /etc/apt/sources.list.d/pgdg.list
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "postgresql-client-$server_major"
+          fi
+          # The drill uses whichever binaries come first on PATH.
+          echo "$client_bin" >> "$GITHUB_PATH"
+          "$client_bin/pg_dump" --version
       - name: Backup and restore drill
         if: steps.scope.outputs.run == 'true'
         run: bash scripts/ops/backup-restore-test.sh --compose

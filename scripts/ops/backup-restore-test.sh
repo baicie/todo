@@ -21,14 +21,23 @@
 #       Uses an existing server. The role needs CREATEDB. Only a database named
 #       todo_backup_test_<random> is created and dropped.
 #
+# Environment: TODO_API_BIN skips the cargo build, BACKUP_TEST_API_PORT sets the
+# API port (default 18787) and BACKUP_TEST_PG_PORT the Compose server port
+# (default 55433).
+#
 # Needs psql, pg_dump, pg_restore, createdb, dropdb, sha256sum, curl and cargo
-# (or TODO_API_BIN pointing at a built todo-api binary). The client tools must
-# be at least the server's major version.
+# (or TODO_API_BIN pointing at a built todo-api binary). The client tools and
+# the server must be the same major version: pg_dump from a newer major writes
+# settings (for example SET transaction_timeout, added in PostgreSQL 17) that
+# an older server rejects, so the drill refuses such a pair up front instead of
+# failing later with a restore error that looks like a backup problem.
 set -euo pipefail
 umask 077
 
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  # Everything between the shebang and the first command is the usage text.
+  awk 'NR > 1 && /^set -euo pipefail/ { exit } NR > 1' "$0" |
+    sed 's/^# \{0,1\}//'
 }
 
 MODE=server
@@ -93,6 +102,41 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+for tool in psql pg_dump pg_restore createdb dropdb sha256sum curl; do
+  command -v "$tool" >/dev/null || fail "$tool is not installed"
+done
+log "client $(pg_dump --version)"
+
+# The client tools and the server must be the same major version. A dump from a
+# newer client carries settings that an older server rejects on restore (since
+# PostgreSQL 17, pg_dump writes `SET transaction_timeout`), and pg_dump is not
+# guaranteed to work against a newer server either. A mismatch would otherwise
+# surface as a restore error and look like a broken backup. In server mode the
+# check runs before anything is created, so a mismatch leaves no database
+# behind; in Compose mode it runs once the container is up.
+check_client_server_versions() {
+  local server_version_num server_major tool client_version client_major
+  server_version_num=$(psql -X -q -At -v ON_ERROR_STOP=1 -d postgres -c 'SHOW server_version_num') ||
+    fail "cannot read the server version from $PGHOST:$PGPORT"
+  case "$server_version_num" in
+    '' | *[!0-9]*) fail "unexpected server_version_num '$server_version_num'" ;;
+  esac
+  server_major=$((server_version_num / 10000))
+  log "server PostgreSQL major $server_major"
+  for tool in psql pg_dump pg_restore; do
+    client_version=$("$tool" --version)
+    client_major=$(printf '%s\n' "$client_version" |
+      sed -n 's/^[a-z_]* (PostgreSQL) \([0-9][0-9]*\).*/\1/p')
+    [ -n "$client_major" ] || fail "cannot parse the major version from '$client_version'"
+    if [ "$client_major" -gt "$server_major" ]; then
+      fail "$client_version is newer than the server (major $server_major): a dump from a newer client sets options (for example transaction_timeout, added in PostgreSQL 17) that an older server rejects on restore. Use client tools of major $server_major (Debian/Ubuntu: postgresql-client-$server_major) or a server of major $client_major."
+    fi
+    if [ "$client_major" -lt "$server_major" ]; then
+      fail "$client_version is older than the server (major $server_major): pg_dump does not support servers newer than itself. Use client tools of major $server_major (Debian/Ubuntu: postgresql-client-$server_major)."
+    fi
+  done
+}
+
 if [ "$MODE" = compose ]; then
   COMPOSE_PROJECT="todo-backup-test-$SUFFIX"
   # Pin credentials so a local .env cannot change them; the project name gives
@@ -102,16 +146,13 @@ if [ "$MODE" = compose ]; then
   log "starting temporary PostgreSQL (compose project $COMPOSE_PROJECT, port $POSTGRES_PORT)"
   (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT" up -d --wait postgres)
   export PGHOST=127.0.0.1 PGPORT="$POSTGRES_PORT" PGUSER=todo PGPASSWORD=todo
+  check_client_server_versions
 else
   : "${PGHOST:?PGHOST is required (or pass --compose)}"
   : "${PGUSER:?PGUSER is required (or pass --compose)}"
   export PGPORT="${PGPORT:-5432}"
+  check_client_server_versions
 fi
-
-for tool in psql pg_dump pg_restore createdb dropdb sha256sum curl; do
-  command -v "$tool" >/dev/null || fail "$tool is not installed"
-done
-log "client $(pg_dump --version)"
 
 psql_db() {
   # Windows psql writes CRLF; strip it so output compares and splits cleanly.
