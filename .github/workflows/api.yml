@@ -27,6 +27,7 @@ on:
       - 'Caddyfile'
       - 'docs/runbooks/**'
       - '.github/workflows/api.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -80,6 +81,10 @@ jobs:
           cargo test -p todo-api --test postgres_smoke -- --ignored --test-threads=1
           cargo test -p todo-api --test postgres_production -- --ignored --test-threads=1
           cargo test -p todo-api --test postgres_shared -- --ignored --test-threads=1
+          # known_defect_* tests document tracked defects; run them explicitly.
+          cargo test -p todo-api --test postgres_boundaries -- --ignored --skip known_defect_ --test-threads=1
+          # Creates and drops temporary databases; the CI role is a superuser.
+          cargo test -p todo-api --test postgres_migrations -- --ignored --test-threads=1
       - name: Operations CLI dry-run
         run: cargo run -p todo-api -- ops all --dry-run
       - name: Readiness smoke test
@@ -96,3 +101,77 @@ jobs:
           done
           echo "API failed to become ready"
           exit 1
+
+  backup-restore:
+    # Optional drill (docs/roadmap-v2/05-quality.md §4). It always runs on a
+    # manual dispatch; on push and pull_request it runs only when the change
+    # touches backup/restore scripts, migrations or the Compose file.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether the drill is needed
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          run=true
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) base='' ;;
+          esac
+          # A new branch has no usable "before" commit; run the drill then.
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            if ! git diff --name-only "$base" HEAD |
+              grep -qE '^(scripts/ops/|db/postgres/|docker-compose\.yml$|apps/api/src/(db|ops)\.rs$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "backup/restore drill needed: $run"
+      - name: Install Rust 1.96
+        if: steps.scope.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+      - name: Cache Cargo
+        if: steps.scope.outputs.run == 'true'
+        uses: Swatinem/rust-cache@v2
+      # The drill dumps with the host's client tools and restores into the
+      # Compose server, so both must be the same major version. A dump from a
+      # newer client sets options an older server rejects (PostgreSQL 17 added
+      # `SET transaction_timeout`), which fails the restore and looks like a
+      # broken backup. Install the client tools that match the server image
+      # instead of using whatever major the runner ships with.
+      - name: PostgreSQL client tools matching the server image
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          server_major=$(sed -n \
+            's/^[[:space:]]*image:[[:space:]]*"\?postgres:\([0-9][0-9]*\).*/\1/p' \
+            docker-compose.yml | head -n 1)
+          if [ -z "$server_major" ]; then
+            echo "cannot read the postgres image major version from docker-compose.yml" >&2
+            exit 1
+          fi
+          client_bin="/usr/lib/postgresql/$server_major/bin"
+          if [ ! -x "$client_bin/pg_dump" ]; then
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc
+            . /etc/os-release
+            echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
+              sudo tee /etc/apt/sources.list.d/pgdg.list
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "postgresql-client-$server_major"
+          fi
+          # The drill uses whichever binaries come first on PATH.
+          echo "$client_bin" >> "$GITHUB_PATH"
+          "$client_bin/pg_dump" --version
+      - name: Backup and restore drill
+        if: steps.scope.outputs.run == 'true'
+        run: bash scripts/ops/backup-restore-test.sh --compose
