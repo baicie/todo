@@ -296,9 +296,11 @@ Push protocol; this API does not add a separate end-to-end encryption layer.
 Shared lists are a separate collaboration surface from personal sync. All routes
 require an authenticated bearer token and only expose lists where the caller has
 an active membership. A non-member receives `404 SHARED_LIST_NOT_FOUND`; a member
-with insufficient role receives `403 SHARED_LIST_FORBIDDEN`. Viewers are
-read-only, editors may create/update/delete tasks, and owners may also manage
-members and delete the list.
+with insufficient role receives `403 SHARED_LIST_FORBIDDEN`. A member whose
+membership was removed receives `403 SHARED_LIST_ACCESS_REVOKED` so the client can
+keep a read-only copy and stop retrying. Viewers are read-only, editors may
+create/update/delete tasks, and owners may also manage members and delete the
+list.
 
 `GET /api/v1/shared/lists` returns the caller's visible lists:
 
@@ -351,12 +353,15 @@ list summary with `role: "owner"` and `revision: 1`.
       "updated_at": "2026-10-22T04:05:00Z"
     }
   ],
+  "invitations": [],
   "steps": [],
   "revision": 3
 }
 ```
 
 Only active tasks and steps are included. `revision` is the list version.
+`invitations` lists the list's pending invitations and is only populated for the
+owner; other roles always get an empty array.
 
 `POST /api/v1/shared/lists/{id}/tasks` is allowed for owners/editors:
 
@@ -379,14 +384,66 @@ response is the task object. `PATCH /shared/lists/{id}/tasks/{task_id}` accepts
 `DELETE /shared/lists/{id}/tasks/{task_id}` soft-deletes the task and returns
 `204`. All task mutations require a revision and bump the list revision.
 
-`POST /api/v1/shared/lists/{id}/members` is owner-only:
+`POST /api/v1/shared/lists/{id}/members` is owner-only and creates an invitation:
 
 ```json
 { "email": "editor@example.com", "role": "editor", "revision": 3 }
 ```
 
-The email must belong to a registered, non-deleted account; otherwise the API
-returns `404 MEMBER_NOT_FOUND`. Roles are `owner`, `editor`, or `viewer`.
+The response is the pending invitation:
+
+```json
+{
+  "id": "019a0000-0000-7000-8000-000000000020",
+  "list_id": "019a0000-0000-7000-8000-000000000010",
+  "list_name": "Team list",
+  "email": "editor@example.com",
+  "role": "editor",
+  "status": "pending",
+  "invited_by": "019a0000-0000-7000-8000-000000000001",
+  "invited_by_email": "owner@example.com",
+  "revision": 4,
+  "created_at": "2026-10-22T04:20:00Z",
+  "updated_at": "2026-10-22T04:20:00Z"
+}
+```
+
+Both registered and unregistered addresses receive a pending invitation;
+membership is only created when the person with that email signs in and accepts.
+The trade-off is one extra acceptance step, and it keeps the flow identical
+whether or not the address has an account yet. Invitation roles are `editor` or
+`viewer`; `owner` is rejected with `400 VALIDATION_FAILED`. An address that is
+already an active member returns `409 SHARED_MEMBER_EXISTS`. Re-inviting the same
+pending address updates the role and bumping the list revision.
+
+`GET /api/v1/shared/invitations` returns the caller's pending invitations (matched
+by the account's normalized email, on lists that are not deleted):
+
+```json
+[
+  {
+    "id": "019a0000-0000-7000-8000-000000000020",
+    "list_id": "019a0000-0000-7000-8000-000000000010",
+    "list_name": "Team list",
+    "email": "editor@example.com",
+    "role": "editor",
+    "status": "pending",
+    "invited_by": "019a0000-0000-7000-8000-000000000001",
+    "invited_by_email": "owner@example.com",
+    "revision": 4,
+    "created_at": "2026-10-22T04:20:00Z",
+    "updated_at": "2026-10-22T04:20:00Z"
+  }
+]
+```
+
+`POST /api/v1/shared/invitations/{id}/accept` creates the membership and returns
+the list summary; `decline` marks the invitation declined and returns `204`. Both
+accept an empty body or `{"op_id": "..."}`, bump the list revision once, and are
+idempotent per `op_id`. An invitation that does not belong to the caller returns
+`404 SHARED_INVITATION_NOT_FOUND`; one already answered returns
+`409 SHARED_INVITATION_NOT_PENDING`.
+
 `PATCH /shared/lists/{id}/members/{user_id}` changes a role. `DELETE` removes a
 member. The owner cannot remove their own membership.
 

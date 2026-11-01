@@ -116,14 +116,19 @@ POST   /api/v1/shared/invitations/{id}/accept|decline
   - owner 可改清单、成员、删除。
 - 所有查询强制 `list_members` 校验。
 - 邀请：按邮箱创建 pending invitation；同邮箱登录后接受。未注册邮箱保留 pending，注册后可见。
+- 已注册邮箱同样先创建邀请而不是直接成为成员；取舍是成员关系只在对方确认后建立，代价是多一次接受操作。
+- 写接口使用 `If-Match: "<revision>"` + body `op_id`；receipt 命中时返回当前实体或 `{replayed,revision}`。
+- 被移除成员访问清单返回 403 `SHARED_LIST_ACCESS_REVOKED`；清单被删除返回 404 `SHARED_LIST_NOT_FOUND`。
 
 ### 客户端
 
-- Dexie 新增 `sharedLists`, `sharedTasks`, `sharedSteps`, `sharedOutbox`, `sharedMeta`。
+- Dexie v5 新增 `sharedLists`, `sharedTasks`, `sharedOutbox`, `sharedMeta`；步骤随快照保存，暂不单独物化。
 - `SharedSyncEngine`：pull revision → 合并 shadow+pending；push pending ops（每批 50）；15s 轮询 + 页面恢复。
 - 本机编辑先写物化表 + sharedOutbox；离线可编辑 editor 清单。
 - UI 显示成员、角色、最后同步时间；viewer 禁用编辑控件。
 - 共享实体不写入个人 `tasks/lists`，避免与个人同步冲突。
+- 同字段并发修改不静默覆盖：rebase 时标记为 `SHARED_EDIT_CONFLICT`，由用户选择重新应用或放弃。
+- 移除成员/清单删除后保留只读副本，用户可「删除本机副本」；native 使用内存存储，退出会话即清空。
 
 ### 验收
 
@@ -132,6 +137,13 @@ POST   /api/v1/shared/invitations/{id}/accept|decline
 - 离线编辑恢复后推送；revision 冲突返回 409 并自动 rebase。
 - 移除成员后其后续请求 403，本地共享数据可只读保留或删除。
 - 共享清单不影响个人同步预算。
+
+### 实施状态（2026-11-01）
+
+- ✅ 服务端：邀请表迁移、`GET /invitations`、`accept|decline`、移除成员 403；`postgres_shared` 2 个测试通过（本机 `initdb` 临时 PostgreSQL 18.6，Docker 不可用）。
+- ✅ Web：Dexie v5 共享表、`SharedSyncEngine`、离线 outbox 重放、409 rebase、同字段冲突拒绝、邀请 UI、viewer/移除成员只读。
+- ✅ 自动化：`shared-sync.test.ts` 17 项、`tests/e2e/tests/shared.spec.ts` 4 项通过（Playwright mock API）。
+- ⚠️ 未验证：真实多设备并发（需两台登录设备）、原生 Tauri 共享清单离线（本期仅在线内存存储）、真实 SMTP 邀请邮件（本期不发邮件）。
 
 ## 7. 非目标
 

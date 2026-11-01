@@ -73,10 +73,91 @@ export const apiErrorSchema = z.object({
     'SHARED_TASK_NOT_FOUND',
     'SHARED_MEMBER_NOT_FOUND',
     'SHARED_LIST_FORBIDDEN',
+    'SHARED_LIST_ACCESS_REVOKED',
+    'SHARED_MEMBER_EXISTS',
+    'SHARED_TASK_EXISTS',
+    'SHARED_INVITATION_NOT_FOUND',
+    'SHARED_INVITATION_NOT_PENDING',
+    'REVISION_REQUIRED',
+    'OP_ID_CONFLICT',
     'MEMBER_NOT_FOUND',
     'INTERNAL',
   ]),
   message: z.string(),
+});
+
+// Shared lists are a separate collaboration surface from personal `/sync`.
+// Timestamps are kept as strings: the API emits RFC 3339 UTC values.
+export const sharedRoleSchema = z.enum(['owner', 'editor', 'viewer']);
+export const sharedInviteRoleSchema = z.enum(['editor', 'viewer']);
+export const sharedTaskStatusSchema = z.enum(['open', 'completed']);
+export const sharedInvitationStatusSchema = z.enum(['pending', 'accepted', 'declined', 'revoked']);
+
+export const sharedListSummarySchema = z.object({
+  id: idSchema,
+  owner_id: idSchema,
+  name: z.string(),
+  color: z.string().nullable(),
+  icon: z.string().nullable(),
+  rank: z.string(),
+  revision: z.number().int().positive(),
+  role: sharedRoleSchema,
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const sharedTaskSchema = z.object({
+  id: idSchema,
+  list_id: idSchema,
+  title: z.string(),
+  note: z.string(),
+  status: sharedTaskStatusSchema,
+  important: z.boolean(),
+  due_on: z.string().nullable(),
+  rank: z.string(),
+  revision: z.number().int().positive(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const sharedStepSchema = z.object({
+  id: idSchema,
+  task_id: idSchema,
+  title: z.string(),
+  is_completed: z.boolean(),
+  rank: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const sharedMemberSchema = z.object({
+  user_id: idSchema,
+  email: z.string(),
+  role: sharedRoleSchema,
+  created_at: z.string(),
+});
+
+export const sharedInvitationSchema = z.object({
+  id: idSchema,
+  list_id: idSchema,
+  list_name: z.string(),
+  email: z.string(),
+  role: sharedInviteRoleSchema,
+  status: sharedInvitationStatusSchema,
+  invited_by: idSchema,
+  invited_by_email: z.string(),
+  revision: z.number().int().positive(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const sharedSnapshotSchema = z.object({
+  list: sharedListSummarySchema,
+  members: z.array(sharedMemberSchema),
+  invitations: z.array(sharedInvitationSchema).default([]),
+  tasks: z.array(sharedTaskSchema),
+  steps: z.array(sharedStepSchema).default([]),
+  revision: z.number().int().positive(),
 });
 
 export const tokenPairSchema = z.object({
@@ -97,6 +178,14 @@ export type BootstrapPage = z.infer<typeof bootstrapPageSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type TokenPair = z.infer<typeof tokenPairSchema>;
 export type Platform = z.infer<typeof platformSchema>;
+export type SharedRole = z.infer<typeof sharedRoleSchema>;
+export type SharedInviteRole = z.infer<typeof sharedInviteRoleSchema>;
+export type SharedListSummary = z.infer<typeof sharedListSummarySchema>;
+export type SharedTask = z.infer<typeof sharedTaskSchema>;
+export type SharedStep = z.infer<typeof sharedStepSchema>;
+export type SharedMember = z.infer<typeof sharedMemberSchema>;
+export type SharedInvitation = z.infer<typeof sharedInvitationSchema>;
+export type SharedSnapshot = z.infer<typeof sharedSnapshotSchema>;
 
 export const DEFAULT_PAGE_LIMIT = 500;
 export const MAX_SYNC_OPS = 100;

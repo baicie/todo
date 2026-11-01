@@ -37,6 +37,15 @@ pub fn router() -> Router<AppState> {
             "/api/v1/shared/lists/{list_id}/members/{user_id}",
             patch(patch_member).delete(remove_member),
         )
+        .route("/api/v1/shared/invitations", get(list_invitations))
+        .route(
+            "/api/v1/shared/invitations/{invitation_id}/accept",
+            post(accept_invitation),
+        )
+        .route(
+            "/api/v1/shared/invitations/{invitation_id}/decline",
+            post(decline_invitation),
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,10 +131,29 @@ pub struct SharedMember {
     pub created_at: DateTime<Utc>,
 }
 
+/// A pending (or answered) invitation. `revision` is the list revision at read
+/// time so the owner can continue issuing revision-checked writes.
+#[derive(Debug, FromRow, Serialize)]
+pub struct SharedInvitation {
+    pub id: Uuid,
+    pub list_id: Uuid,
+    pub list_name: String,
+    pub email: String,
+    pub role: String,
+    pub status: String,
+    pub invited_by: Uuid,
+    pub invited_by_email: String,
+    pub revision: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SharedSnapshot {
     pub list: SharedListSummary,
     pub members: Vec<SharedMember>,
+    /// Pending invitations; only populated for owners.
+    pub invitations: Vec<SharedInvitation>,
     pub tasks: Vec<SharedTask>,
     pub steps: Vec<SharedStep>,
     pub revision: i64,
@@ -189,10 +217,31 @@ struct PatchMemberRequest {
     op_id: Option<Uuid>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvitationActionRequest {
+    op_id: Option<Uuid>,
+}
+
 struct SharedAccess {
     revision: i64,
     role: SharedRole,
 }
+
+struct InvitationLock {
+    list_id: Uuid,
+    revision: i64,
+    role: SharedRole,
+    status: String,
+    responded_by: Option<Uuid>,
+}
+
+const INVITATION_SELECT: &str = "SELECT i.id, i.list_id, l.name AS list_name, \
+        i.email_normalized AS email, i.role, i.status, i.invited_by, \
+        u.email_normalized AS invited_by_email, l.revision, i.created_at, i.updated_at \
+     FROM shared_list_invitations i \
+     JOIN shared_lists l ON l.id = i.list_id \
+     JOIN users u ON u.id = i.invited_by";
 
 async fn list_lists(
     State(state): State<AppState>,
@@ -266,8 +315,19 @@ async fn get_list(
 ) -> ApiResult<Json<SharedSnapshot>> {
     let list_id = parse_uuid("list_id", &list_id)?;
     let mut tx = state.pool.begin().await?;
-    let _access = lock_access(&mut tx, list_id, auth.user_id).await?;
+    let access = lock_access(&mut tx, list_id, auth.user_id).await?;
     let list = fetch_list_summary(&mut tx, list_id, auth.user_id).await?;
+    let invitations = if access.role.is_owner() {
+        sqlx::query_as::<_, SharedInvitation>(&format!(
+            "{INVITATION_SELECT} WHERE i.list_id = $1 AND i.status = 'pending' \
+             ORDER BY i.created_at, i.id"
+        ))
+        .bind(list_id)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        Vec::new()
+    };
     let members = sqlx::query_as::<_, SharedMember>(
         "SELECT u.id AS user_id, u.email_normalized AS email, m.role, m.created_at \
          FROM shared_list_members m JOIN users u ON u.id = m.user_id \
@@ -302,6 +362,7 @@ async fn get_list(
         revision: list.revision,
         list,
         members,
+        invitations,
         tasks,
         steps,
     }))
@@ -501,13 +562,16 @@ async fn add_member(
     ApiJson(request): ApiJson<AddMemberRequest>,
 ) -> ApiResult<Response> {
     let list_id = parse_uuid("list_id", &list_id)?;
-    let role = parse_role(&request.role)?;
+    let role = parse_invite_role(&request.role)?;
     let email = normalize_email(&request.email)
         .map_err(|_| AppError::validation("email must be a valid email address"))?;
     let mut tx = state.pool.begin().await?;
     let access = lock_access(&mut tx, list_id, auth.user_id).await?;
     require_owner(access.role)?;
     if let Some(revision) = replay_receipt(&mut tx, list_id, request.op_id, auth.user_id).await? {
+        if let Some(invitation) = fetch_pending_invitation(&mut tx, list_id, &email).await? {
+            return Ok(Json(invitation).into_response());
+        }
         return Ok(Json(serde_json::json!({
             "replayed": true,
             "revision": revision
@@ -516,32 +580,150 @@ async fn add_member(
     }
     let expected = expected_revision(&headers, request.revision)?;
     check_revision(access.revision, expected)?;
-    let target: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE email_normalized = $1 AND deleted_at IS NULL",
-    )
-    .bind(&email)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(target_id) = target else {
-        return Err(AppError::NotFound {
-            code: "MEMBER_NOT_FOUND",
-            message: "No registered account was found for that email".to_owned(),
-        });
-    };
-    sqlx::query(
-        "INSERT INTO shared_list_members (list_id, user_id, role) VALUES ($1, $2, $3) \
-         ON CONFLICT (list_id, user_id) DO UPDATE SET role = EXCLUDED.role, deleted_at = NULL",
+    let already_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM shared_list_members m JOIN users u ON u.id = m.user_id \
+         WHERE m.list_id = $1 AND u.email_normalized = $2 \
+           AND m.deleted_at IS NULL AND u.deleted_at IS NULL)",
     )
     .bind(list_id)
-    .bind(target_id)
+    .bind(&email)
+    .fetch_one(&mut *tx)
+    .await?;
+    if already_member {
+        return Err(AppError::Conflict {
+            code: "SHARED_MEMBER_EXISTS",
+            message: "That email already belongs to a member of this shared list".to_owned(),
+        });
+    }
+    // Registered or not, the address only becomes a member after the person
+    // signing in with it accepts. Re-inviting a pending address updates it.
+    let invitation_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO shared_list_invitations (id, list_id, email_normalized, role, invited_by) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (list_id, email_normalized) WHERE status = 'pending' \
+         DO UPDATE SET role = EXCLUDED.role, invited_by = EXCLUDED.invited_by, updated_at = now() \
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(list_id)
+    .bind(&email)
     .bind(role.as_str())
-    .execute(&mut *tx)
+    .bind(auth.user_id)
+    .fetch_one(&mut *tx)
     .await?;
     let new_revision = bump_revision(&mut tx, list_id, access.revision).await?;
     insert_receipt(&mut tx, list_id, auth.user_id, request.op_id, new_revision).await?;
-    let member = fetch_member(&mut tx, list_id, target_id).await?;
+    let invitation = fetch_invitation(&mut tx, invitation_id).await?;
     tx.commit().await?;
-    Ok(Json(member).into_response())
+    Ok(Json(invitation).into_response())
+}
+
+async fn list_invitations(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<SharedInvitation>>> {
+    let invitations = sqlx::query_as::<_, SharedInvitation>(&format!(
+        "{INVITATION_SELECT} \
+         JOIN users me ON me.email_normalized = i.email_normalized \
+         WHERE me.id = $1 AND me.deleted_at IS NULL \
+           AND i.status = 'pending' AND l.deleted_at IS NULL \
+         ORDER BY i.created_at DESC, i.id"
+    ))
+    .bind(auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(invitations))
+}
+
+async fn accept_invitation(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(invitation_id): Path<String>,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let request = invitation_body(body)?;
+    let invitation_id = parse_uuid("invitation_id", &invitation_id)?;
+    let mut tx = state.pool.begin().await?;
+    let invitation = lock_invitation(&mut tx, invitation_id, auth.user_id).await?;
+    let replayed = replay_receipt(&mut tx, invitation.list_id, request.op_id, auth.user_id)
+        .await?
+        .is_some();
+    if replayed
+        || (invitation.status == "accepted" && invitation.responded_by == Some(auth.user_id))
+    {
+        let list = match fetch_list_summary(&mut tx, invitation.list_id, auth.user_id).await {
+            Ok(list) => list,
+            // Accepted earlier, but the membership was removed since then.
+            Err(AppError::NotFound { .. }) => return Err(invitation_not_pending()),
+            Err(error) => return Err(error),
+        };
+        tx.commit().await?;
+        return Ok(Json(list).into_response());
+    }
+    if invitation.status != "pending" {
+        return Err(invitation_not_pending());
+    }
+    // Never touch an active membership (for example the owner's own row).
+    sqlx::query(
+        "INSERT INTO shared_list_members (list_id, user_id, role) VALUES ($1, $2, $3) \
+         ON CONFLICT (list_id, user_id) DO UPDATE SET role = EXCLUDED.role, deleted_at = NULL \
+         WHERE shared_list_members.deleted_at IS NOT NULL",
+    )
+    .bind(invitation.list_id)
+    .bind(auth.user_id)
+    .bind(invitation.role.as_str())
+    .execute(&mut *tx)
+    .await?;
+    respond_to_invitation(&mut tx, invitation_id, auth.user_id, "accepted").await?;
+    let new_revision = bump_revision(&mut tx, invitation.list_id, invitation.revision).await?;
+    insert_receipt(
+        &mut tx,
+        invitation.list_id,
+        auth.user_id,
+        request.op_id,
+        new_revision,
+    )
+    .await?;
+    let list = fetch_list_summary(&mut tx, invitation.list_id, auth.user_id).await?;
+    tx.commit().await?;
+    Ok(Json(list).into_response())
+}
+
+async fn decline_invitation(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(invitation_id): Path<String>,
+    body: Bytes,
+) -> ApiResult<StatusCode> {
+    let request = invitation_body(body)?;
+    let invitation_id = parse_uuid("invitation_id", &invitation_id)?;
+    let mut tx = state.pool.begin().await?;
+    let invitation = lock_invitation(&mut tx, invitation_id, auth.user_id).await?;
+    let replayed = replay_receipt(&mut tx, invitation.list_id, request.op_id, auth.user_id)
+        .await?
+        .is_some();
+    if replayed
+        || (invitation.status == "declined" && invitation.responded_by == Some(auth.user_id))
+    {
+        tx.commit().await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    if invitation.status != "pending" {
+        return Err(invitation_not_pending());
+    }
+    respond_to_invitation(&mut tx, invitation_id, auth.user_id, "declined").await?;
+    // The owner's snapshot lists pending invitations, so declining is a list change.
+    let new_revision = bump_revision(&mut tx, invitation.list_id, invitation.revision).await?;
+    insert_receipt(
+        &mut tx,
+        invitation.list_id,
+        auth.user_id,
+        request.op_id,
+        new_revision,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn patch_member(
@@ -683,6 +865,24 @@ async fn lock_access(
     .fetch_optional(&mut **tx)
     .await?;
     let Some((revision, role)) = row else {
+        // A former member of a live list learns that access was revoked so the
+        // client can keep its copy read-only; everyone else sees only 404.
+        let revoked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM shared_list_members m \
+             JOIN shared_lists l ON l.id = m.list_id \
+             WHERE m.list_id = $1 AND m.user_id = $2 \
+               AND m.deleted_at IS NOT NULL AND l.deleted_at IS NULL)",
+        )
+        .bind(list_id)
+        .bind(user_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if revoked {
+            return Err(AppError::Forbidden {
+                code: "SHARED_LIST_ACCESS_REVOKED",
+                message: "Your access to this shared list was removed".to_owned(),
+            });
+        }
         return Err(list_not_found());
     };
     let role = SharedRole::parse(&role)
@@ -805,6 +1005,98 @@ async fn insert_receipt(
     Ok(())
 }
 
+/// Lock an invitation addressed to the caller's email. The list row is locked
+/// before the invitation row, matching the lock order of every other shared
+/// write. Invitations for other addresses are reported as not found.
+async fn lock_invitation(
+    tx: &mut Transaction<'_, Postgres>,
+    invitation_id: Uuid,
+    user_id: Uuid,
+) -> ApiResult<InvitationLock> {
+    let list_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT i.list_id FROM shared_list_invitations i \
+         JOIN users me ON me.email_normalized = i.email_normalized \
+         WHERE i.id = $1 AND me.id = $2 AND me.deleted_at IS NULL",
+    )
+    .bind(invitation_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(list_id) = list_id else {
+        return Err(invitation_not_found());
+    };
+    let revision: Option<i64> = sqlx::query_scalar(
+        "SELECT revision FROM shared_lists WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(list_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(revision) = revision else {
+        return Err(invitation_not_found());
+    };
+    let (role, status, responded_by): (String, String, Option<Uuid>) = sqlx::query_as(
+        "SELECT role, status, responded_by FROM shared_list_invitations \
+         WHERE id = $1 FOR UPDATE",
+    )
+    .bind(invitation_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let role = SharedRole::parse(&role)
+        .ok_or_else(|| AppError::Internal("stored invitation role is invalid".to_owned()))?;
+    Ok(InvitationLock {
+        list_id,
+        revision,
+        role,
+        status,
+        responded_by,
+    })
+}
+
+async fn respond_to_invitation(
+    tx: &mut Transaction<'_, Postgres>,
+    invitation_id: Uuid,
+    user_id: Uuid,
+    status: &str,
+) -> ApiResult<()> {
+    sqlx::query(
+        "UPDATE shared_list_invitations \
+         SET status = $3, responded_by = $2, responded_at = now(), updated_at = now() \
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(invitation_id)
+    .bind(user_id)
+    .bind(status)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn fetch_invitation(
+    tx: &mut Transaction<'_, Postgres>,
+    invitation_id: Uuid,
+) -> ApiResult<SharedInvitation> {
+    sqlx::query_as::<_, SharedInvitation>(&format!("{INVITATION_SELECT} WHERE i.id = $1"))
+        .bind(invitation_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(invitation_not_found)
+}
+
+async fn fetch_pending_invitation(
+    tx: &mut Transaction<'_, Postgres>,
+    list_id: Uuid,
+    email: &str,
+) -> ApiResult<Option<SharedInvitation>> {
+    Ok(sqlx::query_as::<_, SharedInvitation>(&format!(
+        "{INVITATION_SELECT} \
+         WHERE i.list_id = $1 AND i.email_normalized = $2 AND i.status = 'pending'"
+    ))
+    .bind(list_id)
+    .bind(email)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
 fn require_editor(role: SharedRole) -> ApiResult<()> {
     if role.can_edit() {
         Ok(())
@@ -886,6 +1178,15 @@ fn revision_body(body: Bytes) -> ApiResult<RevisionRequest> {
     })
 }
 
+fn invitation_body(body: Bytes) -> ApiResult<InvitationActionRequest> {
+    if body.is_empty() {
+        return Ok(InvitationActionRequest { op_id: None });
+    }
+    serde_json::from_slice(&body).map_err(|_| {
+        AppError::validation("Request body must be valid JSON matching the endpoint schema")
+    })
+}
+
 fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -930,6 +1231,17 @@ fn parse_role(value: &str) -> ApiResult<SharedRole> {
         .ok_or_else(|| AppError::validation("role must be owner, editor, or viewer"))
 }
 
+/// Invitations grant editor or viewer access; ownership is never transferable
+/// through an invitation.
+fn parse_invite_role(value: &str) -> ApiResult<SharedRole> {
+    match parse_role(value)? {
+        SharedRole::Owner => Err(AppError::validation(
+            "invitations can only grant editor or viewer access",
+        )),
+        role => Ok(role),
+    }
+}
+
 fn parse_task_status(value: &str) -> ApiResult<String> {
     TaskStatus::parse(value)
         .map(|status| status.as_str().to_owned())
@@ -954,6 +1266,20 @@ fn member_not_found() -> AppError {
     AppError::NotFound {
         code: "SHARED_MEMBER_NOT_FOUND",
         message: "The shared list member was not found".to_owned(),
+    }
+}
+
+fn invitation_not_found() -> AppError {
+    AppError::NotFound {
+        code: "SHARED_INVITATION_NOT_FOUND",
+        message: "The shared list invitation was not found".to_owned(),
+    }
+}
+
+fn invitation_not_pending() -> AppError {
+    AppError::Conflict {
+        code: "SHARED_INVITATION_NOT_PENDING",
+        message: "The shared list invitation was already answered".to_owned(),
     }
 }
 
@@ -1005,5 +1331,22 @@ mod tests {
     fn role_parser_rejects_unknown_values() {
         assert_eq!(parse_role("owner").unwrap(), SharedRole::Owner);
         assert!(parse_role("admin").is_err());
+    }
+
+    #[test]
+    fn invitations_cannot_grant_ownership() {
+        assert_eq!(parse_invite_role("editor").unwrap(), SharedRole::Editor);
+        assert_eq!(parse_invite_role("viewer").unwrap(), SharedRole::Viewer);
+        assert!(parse_invite_role("owner").is_err());
+        assert!(parse_invite_role("admin").is_err());
+    }
+
+    #[test]
+    fn invitation_body_accepts_empty_and_rejects_unknown_fields() {
+        assert!(invitation_body(Bytes::new()).unwrap().op_id.is_none());
+        let op_id = Uuid::new_v4();
+        let parsed = invitation_body(Bytes::from(format!("{{\"op_id\":\"{op_id}\"}}"))).unwrap();
+        assert_eq!(parsed.op_id, Some(op_id));
+        assert!(invitation_body(Bytes::from_static(b"{\"revision\":1}")).is_err());
     }
 }

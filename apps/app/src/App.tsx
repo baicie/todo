@@ -73,6 +73,8 @@ import {
 import { loadSavedViews, persistSavedViews } from './lib/saved-views';
 import { applyTheme, getThemePreference, watchSystemTheme } from './lib/theme';
 import { createCloudController } from './sync/cloud';
+import { createSharedSyncController } from './sync/shared-controller';
+import { MemorySharedStore } from './sync/shared-store';
 import { reconcileReminders, type ReminderIssue } from './reminders/reconcile';
 import type { AppView, SavedView, TaskFilter } from './types';
 import { EMPTY_FILTER, SMART_TITLES } from './types';
@@ -101,6 +103,18 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
   const cloud = createCloudController({
     platform: props.platform,
     repository: props.platform.repository,
+  });
+  // Shared lists have their own store and outbox. Native keeps them online-only
+  // because the webview IndexedDB is not isolated per native account.
+  const shared = createSharedSyncController({
+    store:
+      props.platform.kind === 'web' && 'sharedStore' in props.platform.repository
+        ? props.platform.repository.sharedStore()
+        : new MemorySharedStore(),
+    request: (path, init) => cloud.sharedRequest(path, init),
+    lifecycle: props.platform.lifecycle,
+    connected: () => cloud.state().phase === 'connected',
+    clearOnDisconnect: props.platform.kind === 'tauri',
   });
   const [view, setView] = createSignal<AppView>({ kind: 'smart', id: 'my-day' });
   const [lists, setLists] = createSignal<
@@ -1308,7 +1322,11 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
           </button>
         </nav>
 
-        <SharedListsDialog open={sharedOpen()} cloud={cloud} onClose={() => setSharedOpen(false)} />
+        <SharedListsDialog
+          open={sharedOpen()}
+          shared={shared}
+          onClose={() => setSharedOpen(false)}
+        />
 
         <WeeklyReviewDialog
           open={reviewOpen()}
