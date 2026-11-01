@@ -651,7 +651,12 @@ async fn accept_invitation(
     if replayed
         || (invitation.status == "accepted" && invitation.responded_by == Some(auth.user_id))
     {
-        let list = fetch_list_summary(&mut tx, invitation.list_id, auth.user_id).await?;
+        let list = match fetch_list_summary(&mut tx, invitation.list_id, auth.user_id).await {
+            Ok(list) => list,
+            // Accepted earlier, but the membership was removed since then.
+            Err(AppError::NotFound { .. }) => return Err(invitation_not_pending()),
+            Err(error) => return Err(error),
+        };
         tx.commit().await?;
         return Ok(Json(list).into_response());
     }
