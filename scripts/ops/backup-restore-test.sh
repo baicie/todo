@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# Backup/restore drill (docs/roadmap-v2/05-quality.md §4).
+#
+# 1. Start a temporary PostgreSQL (--compose) or create a temporary database on
+#    an existing server (default).
+# 2. Start the API once so its migrator brings the schema to the latest version.
+# 3. Insert a golden dataset.
+# 4. backup.sh writes a dump and checksum.
+# 5. restore.sh must refuse without RESTORE_CONFIRM=YES and refuse a tampered
+#    dump; then the database is dropped, recreated empty and restored.
+# 6. Every table must match the pre-backup fingerprint, golden row counts must
+#    match, the API must report ready and `ops all --dry-run` must pass.
+#    A second restore over a modified database must also return to the backup.
+# 7. The temporary database, Compose project and volume are removed on exit.
+#
+# Usage:
+#   scripts/ops/backup-restore-test.sh --compose
+#       Uses Docker Compose's postgres service under a throwaway project name.
+#   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=todo PGPASSWORD=todo \
+#     scripts/ops/backup-restore-test.sh
+#       Uses an existing server. The role needs CREATEDB. Only a database named
+#       todo_backup_test_<random> is created and dropped.
+#
+# Needs psql, pg_dump, pg_restore, createdb, dropdb, sha256sum, curl and cargo
+# (or TODO_API_BIN pointing at a built todo-api binary). The client tools must
+# be at least the server's major version.
+set -euo pipefail
+umask 077
+
+usage() {
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+MODE=server
+case "${1:-}" in
+  '') ;;
+  --compose) MODE=compose ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
+SUFFIX=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+TEST_DB="todo_backup_test_$SUFFIX"
+WORK_DIR=$(mktemp -d)
+BACKUP_DIR="$WORK_DIR/backups"
+API_PORT="${BACKUP_TEST_API_PORT:-18787}"
+API_PID=''
+COMPOSE_PROJECT=''
+DB_CREATED=0
+
+# Deterministic text output from every psql session, independent of the
+# console code page (Windows) and the server's default time zone.
+export PGCLIENTENCODING=UTF8 PGTZ=UTC
+
+log() { printf 'backup-restore-test: %s\n' "$*"; }
+fail() {
+  printf 'backup-restore-test: FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+stop_api() {
+  if [ -n "$API_PID" ]; then
+    kill "$API_PID" 2>/dev/null || true
+    wait "$API_PID" 2>/dev/null || true
+    API_PID=''
+  fi
+}
+
+cleanup() {
+  local status=$?
+  set +e
+  stop_api
+  if [ "$DB_CREATED" = 1 ]; then
+    dropdb --maintenance-db=postgres --if-exists --force "$TEST_DB" >/dev/null 2>&1
+  fi
+  if [ -n "$COMPOSE_PROJECT" ]; then
+    (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT" down -v --remove-orphans) >/dev/null 2>&1
+  fi
+  rm -rf "$WORK_DIR"
+  if [ "$status" = 0 ]; then
+    log PASS
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+if [ "$MODE" = compose ]; then
+  COMPOSE_PROJECT="todo-backup-test-$SUFFIX"
+  # Pin credentials so a local .env cannot change them; the project name gives
+  # the container and its volume names of their own.
+  export POSTGRES_USER=todo POSTGRES_PASSWORD=todo POSTGRES_DB=todo
+  export POSTGRES_PORT="${BACKUP_TEST_PG_PORT:-55433}"
+  log "starting temporary PostgreSQL (compose project $COMPOSE_PROJECT, port $POSTGRES_PORT)"
+  (cd "$REPO_ROOT" && docker compose -p "$COMPOSE_PROJECT" up -d --wait postgres)
+  export PGHOST=127.0.0.1 PGPORT="$POSTGRES_PORT" PGUSER=todo PGPASSWORD=todo
+else
+  : "${PGHOST:?PGHOST is required (or pass --compose)}"
+  : "${PGUSER:?PGUSER is required (or pass --compose)}"
+  export PGPORT="${PGPORT:-5432}"
+fi
+
+for tool in psql pg_dump pg_restore createdb dropdb sha256sum curl; do
+  command -v "$tool" >/dev/null || fail "$tool is not installed"
+done
+log "client $(pg_dump --version)"
+
+psql_db() {
+  # Windows psql writes CRLF; strip it so output compares and splits cleanly.
+  psql -X -q -v ON_ERROR_STOP=1 -d "$TEST_DB" "$@" | tr -d '\r'
+}
+
+if [ -n "${TODO_API_BIN:-}" ]; then
+  API_BIN="$TODO_API_BIN"
+else
+  log "building todo-api"
+  (cd "$REPO_ROOT" && cargo build --quiet -p todo-api)
+  API_BIN="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/debug/todo-api"
+  [ -f "$API_BIN" ] || API_BIN="$API_BIN.exe"
+fi
+[ -f "$API_BIN" ] || fail "todo-api binary not found at $API_BIN"
+
+# The API reads its configuration from the environment. The values are exported
+# instead of passed through `env`, so `$!` is the API process itself: on Git
+# Bash, killing an `env` wrapper leaves the native child running. PGPASSWORD is
+# read by sqlx when the URL has no password, so passwords never need URL
+# encoding.
+export DATABASE_URL="postgres://$PGUSER@$PGHOST:$PGPORT/$TEST_DB" \
+  APP_ENV=test \
+  JWT_SECRET=backup-restore-test-only-jwt-secret-0123456789 \
+  OPS_ADMIN_TOKEN=backup-restore-test-only-ops-token-0123456789 \
+  BIND_ADDR="127.0.0.1:$API_PORT" \
+  CORS_ORIGINS=http://localhost:5173 \
+  RUST_LOG=warn
+
+start_api_until_ready() {
+  if curl -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null 2>&1; then
+    fail "port $API_PORT is already in use; set BACKUP_TEST_API_PORT"
+  fi
+  "$API_BIN" >"$WORK_DIR/api.log" 2>&1 &
+  API_PID=$!
+  local attempt
+  for attempt in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:$API_PORT/readyz" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! kill -0 "$API_PID" 2>/dev/null; then
+      cat "$WORK_DIR/api.log" >&2
+      fail "the API exited before it became ready"
+    fi
+    sleep 1
+  done
+  cat "$WORK_DIR/api.log" >&2
+  fail "the API did not become ready within 60 seconds (attempt $attempt)"
+}
+
+# One line per public table: name, row count and a hash of every row's text.
+fingerprint() {
+  local table
+  for table in $(psql_db -At -c \
+    "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"); do
+    psql_db -At -c "SELECT '$table', count(*), \
+      coalesce(md5(string_agg(row_text, E'\\n' ORDER BY row_text)), '-') \
+      FROM (SELECT t::text AS row_text FROM public.\"$table\" t) rows"
+  done
+}
+
+expect_same_fingerprint() {
+  local context=$1 expected=$2 actual
+  actual=$(fingerprint)
+  if [ "$actual" != "$expected" ]; then
+    diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
+    fail "$context: database content differs from the backup"
+  fi
+}
+
+log "creating database $TEST_DB on $PGHOST:$PGPORT"
+createdb --maintenance-db=postgres "$TEST_DB"
+DB_CREATED=1
+export PGDATABASE="$TEST_DB"
+
+log "applying migrations through the API"
+start_api_until_ready
+stop_api
+
+log "inserting golden dataset"
+psql_db <<'SQL'
+BEGIN;
+INSERT INTO users (id, email_normalized, preferred_timezone, deleted_at) VALUES
+  ('00000000-0000-4000-8000-000000000001', 'golden-owner@example.com', 'Asia/Shanghai', NULL),
+  ('00000000-0000-4000-8000-000000000002', 'golden-member@example.com', 'Europe/Berlin', NULL),
+  ('00000000-0000-4000-8000-000000000003', 'golden-deleted@example.com', 'UTC',
+   '2026-10-30T00:00:00Z');
+INSERT INTO account_sync_state (user_id, next_server_seq, min_available_seq)
+  VALUES ('00000000-0000-4000-8000-000000000001', 4, 0);
+INSERT INTO devices (id, user_id, name, platform, last_client_seq, last_seen_at) VALUES
+  ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000001',
+   'Golden laptop', 'linux', 3, '2026-10-31T08:00:00Z');
+INSERT INTO sessions (id, user_id, device_id, refresh_token_hash, expires_at) VALUES
+  ('00000000-0000-4000-8000-000000000021', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000011', '\x0102'::bytea, '2026-12-01T00:00:00Z');
+INSERT INTO refresh_tokens (id, session_id, token_hash, expires_at) VALUES
+  ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000021',
+   '\x0102'::bytea, '2026-12-01T00:00:00Z');
+INSERT INTO lists (id, user_id, name, color, icon, rank, server_rev, deleted_at) VALUES
+  ('00000000-0000-4000-8000-000000000031', '00000000-0000-4000-8000-000000000001',
+   '工作 Work', '#3d66d9', 'briefcase', 'a1', 1, NULL),
+  ('00000000-0000-4000-8000-000000000032', '00000000-0000-4000-8000-000000000001',
+   'Archived', NULL, NULL, 'a2', 3, '2026-10-29T00:00:00Z');
+INSERT INTO tasks (id, user_id, list_id, title, note, status, important, due_on, remind_at,
+                   remind_timezone, rank, series_id, occurrence_key, recurrence, completed_at,
+                   server_rev, tags, deleted_at) VALUES
+  ('00000000-0000-4000-8000-000000000041', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000031', '整理发票 ✓ Expense report', E'line 1\nline 2',
+   'completed', true, '2026-11-03', '2026-11-02T01:30:00Z', 'Asia/Shanghai', 'a1',
+   '00000000-0000-4000-8000-000000000049', '2026-11-03',
+   '{"freq": "weekly", "interval": 2, "byweekday": ["mo"]}', '2026-11-02T03:00:00Z', 2,
+   ARRAY['work', '财务'], NULL),
+  ('00000000-0000-4000-8000-000000000042', '00000000-0000-4000-8000-000000000001', NULL,
+   'Inbox task', '', 'open', false, '1999-12-31', NULL, NULL, 'a2', NULL, NULL, NULL, NULL, 3,
+   '{}', NULL),
+  ('00000000-0000-4000-8000-000000000043', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000031', 'Deleted task', '', 'open', false, NULL, NULL, NULL,
+   'a3', NULL, NULL, NULL, NULL, 1, '{}', '2026-10-31T00:00:00Z');
+INSERT INTO steps (id, user_id, task_id, title, is_completed, rank, server_rev) VALUES
+  ('00000000-0000-4000-8000-000000000051', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000041', 'Scan receipts', true, 'a1', 2),
+  ('00000000-0000-4000-8000-000000000052', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000041', 'Submit 报销单', false, 'a2', 2);
+INSERT INTO day_plans (id, user_id, task_id, local_date, rank, server_rev) VALUES
+  ('00000000-0000-4000-8000-000000000061', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000042', '2026-11-01', 'a1', 3);
+INSERT INTO change_log (user_id, server_seq, op_id, entity_type, entity_id, kind, patch) VALUES
+  ('00000000-0000-4000-8000-000000000001', 1, '00000000-0000-4000-8000-000000000071', 'list',
+   '00000000-0000-4000-8000-000000000031', 'create', '{"name": "工作 Work"}'),
+  ('00000000-0000-4000-8000-000000000001', 2, '00000000-0000-4000-8000-000000000072', 'task',
+   '00000000-0000-4000-8000-000000000041', 'patch', '{"status": "completed"}'),
+  ('00000000-0000-4000-8000-000000000001', 3, '00000000-0000-4000-8000-000000000073', 'day_plan',
+   '00000000-0000-4000-8000-000000000061', 'create', '{"local_date": "2026-11-01"}');
+INSERT INTO op_receipts (op_id, user_id, device_id, client_seq, server_seq, status) VALUES
+  ('00000000-0000-4000-8000-000000000071', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000011', 1, 1, 'applied'),
+  ('00000000-0000-4000-8000-000000000072', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000011', 2, 2, 'applied'),
+  ('00000000-0000-4000-8000-000000000073', '00000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-000000000011', 3, 3, 'applied');
+INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth) VALUES
+  ('00000000-0000-4000-8000-000000000081', '00000000-0000-4000-8000-000000000001',
+   'https://push.example/golden', 'AAAA', 'BBBB');
+INSERT INTO shared_lists (id, owner_id, name, revision) VALUES
+  ('00000000-0000-4000-8000-000000000091', '00000000-0000-4000-8000-000000000001',
+   'Family 家庭', 3);
+INSERT INTO shared_list_members (list_id, user_id, role) VALUES
+  ('00000000-0000-4000-8000-000000000091', '00000000-0000-4000-8000-000000000001', 'owner'),
+  ('00000000-0000-4000-8000-000000000091', '00000000-0000-4000-8000-000000000002', 'editor');
+INSERT INTO shared_tasks (id, list_id, title, due_on) VALUES
+  ('00000000-0000-4000-8000-000000000092', '00000000-0000-4000-8000-000000000091',
+   'Buy milk', '2026-11-04');
+INSERT INTO shared_steps (id, task_id, title) VALUES
+  ('00000000-0000-4000-8000-000000000093', '00000000-0000-4000-8000-000000000092', 'Oat milk');
+INSERT INTO shared_op_receipts (list_id, op_id, actor_id, revision, status) VALUES
+  ('00000000-0000-4000-8000-000000000091', '00000000-0000-4000-8000-000000000094',
+   '00000000-0000-4000-8000-000000000002', 3, 'applied');
+COMMIT;
+SQL
+ORIGINAL=$(fingerprint)
+
+log "running backup.sh"
+BACKUP_DIR="$BACKUP_DIR" bash "$SCRIPT_DIR/backup.sh"
+DUMPS=("$BACKUP_DIR"/todo-*.dump)
+[ "${#DUMPS[@]}" = 1 ] && [ -f "${DUMPS[0]}" ] || fail "expected exactly one dump in $BACKUP_DIR"
+DUMP=${DUMPS[0]}
+[ -f "$DUMP.sha256" ] || fail "backup.sh did not write $DUMP.sha256"
+
+log "restore.sh must refuse without RESTORE_CONFIRM=YES"
+set +e
+env -u RESTORE_CONFIRM bash "$SCRIPT_DIR/restore.sh" "$DUMP" >"$WORK_DIR/refused.log" 2>&1
+status=$?
+set -e
+[ "$status" = 2 ] || fail "restore.sh without confirmation exited $status, expected 2"
+
+log "restore.sh must refuse a dump that does not match its checksum"
+mkdir "$WORK_DIR/tampered"
+TAMPERED="$WORK_DIR/tampered/$(basename "$DUMP")"
+cp "$DUMP" "$TAMPERED"
+cp "$DUMP.sha256" "$TAMPERED.sha256"
+printf 'tampered' >>"$TAMPERED"
+set +e
+RESTORE_CONFIRM=YES bash "$SCRIPT_DIR/restore.sh" "$TAMPERED" >"$WORK_DIR/tampered.log" 2>&1
+status=$?
+set -e
+[ "$status" != 0 ] || fail "restore.sh accepted a dump with a mismatched checksum"
+expect_same_fingerprint "after the refused restores" "$ORIGINAL"
+
+log "dropping the database and restoring into an empty one"
+dropdb --maintenance-db=postgres --force "$TEST_DB"
+createdb --maintenance-db=postgres "$TEST_DB"
+RESTORE_CONFIRM=YES bash "$SCRIPT_DIR/restore.sh" "$DUMP"
+expect_same_fingerprint "after restoring into an empty database" "$ORIGINAL"
+
+expect_count() {
+  local table=$1 expected=$2 actual
+  actual=$(psql_db -At -c "SELECT count(*) FROM public.$table")
+  [ "$actual" = "$expected" ] || fail "$table has $actual rows after restore, expected $expected"
+}
+expect_count users 3
+expect_count devices 1
+expect_count lists 2
+expect_count tasks 3
+expect_count steps 2
+expect_count day_plans 1
+expect_count change_log 3
+expect_count op_receipts 3
+expect_count shared_lists 1
+expect_count shared_list_members 2
+expect_count shared_tasks 1
+due_on=$(psql_db -At -c \
+  "SELECT due_on FROM tasks WHERE id = '00000000-0000-4000-8000-000000000042'")
+[ "$due_on" = 1999-12-31 ] || fail "task due date changed to $due_on"
+
+log "checking the API and operations CLI against the restored database"
+start_api_until_ready
+stop_api
+"$API_BIN" ops all --dry-run >"$WORK_DIR/ops.json" ||
+  fail "ops all --dry-run failed on the restored database"
+expect_same_fingerprint "after starting the API on the restored database" "$ORIGINAL"
+
+log "restoring over a modified database"
+psql_db -c "DELETE FROM steps WHERE id = '00000000-0000-4000-8000-000000000052'; \
+  UPDATE tasks SET title = 'changed after backup' \
+    WHERE id = '00000000-0000-4000-8000-000000000041'; \
+  INSERT INTO lists (id, user_id, name) VALUES (gen_random_uuid(), \
+    '00000000-0000-4000-8000-000000000001', 'created after backup');"
+RESTORE_CONFIRM=YES bash "$SCRIPT_DIR/restore.sh" "$DUMP"
+expect_same_fingerprint "after restoring over a modified database" "$ORIGINAL"
