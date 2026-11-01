@@ -94,6 +94,30 @@ export function packageDirOf(pkg) {
   return parts.join('/');
 }
 
+/**
+ * Directory names under ANDROID_HOME/platforms that satisfy a compile-SDK
+ * package. sdkmanager names an API level's platform `android-<level>`, but a
+ * minor API level, an extension pack or a preview gets a suffix:
+ * `platforms;android-37` is really installed as `android-37.0`, and the
+ * preview channels hand out `android-37.2-beta1`. The generated Gradle project
+ * still asks for compileSdk 37, so the plain directory test would report a
+ * red job on a runner where the platform is right there.
+ */
+export function platformDirMatches(dirName, pkg) {
+  const name = String(dirName ?? '');
+  const relative = packageDirOf(pkg);
+  if (relative === null) return false;
+  const match = /^platforms;android-(\d+)$/.exec(String(pkg).trim());
+  // Bare group entries (ndk/27.0.12077973) and the package path spelled in full
+  // are both accepted; only a platform needs the suffixed-directory rule.
+  if (!match) return name === relative || name === relative.slice(relative.indexOf('/') + 1);
+  const level = match[1];
+  return (
+    name === 'android-' + level ||
+    new RegExp('^android-' + level + '\\.\\d+(-[a-z0-9]+)?$').test(name)
+  );
+}
+
 /* ---------------------------------------------------------------------------
  * Pure decisions
  * ------------------------------------------------------------------------- */
@@ -153,10 +177,13 @@ export function decideProvisionResult({
     failures: [],
     notes: [
       ANDROID_COMPILE_SDK_PACKAGE +
-        ' is unavailable from every channel tried (' +
+        ' is not present after every channel tried (' +
         channelsTried.join(', ') +
         '): AGP may still auto-download it during the build, but that is not proven here and a ' +
-        'provisioning warning is never a passing build - check-platform decides',
+        'provisioning warning is never a passing build - check-platform decides. sdkmanager may ' +
+        'name the directory android-' +
+        ANDROID_COMPILE_SDK +
+        '.x for a minor API level; that counts as installed',
     ],
     missing,
   };
@@ -203,8 +230,11 @@ export function decideProvisionGate({
       notes.push(
         'the provisioning step warned and ' +
           ANDROID_COMPILE_SDK_PACKAGE +
-          ' is present anyway (AGP auto-download); the platform is proven present here and the ' +
-          'warning stays recorded as a warning, it is not reported as a provisioning success',
+          ' is present anyway (an android-' +
+          compileSdk +
+          '.x platform directory, or an AGP auto-download); the platform is proven present here ' +
+          'and the warning stays recorded as a warning, it is not reported as a provisioning ' +
+          'success',
       );
     } else {
       notes.push(
@@ -363,7 +393,18 @@ function sdkManager(dir) {
 
 function installed(dir, pkg) {
   const relative = packageDirOf(pkg);
-  return relative !== null && existsSync(join(dir, relative));
+  if (relative === null) return false;
+  if (existsSync(join(dir, relative))) return true;
+  if (!relative.startsWith('platforms/')) return false;
+  // A platform may land under a suffixed directory (android-37.0, android-37.2-beta1).
+  const group = join(dir, 'platforms');
+  let entries = [];
+  try {
+    entries = readdirSync(group);
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => platformDirMatches(entry, pkg));
 }
 
 function installPackage(bin, dir, pkg, extraArgs = []) {

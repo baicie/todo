@@ -65,6 +65,7 @@ import {
   describeProvisionPlan,
   describeProvisioningWiring,
   lintProvisioningWiring,
+  platformDirMatches,
   readCompileSdk,
 } from '../../scripts/release/android-sdk-provision.mjs';
 
@@ -880,6 +881,20 @@ test('android provisioning: the generated Gradle compileSdk is read back', () =>
   assert.equal(readCompileSdk('android {\n    compileSdk = 37\n}'), 37);
   assert.equal(readCompileSdk('compileSdkVersion(36)'), 36);
   assert.equal(readCompileSdk('android { }'), null);
+});
+
+test('android provisioning: a suffixed platform directory satisfies the compile SDK', () => {
+  // The GitHub runner installs android-37 as android-37.0; a preview channel
+  // adds a channel suffix. Both are the platform compileSdk 37 compiles against,
+  // and the plain directory test must not turn that runner red.
+  assert.equal(platformDirMatches('android-37', 'platforms;android-37'), true);
+  assert.equal(platformDirMatches('android-37.0', 'platforms;android-37'), true);
+  assert.equal(platformDirMatches('android-37.2-beta1', 'platforms;android-37'), true);
+  assert.equal(platformDirMatches('android-37.1', 'platforms;android-36'), false);
+  assert.equal(platformDirMatches('android-370', 'platforms;android-37'), false);
+  assert.equal(platformDirMatches('android-37', 'platforms;android-370'), false);
+  assert.equal(platformDirMatches('27.0.12077973', 'ndk;27.0.12077973'), true);
+  assert.equal(platformDirMatches('35.0.0', 'build-tools;35.0.0'), true);
 });
 
 test('android provisioning: the release path and the smoke path cannot drift apart', () => {
