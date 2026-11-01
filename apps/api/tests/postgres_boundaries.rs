@@ -1313,3 +1313,278 @@ async fn push_routes_use_the_json_error_contract() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shared lists: permission matrix (owner / editor / viewer / non-member)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum Actor {
+    Owner,
+    Editor,
+    Viewer,
+    Outsider,
+}
+
+impl Actor {
+    const ALL: [Self; 4] = [Self::Owner, Self::Editor, Self::Viewer, Self::Outsider];
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Owner => 3,
+            Self::Editor => 2,
+            Self::Viewer => 1,
+            Self::Outsider => 0,
+        }
+    }
+}
+
+struct SharedUsers {
+    owner: Session,
+    editor: Session,
+    viewer: Session,
+    outsider: Session,
+}
+
+impl SharedUsers {
+    async fn login(app: &Router, pool: &PgPool) -> Self {
+        Self {
+            owner: login(app, pool, "matrix-owner").await,
+            editor: login(app, pool, "matrix-editor").await,
+            viewer: login(app, pool, "matrix-viewer").await,
+            outsider: login(app, pool, "matrix-outsider").await,
+        }
+    }
+
+    fn get(&self, actor: Actor) -> &Session {
+        match actor {
+            Actor::Owner => &self.owner,
+            Actor::Editor => &self.editor,
+            Actor::Viewer => &self.viewer,
+            Actor::Outsider => &self.outsider,
+        }
+    }
+}
+
+/// A shared list at revision 1 with one task, the three member roles, one more
+/// viewer (`target_id`) for the member routes to act on, and a registered
+/// non-member (`candidate_email`) to invite. Rows are written directly so the
+/// matrix does not depend on how membership is granted.
+struct SharedFixture {
+    list_id: Uuid,
+    task_id: Uuid,
+    target_id: Uuid,
+    candidate_email: String,
+}
+
+async fn shared_fixture(pool: &PgPool, users: &SharedUsers) -> SharedFixture {
+    let fixture = SharedFixture {
+        list_id: Uuid::new_v4(),
+        task_id: Uuid::new_v4(),
+        target_id: Uuid::new_v4(),
+        candidate_email: format!("matrix-candidate-{}@example.com", Uuid::new_v4()),
+    };
+    let target_email = format!("matrix-target-{}@example.com", Uuid::new_v4());
+    let mut tx = pool.begin().await.unwrap();
+    for (id, email) in [
+        (fixture.target_id, target_email.as_str()),
+        (Uuid::new_v4(), fixture.candidate_email.as_str()),
+    ] {
+        sqlx::query("INSERT INTO users (id, email_normalized) VALUES ($1, $2)")
+            .bind(id)
+            .bind(email)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO shared_lists (id, owner_id, name) VALUES ($1, $2, 'Matrix')")
+        .bind(fixture.list_id)
+        .bind(users.owner.user_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for (user_id, role) in [
+        (users.owner.user_id, "owner"),
+        (users.editor.user_id, "editor"),
+        (users.viewer.user_id, "viewer"),
+        (fixture.target_id, "viewer"),
+    ] {
+        sqlx::query("INSERT INTO shared_list_members (list_id, user_id, role) VALUES ($1, $2, $3)")
+            .bind(fixture.list_id)
+            .bind(user_id)
+            .bind(role)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO shared_tasks (id, list_id, title) VALUES ($1, $2, 'Matrix task')")
+        .bind(fixture.task_id)
+        .bind(fixture.list_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    fixture
+}
+
+/// Everything the shared-list routes can change, as one comparable string.
+async fn shared_state(pool: &PgPool, list_id: Uuid) -> String {
+    sqlx::query_scalar(
+        "SELECT concat_ws(' | ', \
+           (SELECT concat_ws(',', revision, deleted_at IS NULL, name) \
+              FROM shared_lists WHERE id = $1), \
+           (SELECT string_agg(concat_ws(',', id, title, status, deleted_at IS NULL), ';' \
+                              ORDER BY id) \
+              FROM shared_tasks WHERE list_id = $1), \
+           (SELECT string_agg(concat_ws(',', user_id, role, deleted_at IS NULL), ';' \
+                              ORDER BY user_id) \
+              FROM shared_list_members WHERE list_id = $1))",
+    )
+    .bind(list_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SharedRoute {
+    GetList,
+    DeleteList,
+    CreateTask,
+    PatchTask,
+    DeleteTask,
+    AddMember,
+    PatchMember,
+    RemoveMember,
+}
+
+impl SharedRoute {
+    const ALL: [Self; 8] = [
+        Self::GetList,
+        Self::DeleteList,
+        Self::CreateTask,
+        Self::PatchTask,
+        Self::DeleteTask,
+        Self::AddMember,
+        Self::PatchMember,
+        Self::RemoveMember,
+    ];
+
+    /// Viewers read, editors change tasks, owners manage the list and members.
+    fn allows(self, actor: Actor) -> bool {
+        let required = match self {
+            Self::GetList => Actor::Viewer,
+            Self::CreateTask | Self::PatchTask | Self::DeleteTask => Actor::Editor,
+            Self::DeleteList | Self::AddMember | Self::PatchMember | Self::RemoveMember => {
+                Actor::Owner
+            }
+        };
+        actor.rank() >= required.rank()
+    }
+
+    fn success(self) -> StatusCode {
+        match self {
+            Self::DeleteList | Self::DeleteTask | Self::RemoveMember => StatusCode::NO_CONTENT,
+            _ => StatusCode::OK,
+        }
+    }
+
+    fn request(self, list_id: Uuid, fixture: &SharedFixture, token: &str) -> Request<Body> {
+        let list = format!("/api/v1/shared/lists/{list_id}");
+        let task = format!("{list}/tasks/{}", fixture.task_id);
+        let member = format!("{list}/members/{}", fixture.target_id);
+        let (method, uri, body) = match self {
+            Self::GetList => {
+                return request(Method::GET, &list, Some(token), None, Body::empty());
+            }
+            Self::DeleteList => (Method::DELETE, list, json!({ "revision": 1 })),
+            Self::CreateTask => (
+                Method::POST,
+                format!("{list}/tasks"),
+                json!({ "title": "Matrix create", "revision": 1 }),
+            ),
+            Self::PatchTask => (
+                Method::PATCH,
+                task,
+                json!({ "title": "Matrix patch", "revision": 1 }),
+            ),
+            Self::DeleteTask => (Method::DELETE, task, json!({ "revision": 1 })),
+            Self::AddMember => (
+                Method::POST,
+                format!("{list}/members"),
+                json!({ "email": fixture.candidate_email, "role": "viewer", "revision": 1 }),
+            ),
+            Self::PatchMember => (
+                Method::PATCH,
+                member,
+                json!({ "role": "editor", "revision": 1 }),
+            ),
+            Self::RemoveMember => (Method::DELETE, member, json!({ "revision": 1 })),
+        };
+        json_request(method, &uri, Some(token), &body)
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn shared_list_permission_matrix() {
+    let (app, pool) = pg_app().await;
+    let users = SharedUsers::login(&app, &pool).await;
+    let probe = shared_fixture(&pool, &users).await;
+    for route in SharedRoute::ALL {
+        for actor in Actor::ALL {
+            // Every cell gets a fresh list so earlier cells cannot mask later ones.
+            let fixture = shared_fixture(&pool, &users).await;
+            let before = shared_state(&pool, fixture.list_id).await;
+            let token = &users.get(actor).access;
+            let reply = send(&app, route.request(fixture.list_id, &fixture, token)).await;
+            let after = shared_state(&pool, fixture.list_id).await;
+            let context = format!("{route:?} as {actor:?}");
+            if route.allows(actor) {
+                assert_eq!(reply.status, route.success(), "{context}: {}", reply.body);
+                if matches!(route, SharedRoute::GetList) {
+                    assert_eq!(before, after, "{context} must not change the list");
+                } else {
+                    assert_ne!(before, after, "{context} must change the list");
+                }
+            } else {
+                // Non-members cannot tell a hidden list from a missing one.
+                let (status, code) = match actor {
+                    Actor::Outsider => (StatusCode::NOT_FOUND, "SHARED_LIST_NOT_FOUND"),
+                    _ => (StatusCode::FORBIDDEN, "SHARED_LIST_FORBIDDEN"),
+                };
+                reply.assert_error_in(&context, status, code);
+                assert_eq!(before, after, "{context} must not change the list");
+            }
+        }
+        let reply = send(
+            &app,
+            route.request(Uuid::new_v4(), &probe, &users.owner.access),
+        )
+        .await;
+        reply.assert_error_in(
+            &format!("{route:?} on a missing list"),
+            StatusCode::NOT_FOUND,
+            "SHARED_LIST_NOT_FOUND",
+        );
+    }
+
+    // The index returns each list the caller belongs to, with the caller's role.
+    for (actor, role) in [
+        (Actor::Owner, Some("owner")),
+        (Actor::Editor, Some("editor")),
+        (Actor::Viewer, Some("viewer")),
+        (Actor::Outsider, None),
+    ] {
+        let reply = send(&app, get("/api/v1/shared/lists", users.get(actor))).await;
+        reply.assert_status(StatusCode::OK);
+        let listed = reply
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|list| list["id"] == json!(probe.list_id))
+            .map(|list| list["role"].clone());
+        assert_eq!(listed, role.map(|role| json!(role)), "{actor:?}");
+    }
+}
