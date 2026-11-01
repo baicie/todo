@@ -44,6 +44,15 @@ import type {
 } from '../sync/storage';
 import { StaleSyncSessionError } from '../sync/storage';
 import type { CloudSnapshot } from '../sync/snapshot';
+import {
+  DexieSharedStore,
+  SHARED_DB_STORES,
+  type SharedListRecord,
+  type SharedMetaRow,
+  type SharedOpRecord,
+  type SharedStore,
+  type SharedTaskRecord,
+} from '../sync/shared-store';
 
 interface MetaRow {
   key: string;
@@ -88,6 +97,10 @@ class ShishiDatabase extends Dexie {
   mutations!: EntityTable<StoredMutation, 'opId'>;
   meta!: EntityTable<MetaRow, 'key'>;
   shadow!: EntityTable<ShadowRow, 'key'>;
+  sharedLists!: EntityTable<SharedListRecord, 'id'>;
+  sharedTasks!: EntityTable<SharedTaskRecord, 'id'>;
+  sharedOutbox!: EntityTable<SharedOpRecord, 'opId'>;
+  sharedMeta!: EntityTable<SharedMetaRow, 'key'>;
 
   constructor(name = 'shishi-todo') {
     super(name);
@@ -106,6 +119,14 @@ class ShishiDatabase extends Dexie {
       tasks:
         'id, listId, status, important, dueOn, updatedAt, deletedAt, remindAt, *tags, [listId+status]',
       shadow: 'key, entity, entityId',
+    });
+    // Shared lists get their own tables; personal tables are unchanged.
+    this.version(5).stores({
+      ...DB_STORES,
+      tasks:
+        'id, listId, status, important, dueOn, updatedAt, deletedAt, remindAt, *tags, [listId+status]',
+      shadow: 'key, entity, entityId',
+      ...SHARED_DB_STORES,
     });
   }
 }
@@ -333,6 +354,14 @@ export class DexieTaskRepository implements CloudSyncStorage {
 
   constructor(databaseName = 'shishi-todo') {
     this.db = new ShishiDatabase(databaseName);
+  }
+
+  private sharedStoreInstance: SharedStore | null = null;
+
+  /** Shared-list tables of this account's database; separate from personal data. */
+  sharedStore(): SharedStore {
+    this.sharedStoreInstance ??= new DexieSharedStore(this.db);
+    return this.sharedStoreInstance;
   }
 
   async initialize(): Promise<void> {
@@ -953,6 +982,10 @@ export class DexieTaskRepository implements CloudSyncStorage {
         this.db.mutations,
         this.db.meta,
         this.db.shadow,
+        this.db.sharedLists,
+        this.db.sharedTasks,
+        this.db.sharedOutbox,
+        this.db.sharedMeta,
       ],
       async () => {
         await Promise.all([
@@ -962,6 +995,10 @@ export class DexieTaskRepository implements CloudSyncStorage {
           this.db.dayPlans.clear(),
           this.db.mutations.clear(),
           this.db.shadow.clear(),
+          this.db.sharedLists.clear(),
+          this.db.sharedTasks.clear(),
+          this.db.sharedOutbox.clear(),
+          this.db.sharedMeta.clear(),
         ]);
         await this.db.meta.bulkPut([
           { key: 'seedVersion', value: '1' },
