@@ -223,9 +223,14 @@ async fn verify_code(
         return Err(AppError::validation("code must contain 6 to 8 digits"));
     }
     let device_name = body.device_name.trim();
-    if device_name.is_empty() || device_name.chars().count() > 100 {
+    // PostgreSQL TEXT cannot store NUL; other control characters are rejected
+    // too because device names are shown in device management UIs.
+    if device_name.is_empty()
+        || device_name.chars().count() > 100
+        || device_name.chars().any(char::is_control)
+    {
         return Err(AppError::validation(
-            "device_name must contain between 1 and 100 characters",
+            "device_name must contain between 1 and 100 printable characters",
         ));
     }
 

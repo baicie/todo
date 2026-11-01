@@ -1,6 +1,6 @@
 use std::{collections::HashSet, str::FromStr};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -22,6 +22,7 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>, MutationError> {
     let mut result = Vec::new();
     for raw in tags {
         let tag = clean_tag(raw);
+        reject_nul("tags", &tag)?;
         if tag.is_empty() {
             return Err(MutationError::validation(
                 "tags may not contain empty strings",
@@ -233,7 +234,17 @@ impl TaskValues {
             if recurrence.to_string().len() > 16 * 1024 {
                 return Err(MutationError::validation("recurrence is too large"));
             }
+            if json_contains_nul(recurrence) {
+                return Err(MutationError::validation(
+                    "recurrence may not contain NUL characters",
+                ));
+            }
         }
+        if let Some(due_on) = self.due_on {
+            storable_date("due_on", due_on)?;
+        }
+        storable_timestamp("remind_at", self.remind_at)?;
+        storable_timestamp("completed_at", self.completed_at)?;
         Ok(())
     }
 
@@ -307,6 +318,7 @@ impl DayPlanValues {
     }
 
     pub fn validate(&self) -> Result<(), MutationError> {
+        storable_date("local_date", self.local_date)?;
         required_text("rank", &self.rank, 128)
     }
 
@@ -546,7 +558,51 @@ fn required_field<'a, T>(
     }
 }
 
+/// PostgreSQL DATE and TIMESTAMPTZ start at 4714-11-24 BC, and chrono's range
+/// ends before PostgreSQL's upper bounds. Rejecting years before 4713 BC
+/// (astronomical year -4712) turns an unstorable value into a validation
+/// failure instead of a database error.
+const MIN_STORABLE_YEAR: i32 = -4712;
+
+fn storable_date(field: &str, value: NaiveDate) -> Result<(), MutationError> {
+    if value.year() < MIN_STORABLE_YEAR {
+        return Err(MutationError::validation(format!(
+            "field {field:?} is before the supported date range"
+        )));
+    }
+    Ok(())
+}
+
+fn storable_timestamp(field: &str, value: Option<DateTime<Utc>>) -> Result<(), MutationError> {
+    match value {
+        Some(value) => storable_date(field, value.date_naive()),
+        None => Ok(()),
+    }
+}
+
+/// PostgreSQL TEXT and JSONB cannot store NUL characters.
+fn reject_nul(field: &str, value: &str) -> Result<(), MutationError> {
+    if value.contains('\0') {
+        return Err(MutationError::validation(format!(
+            "field {field:?} may not contain NUL characters"
+        )));
+    }
+    Ok(())
+}
+
+fn json_contains_nul(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains('\0'),
+        Value::Array(items) => items.iter().any(json_contains_nul),
+        Value::Object(object) => object
+            .iter()
+            .any(|(key, value)| key.contains('\0') || json_contains_nul(value)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 fn required_text(field: &str, value: &str, max_chars: usize) -> Result<(), MutationError> {
+    reject_nul(field, value)?;
     if value.trim().is_empty() {
         return Err(MutationError::validation(format!(
             "field {field:?} may not be empty"
@@ -561,9 +617,11 @@ fn required_text(field: &str, value: &str, max_chars: usize) -> Result<(), Mutat
 }
 
 fn optional_text(field: &str, value: Option<&str>, max_chars: usize) -> Result<(), MutationError> {
-    if let Some(value) = value
-        && value.chars().count() > max_chars
-    {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    reject_nul(field, value)?;
+    if value.chars().count() > max_chars {
         return Err(MutationError::validation(format!(
             "field {field:?} exceeds {max_chars} characters"
         )));
@@ -749,5 +807,52 @@ mod tests {
         values.title = "Task".to_owned();
         let patch = task_patch(json!({"recurrence": ["daily"]})).unwrap();
         assert!(patch.apply(&mut values).is_err());
+    }
+
+    #[test]
+    fn nul_characters_are_rejected_before_storage() {
+        for patch in [
+            json!({"title": "a\u{0}b"}),
+            json!({"note": "a\u{0}b"}),
+            json!({"tags": ["a\u{0}b"]}),
+            json!({"recurrence": {"rule": "a\u{0}b"}}),
+            json!({"recurrence": {"a\u{0}b": "daily"}}),
+        ] {
+            let mut values = TaskValues::empty();
+            values.title = "Task".to_owned();
+            let error = task_patch(patch.clone())
+                .unwrap()
+                .apply(&mut values)
+                .unwrap_err();
+            assert_eq!(error.code, "VALIDATION_FAILED", "{patch}");
+        }
+        let mut list = ListValues::empty();
+        list.name = "a\u{0}b".to_owned();
+        assert!(list.validate().is_err());
+        let mut step = StepValues::empty(Uuid::new_v4());
+        step.title = "a\u{0}b".to_owned();
+        assert!(step.validate().is_err());
+    }
+
+    #[test]
+    fn dates_outside_postgres_range_are_rejected() {
+        let mut values = TaskValues::empty();
+        values.title = "Task".to_owned();
+        let patch = task_patch(json!({"due_on": "-5000-01-01"})).unwrap();
+        assert!(patch.apply(&mut values).is_err());
+
+        let mut values = TaskValues::empty();
+        values.title = "Task".to_owned();
+        let patch = task_patch(json!({"remind_at": "-5000-01-01T00:00:00Z"})).unwrap();
+        assert!(patch.apply(&mut values).is_err());
+
+        let mut values = TaskValues::empty();
+        values.title = "Task".to_owned();
+        let patch = task_patch(json!({"due_on": "-4712-01-01"})).unwrap();
+        assert!(patch.apply(&mut values).is_ok());
+
+        let mut plan = DayPlanValues::empty(Uuid::new_v4());
+        plan.local_date = NaiveDate::from_ymd_opt(-5000, 1, 1).unwrap();
+        assert!(plan.validate().is_err());
     }
 }

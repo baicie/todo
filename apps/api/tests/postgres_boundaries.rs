@@ -880,3 +880,436 @@ async fn sync_enforces_client_seq_and_op_id_rules() {
 fn op_id_of(ack: &Value) -> Uuid {
     serde_json::from_value(ack["op_id"].clone()).unwrap()
 }
+
+fn get(uri: &str, session: &Session) -> Request<Body> {
+    request(Method::GET, uri, Some(&session.access), None, Body::empty())
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn sync_rejects_cross_account_references() {
+    let (app, pool) = pg_app().await;
+    let alice = login(&app, &pool, "xref-alice").await;
+    let bob = login(&app, &pool, "xref-bob").await;
+    let (list_id, task_id, step_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let reply = sync(
+        &app,
+        &alice,
+        json!([
+            op(1, "list", list_id, "create", json!({ "name": "Alice" })),
+            op(
+                2,
+                "task",
+                task_id,
+                "create",
+                json!({ "title": "Alice task", "list_id": list_id })
+            ),
+            op(
+                3,
+                "step",
+                step_id,
+                "create",
+                json!({ "task_id": task_id, "title": "Alice step" })
+            ),
+        ]),
+    )
+    .await;
+    reply.assert_status(StatusCode::OK);
+    assert!(
+        reply.body["ack"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|ack| ack["status"] == "applied"),
+        "{}",
+        reply.body
+    );
+
+    let own_task = Uuid::new_v4();
+    let attempts = [
+        (
+            "task under a foreign list",
+            op(
+                1,
+                "task",
+                Uuid::new_v4(),
+                "create",
+                json!({ "title": "x", "list_id": list_id }),
+            ),
+            "INVALID_PARENT",
+        ),
+        (
+            "step under a foreign task",
+            op(
+                2,
+                "step",
+                Uuid::new_v4(),
+                "create",
+                json!({ "task_id": task_id, "title": "x" }),
+            ),
+            "INVALID_PARENT",
+        ),
+        (
+            "day plan for a foreign task",
+            op(
+                3,
+                "day_plan",
+                Uuid::new_v4(),
+                "create",
+                json!({ "task_id": task_id, "local_date": "2026-11-01" }),
+            ),
+            "INVALID_PARENT",
+        ),
+        (
+            "patch a foreign task",
+            op(4, "task", task_id, "patch", json!({ "title": "hijacked" })),
+            "ENTITY_NOT_FOUND",
+        ),
+        (
+            "delete a foreign task",
+            op(5, "task", task_id, "delete", json!({})),
+            "ENTITY_NOT_FOUND",
+        ),
+        (
+            "restore a foreign task",
+            op(6, "task", task_id, "restore", json!({})),
+            "ENTITY_NOT_FOUND",
+        ),
+        (
+            "patch a foreign list",
+            op(7, "list", list_id, "patch", json!({ "name": "hijacked" })),
+            "ENTITY_NOT_FOUND",
+        ),
+        (
+            "patch a foreign step",
+            op(8, "step", step_id, "patch", json!({ "title": "hijacked" })),
+            "ENTITY_NOT_FOUND",
+        ),
+        (
+            "create with a foreign list id",
+            op(9, "list", list_id, "create", json!({ "name": "dup" })),
+            "CONSTRAINT_VIOLATION",
+        ),
+        (
+            "create with a foreign task id",
+            op(10, "task", task_id, "create", json!({ "title": "dup" })),
+            "CONSTRAINT_VIOLATION",
+        ),
+        (
+            "own task",
+            op(
+                11,
+                "task",
+                own_task,
+                "create",
+                json!({ "title": "Bob task" }),
+            ),
+            "",
+        ),
+        (
+            "move an own task into a foreign list",
+            op(12, "task", own_task, "patch", json!({ "list_id": list_id })),
+            "INVALID_PARENT",
+        ),
+    ];
+    let ops: Vec<Value> = attempts.iter().map(|(_, op, _)| op.clone()).collect();
+    let reply = sync(&app, &bob, json!(ops)).await;
+    reply.assert_status(StatusCode::OK);
+    let acks = reply.body["ack"].as_array().unwrap();
+    assert_eq!(acks.len(), attempts.len(), "{}", reply.body);
+    for ((context, _, code), ack) in attempts.iter().zip(acks) {
+        if code.is_empty() {
+            assert_eq!(ack["status"], "applied", "{context}: {ack}");
+        } else {
+            assert_eq!(ack["status"], "rejected", "{context}: {ack}");
+            assert_eq!(ack["error_code"], *code, "{context}: {ack}");
+        }
+    }
+
+    let task: (String, bool, Option<Uuid>) =
+        sqlx::query_as("SELECT title, deleted_at IS NOT NULL, list_id FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(task, ("Alice task".to_owned(), false, Some(list_id)));
+    let list_name: String = sqlx::query_scalar("SELECT name FROM lists WHERE id = $1")
+        .bind(list_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(list_name, "Alice");
+    let step_title: String = sqlx::query_scalar("SELECT title FROM steps WHERE id = $1")
+        .bind(step_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(step_title, "Alice step");
+    let bob_list: Option<Uuid> = sqlx::query_scalar("SELECT list_id FROM tasks WHERE id = $1")
+        .bind(own_task)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bob_list, None);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn bootstrap_and_export_are_scoped_to_the_caller() {
+    let (app, pool) = pg_app().await;
+    let alice = login(&app, &pool, "scope-alice").await;
+    let bob = login(&app, &pool, "scope-bob").await;
+    let lists = [Uuid::new_v4(), Uuid::new_v4()];
+    sync(
+        &app,
+        &alice,
+        json!([
+            op(
+                1,
+                "list",
+                lists[0],
+                "create",
+                json!({ "name": "Alice one" })
+            ),
+            op(
+                2,
+                "list",
+                lists[1],
+                "create",
+                json!({ "name": "Alice two" })
+            ),
+        ]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+
+    let export = send(&app, get("/api/v1/export", &bob)).await;
+    export.assert_status(StatusCode::OK);
+    assert_eq!(export.body["lists"], json!([]), "{}", export.body);
+    assert_eq!(export.body["user"]["email"], bob.email);
+    let export = send(&app, get("/api/v1/export", &alice)).await;
+    export.assert_status(StatusCode::OK);
+    let mut exported: Vec<Uuid> = export.body["lists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|list| serde_json::from_value(list["id"].clone()).unwrap())
+        .collect();
+    exported.sort();
+    let mut expected = lists.to_vec();
+    expected.sort();
+    assert_eq!(exported, expected);
+
+    for query in ["limit=0", "limit=501", "limit=-1", "limit=abc"] {
+        send(
+            &app,
+            get(&format!("/api/v1/sync/bootstrap?{query}"), &alice),
+        )
+        .await
+        .assert_error_in(query, StatusCode::BAD_REQUEST, "VALIDATION_FAILED");
+    }
+    send(
+        &app,
+        get("/api/v1/sync/bootstrap?continuation=garbage", &alice),
+    )
+    .await
+    .assert_error(StatusCode::BAD_REQUEST, "INVALID_CONTINUATION");
+
+    // A continuation is bound to the account that started the snapshot.
+    let first_page = send(&app, get("/api/v1/sync/bootstrap?limit=1", &alice)).await;
+    first_page.assert_status(StatusCode::OK);
+    let continuation = first_page.body["next_page"]
+        .as_str()
+        .expect("a second page")
+        .to_owned();
+    let next = format!("/api/v1/sync/bootstrap?limit=1&continuation={continuation}");
+    send(&app, get(&next, &bob))
+        .await
+        .assert_error(StatusCode::BAD_REQUEST, "INVALID_CONTINUATION");
+    let second_page = send(&app, get(&next, &alice)).await;
+    second_page.assert_status(StatusCode::OK);
+    assert_eq!(
+        second_page.body["entities"].as_array().unwrap().len(),
+        1,
+        "{}",
+        second_page.body
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn refresh_rotates_once_and_revokes_the_session_on_reuse() {
+    let (app, pool) = pg_app().await;
+    let session = login(&app, &pool, "refresh").await;
+    let refresh = |token: &str| {
+        json_request(
+            Method::POST,
+            "/api/v1/auth/refresh",
+            None,
+            &json!({ "refresh_token": token }),
+        )
+    };
+
+    for token in ["not-a-real-token".to_owned(), "x".repeat(64 * 1024)] {
+        send(&app, refresh(&token))
+            .await
+            .assert_error(StatusCode::UNAUTHORIZED, "INVALID_REFRESH_TOKEN");
+    }
+
+    let rotated = send(&app, refresh(&session.refresh)).await;
+    rotated.assert_status(StatusCode::OK);
+    let next = rotated.body["refresh_token"].as_str().unwrap().to_owned();
+    assert_ne!(next, session.refresh);
+
+    // Presenting a rotated-out token is treated as theft: the whole session,
+    // including the token that replaced it, is revoked.
+    send(&app, refresh(&session.refresh))
+        .await
+        .assert_error(StatusCode::UNAUTHORIZED, "REFRESH_TOKEN_REUSED");
+    send(&app, refresh(&next))
+        .await
+        .assert_error(StatusCode::UNAUTHORIZED, "REFRESH_TOKEN_REUSED");
+    send(&app, get("/api/v1/export", &session))
+        .await
+        .assert_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn sync_rejects_values_postgres_cannot_store() {
+    let (app, pool) = pg_app().await;
+    let session = login(&app, &pool, "sync-unstorable").await;
+    let cases = [
+        ("NUL in list name", "list", json!({ "name": "a\u{0}b" })),
+        ("NUL in task title", "task", json!({ "title": "a\u{0}b" })),
+        (
+            "NUL in task note",
+            "task",
+            json!({ "title": "ok", "note": "a\u{0}b" }),
+        ),
+        (
+            "NUL in a tag",
+            "task",
+            json!({ "title": "ok", "tags": ["a\u{0}b"] }),
+        ),
+        (
+            "NUL in recurrence",
+            "task",
+            json!({ "title": "ok", "recurrence": { "rule": "a\u{0}b" } }),
+        ),
+        (
+            "due_on before PostgreSQL's date range",
+            "task",
+            json!({ "title": "ok", "due_on": "-5000-01-01" }),
+        ),
+        (
+            "remind_at before PostgreSQL's timestamp range",
+            "task",
+            json!({
+                "title": "ok",
+                "remind_at": "-5000-01-01T00:00:00Z",
+                "remind_timezone": "UTC"
+            }),
+        ),
+    ];
+    let total = cases.len() as i64;
+    for (index, (context, entity, patch)) in cases.into_iter().enumerate() {
+        let seq = index as i64 + 1;
+        let reply = sync(
+            &app,
+            &session,
+            json!([op(seq, entity, Uuid::new_v4(), "create", patch)]),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{context}: {}", reply.body);
+        let ack = &reply.body["ack"][0];
+        assert_eq!(ack["status"], "rejected", "{context}: {ack}");
+        assert_eq!(ack["error_code"], "VALIDATION_FAILED", "{context}: {ack}");
+    }
+    assert_eq!(watermark(&pool, &session).await, total);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn sign_in_rejects_device_names_postgres_cannot_store() {
+    let (app, _pool) = pg_app().await;
+    let email = format!("nul-device-{}@example.com", Uuid::new_v4());
+    send(
+        &app,
+        json_request(
+            Method::POST,
+            "/api/v1/auth/code/request",
+            None,
+            &json!({ "email": email }),
+        ),
+    )
+    .await
+    .assert_status(StatusCode::ACCEPTED);
+    send(
+        &app,
+        json_request(
+            Method::POST,
+            "/api/v1/auth/code/verify",
+            None,
+            &json!({
+                "email": email,
+                "code": DEV_CODE,
+                "device_id": Uuid::new_v4(),
+                "platform": "linux",
+                "device_name": "laptop\u{0}"
+            }),
+        ),
+    )
+    .await
+    .assert_error(StatusCode::BAD_REQUEST, "VALIDATION_FAILED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set DATABASE_URL and pass --ignored"]
+async fn push_routes_use_the_json_error_contract() {
+    let (app, pool) = pg_app().await;
+    let session = login(&app, &pool, "push-contract").await;
+    let token = Some(session.access.as_str());
+    let uri = "/api/v1/push/subscriptions";
+    for method in [Method::POST, Method::DELETE] {
+        for body in ["{", "null", "[]", "{\"endpoint\": 1}"] {
+            let request = request(
+                method.clone(),
+                uri,
+                token,
+                Some("application/json"),
+                body.to_owned(),
+            );
+            send(&app, request).await.assert_error_in(
+                &format!("{method} {body}"),
+                StatusCode::BAD_REQUEST,
+                "VALIDATION_FAILED",
+            );
+        }
+        let unknown = json!({
+            "endpoint": "https://push.example/sub",
+            "p256dh": "AAAA",
+            "auth": "AAAA",
+            "user_id": Uuid::new_v4()
+        });
+        send(&app, json_request(method.clone(), uri, token, &unknown))
+            .await
+            .assert_error_in(
+                &format!("{method} unknown field"),
+                StatusCode::BAD_REQUEST,
+                "VALIDATION_FAILED",
+            );
+        let plain = request(
+            method.clone(),
+            uri,
+            token,
+            Some("text/plain"),
+            json!({ "endpoint": "https://push.example/sub" }).to_string(),
+        );
+        send(&app, plain).await.assert_error_in(
+            &format!("{method} text/plain"),
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_FAILED",
+        );
+    }
+}

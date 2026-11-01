@@ -23,6 +23,7 @@ use crate::{
     auth::AuthUser,
     config::{Config, ConfigError, PushConfig},
     error::{ApiResult, AppError},
+    extract::ApiJson,
     state::AppState,
 };
 
@@ -278,7 +279,7 @@ async fn push_config(
 async fn subscribe(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(request): Json<SubscribeRequest>,
+    ApiJson(request): ApiJson<SubscribeRequest>,
 ) -> ApiResult<Json<SubscriptionResponse>> {
     require_push(&state)?;
     let (endpoint, p256dh, auth_key, user_agent) =
@@ -318,7 +319,7 @@ async fn subscribe(
 async fn unsubscribe(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(request): Json<UnsubscribeRequest>,
+    ApiJson(request): ApiJson<UnsubscribeRequest>,
 ) -> ApiResult<StatusCode> {
     let _ = require_push(&state)?;
     let endpoint = normalize_endpoint(&request.endpoint, state.config.app_env)?;
