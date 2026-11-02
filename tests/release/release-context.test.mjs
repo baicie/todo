@@ -1034,15 +1034,29 @@ test('workflow gates: the publish job verifies assets and identity before publis
   // After the approval the publish job adopts the staged draft from its remote
   // manifest sha256, revalidates every fact read-only, and only then performs the
   // single write.
+  //
+  // The publish job has no build outputs, so it revalidates the DRAFT against the
+  // adopted manifest and the manifest against the sha256 the staging run recorded.
+  // It must not run the local-inventory asset gate (`verify-assets`), which can
+  // only fail here: a publish run would have to rebuild every platform.
   const publish = jobBlock(workflowText(DEV_PUBLISH), 'publish');
-  const revalidateIndex = publish.indexOf('verify-assets');
+  const revalidateIndex = publish.indexOf('verify-draft');
   const adoptIndex = publish.indexOf('adopt-draft');
   const patchIndex = publish.indexOf('publish-draft');
   assert.ok(adoptIndex !== -1, 'the publish job must adopt the staged identity');
-  assert.ok(revalidateIndex !== -1, 'the publish job must revalidate the asset set');
+  assert.ok(revalidateIndex !== -1, 'the publish job must revalidate the draft');
   assert.ok(patchIndex !== -1, 'the publish job must flip the draft public');
   assert.ok(adoptIndex < patchIndex, 'the staged identity must be proven before the write');
   assert.ok(revalidateIndex < patchIndex, 'the asset gate must run before the write');
+  assert.ok(
+    !publish.includes('verify-assets'),
+    'the publish job has no build outputs; it must verify the adopted draft, not a local inventory',
+  );
+  assert.match(
+    publish.slice(revalidateIndex),
+    /--from-manifest[\s\S]*?--expect-release-id[\s\S]*?--expect-draft-sha/,
+    'the draft revalidation must pin the manifest bytes and the release identity',
+  );
 });
 
 test('workflow expressions: all four release workflows pass the expression lint today', () => {

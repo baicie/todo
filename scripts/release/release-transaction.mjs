@@ -81,6 +81,15 @@ export const OUTCOME_STAY_DRAFT = 'stay-draft';
 /** The remote asset whose own sha256 has no remote record, by construction. */
 export const HASH_UNVERIFIABLE_BY_DESIGN = Object.freeze([SUMS_NAME]);
 
+/**
+ * The build jobs upload a `toolchain-<platform>.json` next to their artifacts.
+ * Those files are carried by the release but are not part of the release
+ * contract. The pattern - not a fixed list - is allowed, because the macOS
+ * matrix names its records per architecture; anything else unexpected still
+ * fails closed.
+ */
+export const TOOLCHAIN_ASSET_PATTERN = /^toolchain-[A-Za-z0-9._-]+\.json$/;
+
 export class ReleaseTransactionError extends Error {
   constructor(message) {
     super(message);
@@ -186,6 +195,7 @@ export function verifyRemoteAssets({
   remote,
   hashes = {},
   allowedExtras = [],
+  allowedExtraPattern = null,
   requireSha256 = true,
   unhashedAllowed = HASH_UNVERIFIABLE_BY_DESIGN,
 } = {}) {
@@ -193,6 +203,10 @@ export function verifyRemoteAssets({
   if (!Array.isArray(remote)) fail('no remote asset inventory supplied');
   const allowed = new Set(allowedExtras);
   const exempt = new Set(unhashedAllowed);
+  const extraPattern =
+    allowedExtraPattern instanceof RegExp && allowedExtraPattern.global === false
+      ? allowedExtraPattern
+      : null;
   const failures = [];
   const notes = [];
   const byName = new Map();
@@ -251,8 +265,9 @@ export function verifyRemoteAssets({
 
   for (const name of byName.keys()) {
     if (expected.some((asset) => asset.name === name)) continue;
-    if (allowed.has(name)) notes.push('extra asset carried by the release: ' + name);
-    else failures.push('unexpected remote asset: ' + name);
+    if (allowed.has(name) || (extraPattern && extraPattern.test(name))) {
+      notes.push('extra asset carried by the release: ' + name);
+    } else failures.push('unexpected remote asset: ' + name);
   }
 
   return { ok: failures.length === 0, failures, notes };
@@ -410,7 +425,8 @@ export function compareRemoteRelease({ built, remote } = {}) {
     expected: built.assets,
     remote: Array.isArray(remote?.assets) ? remote.assets : [],
     hashes,
-    allowedExtras: built.extras,
+    allowedExtras: built.extras ?? [],
+    allowedExtraPattern: TOOLCHAIN_ASSET_PATTERN,
     requireSha256: true,
   });
   failures.push(...assets.failures);
@@ -1301,6 +1317,65 @@ function fetchReleaseSnapshot({ repo, tag }) {
   };
 }
 
+/**
+ * The built side of a publish run. The publish job has NO build artifacts on
+ * disk: it downloaded the draft's manifest and SHA256SUMS and nothing else, so
+ * describing the build from a local inventory can never succeed there. The
+ * staged manifest is the build record, and its own sha256 was pinned by the
+ * staging run (a different workflow run) before this one started - that pin is
+ * what keeps the comparison below from being circular.
+ *
+ * The manifest records the BUILD assets only: it is written before itself and
+ * SHA256SUMS exist, so it cannot list either. The release contract adds those
+ * two, and they are what `extras` carries here.
+ *
+ * A manifest without a recorded asset table is refused: there would be nothing
+ * left to compare the remote draft against.
+ */
+export function describeDraftRelease({ manifest } = {}) {
+  if (!manifest || typeof manifest !== 'object') fail('the staged release manifest is missing');
+  const version = normalizeVersion(manifest.release?.version);
+  const recorded = Array.isArray(manifest.assets) ? manifest.assets : [];
+  if (recorded.length === 0) {
+    fail(
+      'the staged ' +
+        MANIFEST_NAME +
+        ' records no asset inventory: the remote draft cannot be compared against it',
+    );
+  }
+  const assets = recorded.map((asset) => {
+    const name = typeof asset?.name === 'string' ? asset.name.trim() : '';
+    if (name === '') fail('the staged manifest carries an asset without a name');
+    const sha256 = hexOf(asset.sha256);
+    if (!sha256) fail('the staged manifest records no sha256 for ' + name);
+    if (!Number.isFinite(asset.size) || asset.size <= 0) {
+      fail('the staged manifest records no size for ' + name);
+    }
+    return { name, size: asset.size, sha256 };
+  });
+  const expected = expectedBuildAssets(version);
+  const missing = expected.filter((name) => !assets.some((asset) => asset.name === name));
+  if (missing.length > 0) {
+    fail(
+      'the staged manifest does not describe the release contract: missing ' + missing.join(', '),
+    );
+  }
+  const extra = [...assets.map((asset) => asset.name), MANIFEST_NAME, SUMS_NAME].filter(
+    (name) => !expected.includes(name),
+  );
+  return {
+    tag: String(manifest.release?.tag ?? version),
+    version,
+    channel: String(manifest.release?.channel ?? ''),
+    identifier: String(manifest.app?.identifier ?? ''),
+    tagCommitSHA: shaOf(manifest.commit?.tagSHA),
+    manifest,
+    assets,
+    extras: [...new Set(extra)].sort(),
+    source: 'draft-manifest',
+  };
+}
+
 function readBuiltRelease(options) {
   const dir = resolve(REPO_ROOT, options['artifacts-dir'] ?? 'artifacts');
   const manifestPath = join(dir, MANIFEST_NAME);
@@ -1312,7 +1387,27 @@ function readBuiltRelease(options) {
         ': the manifest must be written before the decision',
     );
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, ''));
+  const bytes = readFileSync(manifestPath);
+  const declared = options['expect-draft-sha'] ? hexOf(options['expect-draft-sha']) : null;
+  if (options['expect-draft-sha'] && !declared) {
+    fail('--expect-draft-sha must be a 64-hex sha256');
+  }
+  if (declared) {
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (actual !== declared) {
+      fail(
+        'the staged ' +
+          MANIFEST_NAME +
+          ' sha256 ' +
+          actual +
+          ' is not the one staging recorded (' +
+          declared +
+          ')',
+      );
+    }
+  }
+  const manifest = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
+  if (options['from-manifest']) return describeDraftRelease({ manifest });
   return describeBuiltRelease({ manifest, inventory: readArtifactInventory(dir) });
 }
 

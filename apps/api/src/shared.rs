@@ -1243,16 +1243,26 @@ fn validate_optional_text(
     Ok(Some(value.to_owned()))
 }
 
-/// PostgreSQL's `date` range. chrono parses wider values (for example
-/// `-5000-01-01`), and the insert then fails as a 500.
-const PG_DATE_MIN_YEAR: i32 = -4713;
-const PG_DATE_MAX_YEAR: i32 = 5874897;
+/// PostgreSQL's `date` range is Julian days 0 ..= 3_652_424, i.e.
+/// `4714-11-24 BC` ..= `5874897-12-31`.
+///
+/// The lower end is not the same as a year range: the first year is partial,
+/// so `-4713-01-01` (astronomical numbering for 4714 BC) is out of range even
+/// though its year is not. chrono parses that far, and the insert then fails
+/// as a 500. Verified against PostgreSQL 18.6; `select '4714-11-23 BC'::date`
+/// raises `date out of range` while `'4714-11-24 BC'` is the first valid day.
+///
+/// The upper end needs no guard here: `chrono::NaiveDate` stops at
+/// `262143-12-31`, far below PostgreSQL's maximum, so a larger year already
+/// fails JSON deserialization and is answered with a 400 by the extractor.
+const PG_DATE_FLOOR: NaiveDate = match NaiveDate::from_ymd_opt(-4713, 11, 24) {
+    Some(date) => date,
+    None => panic!("the PostgreSQL date floor is a valid calendar date"),
+};
 
 fn validate_due_on(value: Option<NaiveDate>) -> ApiResult<Option<NaiveDate>> {
     if let Some(date) = value {
-        use chrono::Datelike;
-        let year = date.year();
-        if !(PG_DATE_MIN_YEAR..=PG_DATE_MAX_YEAR).contains(&year) {
+        if date < PG_DATE_FLOOR {
             return Err(AppError::validation(
                 "due_on must be a date PostgreSQL can store",
             ));
@@ -1374,6 +1384,27 @@ mod tests {
         assert_eq!(parse_invite_role("viewer").unwrap(), SharedRole::Viewer);
         assert!(parse_invite_role("owner").is_err());
         assert!(parse_invite_role("admin").is_err());
+    }
+
+    #[test]
+    fn due_on_uses_postgresqls_exact_lower_bound() {
+        // The first storable day. A year-only check would also accept
+        // -4713-11-23, which PostgreSQL refuses with "date out of range".
+        let floor = NaiveDate::from_ymd_opt(-4713, 11, 24).unwrap();
+        assert_eq!(validate_due_on(Some(floor)).unwrap(), Some(floor));
+        for rejected in [
+            NaiveDate::from_ymd_opt(-4713, 11, 23).unwrap(),
+            NaiveDate::from_ymd_opt(-4713, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(-5000, 1, 1).unwrap(),
+        ] {
+            assert!(validate_due_on(Some(rejected)).is_err(), "{rejected}");
+        }
+        // Ordinary and far-future dates stay accepted; the ceiling is unreachable
+        // because chrono itself stops far below PostgreSQL's maximum.
+        for accepted in [NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(), NaiveDate::MAX] {
+            assert_eq!(validate_due_on(Some(accepted)).unwrap(), Some(accepted));
+        }
+        assert_eq!(validate_due_on(None).unwrap(), None);
     }
 
     #[test]

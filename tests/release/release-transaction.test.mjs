@@ -48,6 +48,7 @@ import {
   decidePublishAuthorization,
   decidePublishOutcome,
   describeBuiltRelease,
+  describeDraftRelease,
   describePipelineOutcome,
   guardWorkflowProvenance,
   publishConfirmationPhrase,
@@ -115,7 +116,12 @@ function builtManifest({
       pnpm: ['10.34.3'],
       tauriCli: ['2.12.4'],
     },
-    toolchainRecords: [],
+    // Staging reads these back from the uploaded toolchain-<platform>.json
+    // records, so the fixture carries the raw record the writer derives the
+    // table from.
+    toolchainRecords: [
+      { rustc: 'rustc 1.96.0', node: 'v24.16.0', pnpm: '10.34.3', tauriCli: '2.12.4' },
+    ],
     assets,
   };
 }
@@ -1150,6 +1156,117 @@ test('publish revalidation: a staged identity from another tag is refused', () =
   assert.match(absent.failures.join(' '), /missing from the staged release evidence/);
 });
 
+test('publish revalidation: the adopted draft manifest is a usable build description', () => {
+  // The publish job only has what it downloaded from the draft: the manifest
+  // and SHA256SUMS. It must be able to express that as the "built" side of the
+  // publish decision, otherwise the authorized path is dead and every publish
+  // fails closed forever.
+  const { built, manifest } = builtRelease();
+  const adopted = describeDraftRelease({ manifest });
+
+  // The manifest records the BUILD assets only; it is written before itself and
+  // SHA256SUMS exist. Those two therefore arrive as extras, never as assets.
+  assert.equal(adopted.assets.length, expectedBuildAssets(VERSION).length);
+  assert.deepEqual(
+    adopted.assets.map((asset) => asset.name),
+    manifest.assets.map((asset) => asset.name),
+  );
+  assert.deepEqual(
+    adopted.extras,
+    [MANIFEST_NAME, SUMS_NAME].sort(),
+    'the released extras are the manifest and SHA256SUMS, not the build assets',
+  );
+  assert.equal(adopted.tag, built.tag);
+  assert.equal(adopted.version, built.version);
+  assert.equal(adopted.channel, built.channel);
+  assert.equal(adopted.identifier, built.identifier);
+  assert.equal(adopted.tagCommitSHA, built.tagCommitSHA);
+  assert.equal(adopted.source, 'draft-manifest');
+
+  // The whole point: a draft that the remote still carries intact is publishable
+  // through the adopted description, exactly like through the built one.
+  const remote = remoteFor(built, { draft: true });
+  const fromDraft = decidePublishOutcome({ built: adopted, remote });
+  assert.equal(fromDraft.action, OUTCOME_PUBLISH, fromDraft.failures.join(' | '));
+  const fromBuild = decidePublishOutcome({ built, remote });
+  assert.equal(fromBuild.action, OUTCOME_PUBLISH, fromBuild.failures.join(' | '));
+});
+
+test('publish revalidation: the fixture manifest matches what staging actually writes', () => {
+  // describeDraftRelease reads the manifest staging wrote. If this fixture ever
+  // drifts from buildManifest, the tests above would pass against a shape that
+  // nobody produces. Pin the fixture to the real writer instead.
+  const fixture = builtManifest();
+  const written = buildManifest({
+    releaseVersion: VERSION,
+    artifactVersion: VERSION,
+    appVersion: VERSION,
+    releaseTag: TAG,
+    tagCommitSHA: TAG_SHA,
+    buildCommitSHA: TAG_SHA,
+    releaseChannel: 'dev',
+    repository: 'owner/repo',
+    workflowRef: 'owner/repo/.github/workflows/release-dev.yml@refs/tags/' + VERSION,
+    workflowSha: TAG_SHA,
+    runId: '1234',
+    runAttempt: '1',
+    assets: fixture.assets,
+    // buildManifest derives toolVersions from these raw records; the fixture
+    // already stores that derived table, so the two must agree.
+    toolchainRecords: fixture.toolchainRecords,
+  });
+  assert.deepEqual(fixture, written, 'the test manifest must be the one buildManifest produces');
+
+  // And the round-trip through JSON, which is how the publish job receives it.
+  const reparsed = JSON.parse(JSON.stringify(written));
+  assert.deepEqual(
+    describeDraftRelease({ manifest: reparsed }),
+    describeDraftRelease({ manifest: fixture }),
+  );
+});
+
+test('publish revalidation: the adopted draft description still refuses a changed draft', () => {
+  const { built, manifest } = builtRelease();
+  const adopted = describeDraftRelease({ manifest });
+  const remote = remoteFor(built, { draft: true });
+
+  const missing = decidePublishOutcome({
+    built: adopted,
+    remote: withoutAsset(remote, built.assets[0].name),
+  });
+  assert.equal(missing.action, OUTCOME_STAY_DRAFT);
+  assert.match(missing.failures.join(' '), /missing remote asset/);
+
+  // A draft whose toolchain-<platform>.json was replaced with something else
+  // fails closed: the pattern allows the record family, not arbitrary extras.
+  const intruder = {
+    ...remote,
+    assets: [...remote.assets, { name: 'notes.txt', size: 10, state: 'uploaded' }],
+  };
+  const extra = decidePublishOutcome({ built: adopted, remote: intruder });
+  assert.equal(extra.action, OUTCOME_STAY_DRAFT);
+  assert.match(extra.failures.join(' '), /unexpected remote asset: notes\.txt/);
+
+  const moved = decidePublishOutcome({
+    built: adopted,
+    remote: { ...remote, tagRefSHA: OTHER_SHA },
+  });
+  assert.equal(moved.action, OUTCOME_STAY_DRAFT);
+  assert.match(moved.failures.join(' '), /the release target/);
+
+  // A manifest with no asset table cannot describe a build at all.
+  assert.throws(
+    () => describeDraftRelease({ manifest: { ...manifest, assets: [] } }),
+    /records no asset inventory/,
+  );
+  // Nor can one that omits a contract asset.
+  const short = {
+    ...manifest,
+    assets: manifest.assets.filter((asset) => asset.name !== built.assets[1].name),
+  };
+  assert.throws(() => describeDraftRelease({ manifest: short }), /does not describe the release/);
+});
+
 test('release evidence: a failed run says the draft stays a draft and claims no readiness', () => {
   const evidence = buildReleaseEvidence({
     phase: EVIDENCE_PHASE_PUBLISH,
@@ -1233,8 +1350,21 @@ test('workflow transaction: the publish job records the environment gate instead
   assert.ok(publish.includes('--expect-release-id'), 'the write must pin the staged release id');
   assert.match(
     publish,
-    /name: Prove the published draft still matches the build[\s\S]*?publish-draft/,
+    /--from-manifest[\s\S]*?name: Re-check the authorization after the approval[\s\S]*?publish-draft/,
     'the draft must be revalidated after the approval and before the write',
+  );
+  assert.ok(
+    !/verify-assets[\s\S]*?--stage final/.test(publish),
+    'the publish job has no build artifacts on disk: it must verify the remote draft, not a ' +
+      'local artifact set that never exists there',
+  );
+  const revalidation = publish.slice(
+    publish.indexOf('name: Prove the draft still matches the staged build'),
+    publish.indexOf('name: Re-check the authorization after the approval'),
+  );
+  assert.ok(
+    revalidation.includes('--from-manifest') && revalidation.includes('--expect-draft-sha'),
+    'the post-approval revalidation must compare the adopted manifest, pinned by sha256',
   );
   assert.ok(
     !/productions?-ready|GOOD TO SHIP|release ready/i.test(stage + authorize + publish),

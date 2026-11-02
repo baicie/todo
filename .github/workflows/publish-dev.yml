@@ -164,11 +164,13 @@ jobs:
             --out-dir staged \
             --expect-draft-sha "$STAGED_MANIFEST_SHA256"
 
-      - name: Revalidate the adopted asset set
-        shell: bash
-        run: node scripts/release/release-context.mjs verify-assets --artifacts-dir staged --stage final
-
-      - name: Prove the published draft still matches the build
+      # The publish job never built the artifacts, so it cannot verify them as
+      # files. It verifies the DRAFT instead: the adopted manifest's own sha256
+      # is pinned to the one staging recorded, and every asset name, size and
+      # sha256 in that manifest is compared with what the remote draft carries.
+      # `--from-manifest` selects that comparison; the local-inventory path is
+      # only ever used by the staging run, which does have the build outputs.
+      - name: Prove the draft still matches the staged build
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -176,6 +178,7 @@ jobs:
           set -euo pipefail
           node scripts/release/release-transaction.mjs verify-draft \
             --artifacts-dir staged \
+            --from-manifest \
             --expect-release-id "${{ steps.adopt.outputs.releaseId }}" \
             --expect-draft-sha "$STAGED_MANIFEST_SHA256"
 
@@ -201,13 +204,20 @@ jobs:
           set -euo pipefail
           node scripts/release/release-transaction.mjs publish-draft \
             --artifacts-dir staged \
+            --from-manifest \
+            --expect-draft-sha "$STAGED_MANIFEST_SHA256" \
             --expect-release-id "${{ steps.adopt.outputs.releaseId }}"
 
       - name: Verify the published release provenance
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir staged
+        run: |
+          set -euo pipefail
+          node scripts/release/release-transaction.mjs verify-published \
+            --artifacts-dir staged \
+            --from-manifest \
+            --expect-draft-sha "$STAGED_MANIFEST_SHA256"
 
       - name: Write the publishing evidence
         id: evidence

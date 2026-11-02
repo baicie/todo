@@ -1875,6 +1875,14 @@ async fn shared_routes_reject_values_postgres_cannot_store() {
             tasks.clone(),
             json!({ "title": "ok", "due_on": "-5000-01-01", "revision": 1 }),
         ),
+        // One day before the first storable date. A year-only range check would
+        // accept this and let PostgreSQL answer with a 500.
+        (
+            "due_on one day before PostgreSQL's first storable day",
+            Method::POST,
+            tasks.clone(),
+            json!({ "title": "ok", "due_on": "-4713-11-23", "revision": 1 }),
+        ),
         (
             "NUL in patched task title",
             Method::PATCH,
@@ -1912,4 +1920,25 @@ async fn shared_routes_reject_values_postgres_cannot_store() {
     .await;
     reply.assert_error(StatusCode::BAD_REQUEST, "VALIDATION_FAILED");
     assert_eq!(list_revision(&pool, fixture.list_id).await, 1);
+
+    // The boundary itself must still be accepted: the fix may not narrow the
+    // valid range, only stop rejecting what PostgreSQL can store. 4714-11-24 BC
+    // is Julian day 0 and the first day a `date` column holds.
+    let floor = send(
+        &app,
+        json_request(
+            Method::POST,
+            &tasks,
+            token,
+            &json!({ "title": "floor date", "due_on": "-4713-11-24", "revision": 1 }),
+        ),
+    )
+    .await;
+    assert_eq!(floor.status, StatusCode::OK, "{}", floor.body);
+    assert_eq!(
+        floor.body["due_on"].as_str(),
+        Some("-4713-11-24"),
+        "the stored date must round-trip unchanged"
+    );
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 2);
 }
