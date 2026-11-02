@@ -316,6 +316,118 @@ const viewerWrite = await send(
 );
 expectCode(viewerWrite, 403, 'SHARED_LIST_FORBIDDEN', 'viewer write');
 
+// --- Role changes take effect on the next request, not on the client's copy --
+// A viewer's queued edit must be refused after a promotion is reversed. The
+// client only learns the new role from a snapshot, so the server must enforce
+// it regardless: promoting C to editor then demoting back to viewer must flip
+// the same request from 403 to 200 to 403.
+const setRole = async (role) => {
+  // Read the revision fresh every time: an exact-match write is the point of
+  // this API, so arithmetic on a stale snapshot would test the wrong thing.
+  const asOwner = await json(list2, {}, authA);
+  const cMember = asOwner.members.find((member) => member.email === emailC);
+  must(cMember, 'the accepted viewer is missing from the member list');
+  const reply = await send(
+    `${list2}/members/${cMember.user_id}`,
+    {
+      method: 'PATCH',
+      headers: { 'if-match': `"${asOwner.revision}"` },
+      body: JSON.stringify({ role, revision: asOwner.revision }),
+    },
+    authA,
+  );
+  must(reply.status === 200, `setting role ${role} failed: ${reply.status} ${reply.text}`);
+};
+
+const writeAsC = async (title, opId) => {
+  const asC = await json(list2, {}, authC);
+  return send(
+    `${list2}/tasks`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        ...(opId ? { op_id: opId } : {}),
+        revision: asC.revision,
+      }),
+    },
+    authC,
+  );
+};
+
+await setRole('editor');
+let asC = await json(list2, {}, authC);
+must(asC.list.role === 'editor', 'the promoted member still reads the viewer role');
+must((await writeAsC('promoted write')).status === 200, 'a promoted editor write was refused');
+
+await setRole('viewer');
+asC = await json(list2, {}, authC);
+must(asC.list.role === 'viewer', 'the demoted member still reads the editor role');
+expectCode(await writeAsC('demoted write'), 403, 'SHARED_LIST_FORBIDDEN', 'a demoted editor write');
+
+// An op that was rejected for permissions is not remembered as applied: if the
+// same op_id is retried after the role changes, it must execute rather than
+// replay a receipt that was never written. This is what lets the client's
+// outbox retry a rejected op safely once the user is allowed again.
+const rejectedOpId = randomUUID();
+expectCode(
+  await writeAsC('retried after demotion', rejectedOpId),
+  403,
+  'SHARED_LIST_FORBIDDEN',
+  'a viewer op before promotion',
+);
+await setRole('editor');
+const retried = await writeAsC('retried after demotion', rejectedOpId);
+must(
+  retried.status === 200,
+  `a rejected op retried after promotion must execute, got ${retried.status} ${retried.text}`,
+);
+must(
+  (await json(list2, {}, authA)).tasks.filter((item) => item.title === 'retried after demotion')
+    .length === 1,
+  'the retried op did not create exactly one task',
+);
+
+// --- A deleted list is gone for every member, and the token stays valid ----
+// Deleting the list is the owner's action; a member's queued push afterwards
+// must get 404 SHARED_LIST_NOT_FOUND (not 403), which is what tells the client
+// to drop the local shadow instead of reporting a permission problem.
+const beforeDelete = await json(list2, {}, authA);
+const deleted = await send(
+  list2,
+  {
+    method: 'DELETE',
+    headers: { 'if-match': `"${beforeDelete.revision}"` },
+    body: JSON.stringify({ revision: beforeDelete.revision }),
+  },
+  authA,
+);
+must(deleted.status === 204, `deleting the shared list failed: ${deleted.status} ${deleted.text}`);
+for (const [token, label] of [
+  [authA, 'owner'],
+  [authB, 'editor'],
+]) {
+  expectCode(
+    await send(list2, {}, token),
+    404,
+    'SHARED_LIST_NOT_FOUND',
+    `reading a deleted list as ${label}`,
+  );
+  expectCode(
+    await send(
+      `${list2}/tasks`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ title: 'after delete', revision: beforeDelete.revision }),
+      },
+      token,
+    ),
+    404,
+    'SHARED_LIST_NOT_FOUND',
+    `pushing into a deleted list as ${label}`,
+  );
+}
+
 // Logging out revokes the access token for shared routes immediately.
 await json('/api/v1/auth/logout', { method: 'POST', body: JSON.stringify({}) }, authA);
 const stale = await send('/api/v1/shared/lists', {}, authA);
@@ -336,6 +448,9 @@ console.log(
       concurrentWrite: 'one-200-one-409',
       crossAccountInvitation: 'hidden-and-refused',
       viewerWrite: 'forbidden',
+      roleChange: 'promote-allow-demote-deny',
+      rejectedOpRetry: 'executes-once-after-promotion',
+      deletedList: 'owner-and-member-see-404',
       logoutRevokesAccessToken: true,
     },
     null,
