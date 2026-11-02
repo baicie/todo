@@ -1261,12 +1261,12 @@ const PG_DATE_FLOOR: NaiveDate = match NaiveDate::from_ymd_opt(-4713, 11, 24) {
 };
 
 fn validate_due_on(value: Option<NaiveDate>) -> ApiResult<Option<NaiveDate>> {
-    if let Some(date) = value {
-        if date < PG_DATE_FLOOR {
-            return Err(AppError::validation(
-                "due_on must be a date PostgreSQL can store",
-            ));
-        }
+    if let Some(date) = value
+        && date < PG_DATE_FLOOR
+    {
+        return Err(AppError::validation(
+            "due_on must be a date PostgreSQL can store",
+        ));
     }
     Ok(value)
 }
