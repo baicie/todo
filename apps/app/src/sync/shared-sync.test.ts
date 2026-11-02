@@ -73,10 +73,19 @@ export class SharedApi {
   revoked = new Set<string>();
   /** When set, every request rejects with this error before reaching the server. */
   failWith: (() => Error) | null = null;
+  /**
+   * Mutating calls whose response is lost after the server applied them: the
+   * write lands, the client only sees a network error. Used for lost-ACK tests.
+   */
+  dropResponse = new Set<string>();
+  /** Lists whose revision check always fails, as a member writing in a loop would. */
+  alwaysStale = new Set<string>();
 
   reset(): void {
     this.calls = [];
     this.failWith = null;
+    this.dropResponse.clear();
+    this.alwaysStale.clear();
     this.server = {
       lists: new Map(),
       members: new Map(),
@@ -182,6 +191,8 @@ export class SharedApi {
 
   private checkRevision(listId: string, init: RequestInit): void {
     const expected = this.expected(init);
+    // Simulates a list that keeps moving: every attempt sees a newer revision.
+    if (this.alwaysStale.has(listId)) this.bump(listId);
     const actual = this.listRevision(listId);
     if (expected !== null && expected !== actual) {
       throw new SyncHttpError(409, 'REVISION_CONFLICT', `expected ${actual}`);
@@ -201,7 +212,12 @@ export class SharedApi {
     const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
     this.calls.push({ method, path, revision: this.expected(init)?.toString() ?? null, body });
     if (this.failWith) throw this.failWith();
-    return (await this.route(method, path, body, init)) as T;
+    const response = (await this.route(method, path, body, init)) as T;
+    // The server applied the write, but the reply never reaches the client.
+    if (this.dropResponse.has(`${method} ${path}`)) {
+      throw new TypeError('Failed to fetch');
+    }
+    return response;
   };
 
   private checkAccess(listId: string, method: string): void {
@@ -705,6 +721,202 @@ describe('SharedSyncEngine', () => {
     // Nothing from the stopped run lands: no record, or one still without snapshot.
     const record = await store.transact((tx) => tx.getList(list.id));
     expect(record?.snapshot ?? null).toBeNull();
+  });
+
+  it('settles a create whose acknowledgement was lost without duplicating the task', async () => {
+    const api = new SharedApi();
+    const list = api.addList('丢回执');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    // The server applies the create, then the reply is lost on the way back.
+    api.dropResponse.add(`POST /lists/${list.id}/tasks`);
+    await engine.createTask(list.id, { title: '只应出现一次' });
+    await engine.syncNow();
+    expect(engine.getState().status).toBe('offline');
+    expect((await listTaskSnapshot(store, list.id)).ops).toHaveLength(1);
+
+    // The retry reuses the op_id; the receipt answers with the applied task and
+    // the queued op is dropped. Exactly one task exists, locally and remotely.
+    api.dropResponse.clear();
+    await engine.syncNow();
+
+    const after = await listTaskSnapshot(store, list.id);
+    expect(after.ops).toHaveLength(0);
+    expect(after.tasks.map((task) => task.title)).toEqual(['只应出现一次']);
+    expect(after.tasks[0]!.pending).toBe(false);
+    expect([...api.server.tasks.values()].map((task) => task.title)).toEqual(['只应出现一次']);
+    expect(after.list?.revision).toBe(api.server.revision.get(list.id));
+  });
+
+  it('reconciles a replayed receipt whose revision is not the adjacent one', async () => {
+    const api = new SharedApi();
+    const list = api.addList('丢回执又有人改');
+    const other = api.addTask(list.id, '别人的任务');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    // The create is applied, its acknowledgement is lost, and another member
+    // writes afterwards, so the replayed receipt answers with revision+2.
+    api.dropResponse.add(`POST /lists/${list.id}/tasks`);
+    await engine.createTask(list.id, { title: '只应出现一次' });
+    await engine.syncNow();
+    api.dropResponse.clear();
+    api.remoteEdit(other.id, { title: '别人改过的任务' });
+    await engine.syncNow();
+
+    const after = await listTaskSnapshot(store, list.id);
+    expect(after.ops).toHaveLength(0);
+    expect(after.tasks.map((task) => task.title).sort()).toEqual(
+      ['只应出现一次', '别人改过的任务'].sort(),
+    );
+    expect(after.tasks.find((task) => task.title === '只应出现一次')?.pending).toBe(false);
+    expect([...api.server.tasks.values()].map((task) => task.title).sort()).toEqual(
+      ['只应出现一次', '别人改过的任务'].sort(),
+    );
+    expect(after.list?.revision).toBe(api.server.revision.get(list.id));
+    // The queued op is cleared: no further POST is attempted on later syncs.
+    api.calls.length = 0;
+    await engine.syncNow();
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+  });
+
+  it('settles a patch whose acknowledgement was lost instead of rejecting it', async () => {
+    const api = new SharedApi();
+    const list = api.addList('丢回执改');
+    const task = api.addTask(list.id, '原标题');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    api.dropResponse.add(`PATCH /lists/${list.id}/tasks/${task.id}`);
+    await engine.updateTask(list.id, task.id, { title: '新标题' });
+    await engine.syncNow();
+    expect((await listTaskSnapshot(store, list.id)).ops).toHaveLength(1);
+    expect(api.server.tasks.get(task.id)?.title).toBe('新标题');
+
+    // Pull + rebase sees the field already equal to the patch, so the op is not
+    // treated as a conflict; replaying it clears the outbox.
+    api.dropResponse.clear();
+    await engine.syncNow();
+
+    const after = await listTaskSnapshot(store, list.id);
+    expect(after.ops).toHaveLength(0);
+    expect(after.tasks.find((item) => item.id === task.id)?.title).toBe('新标题');
+    expect(after.tasks.find((item) => item.id === task.id)?.pending).toBe(false);
+  });
+
+  it('bounds a revision-conflict loop and keeps the queued edit', async () => {
+    const api = new SharedApi();
+    const list = api.addList('一直在变');
+    const task = api.addTask(list.id, '标题');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    await engine.updateTask(list.id, task.id, { title: '我的修改' });
+    // Another member keeps writing, so every replay is one revision stale.
+    api.alwaysStale.add(list.id);
+    await engine.syncNow();
+    // Measure one bounded run: a run retries at most MAX_PULLS_PER_LIST times.
+    api.calls.length = 0;
+    await engine.syncNow();
+
+    const stuck = await listTaskSnapshot(store, list.id);
+    expect(stuck.ops).toHaveLength(1);
+    expect(stuck.ops[0]).toMatchObject({ status: 'pending' });
+    expect(stuck.list?.error).toBe('清单持续被其他成员更新，稍后自动重试');
+    const attempts = api.calls.filter((call) => call.method === 'PATCH').length;
+    expect(attempts).toBeGreaterThan(0);
+    expect(attempts).toBeLessThanOrEqual(5);
+    const pulls = api.calls.filter(
+      (call) => call.method === 'GET' && call.path === `/lists/${list.id}`,
+    ).length;
+    expect(pulls).toBeLessThanOrEqual(5);
+
+    // The edit is not lost: once the list settles, it is applied.
+    api.alwaysStale.delete(list.id);
+    await engine.syncNow();
+    const resolved = await listTaskSnapshot(store, list.id);
+    expect(resolved.ops).toHaveLength(0);
+    expect(api.server.tasks.get(task.id)?.title).toBe('我的修改');
+  });
+
+  it('keeps queued edits as rejected, never silently discards, after access is revoked', async () => {
+    const api = new SharedApi();
+    const list = api.addList('被移除时离线');
+    api.server.lists.set(list.id, { ...api.server.lists.get(list.id)!, role: 'editor' });
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    api.failWith = () => new TypeError('Failed to fetch');
+    await engine.createTask(list.id, { title: '还没发出去' });
+    await engine.syncNow();
+    api.failWith = null;
+
+    api.removeMember(list.id);
+    // Count only what the reconnect tries: the offline attempt is the one that
+    // already happened and is expected to have reached the transport.
+    api.calls.length = 0;
+    await engine.syncNow();
+
+    const after = await listTaskSnapshot(store, list.id);
+    expect(after.list?.access).toBe('revoked');
+    expect(after.ops).toHaveLength(1);
+    expect(after.ops[0]).toMatchObject({
+      status: 'rejected',
+      errorCode: 'SHARED_LIST_ACCESS_REVOKED',
+    });
+    // Nothing is pushed after the membership is gone.
+    expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
+    const view = await engine.read();
+    expect(view.lists[0]?.rejected.map((op) => op.opId)).toEqual([after.ops[0]!.opId]);
+  });
+
+  it('rejects queued edits when the list is deleted instead of retrying forever', async () => {
+    const api = new SharedApi();
+    const list = api.addList('被删除时离线');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    api.failWith = () => new TypeError('Failed to fetch');
+    await engine.createTask(list.id, { title: '发不出去' });
+    await engine.syncNow();
+    api.failWith = null;
+
+    api.deleteList(list.id);
+    api.calls.length = 0;
+    await engine.syncNow();
+
+    const after = await listTaskSnapshot(store, list.id);
+    expect(after.list?.access).toBe('deleted');
+    expect(after.ops).toHaveLength(1);
+    expect(after.ops[0]).toMatchObject({ status: 'rejected', errorCode: 'SHARED_LIST_NOT_FOUND' });
+    expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('allows edits after a viewer is promoted to editor', async () => {
+    const api = new SharedApi();
+    const list = api.addList('升职', 'viewer');
+    api.addTask(list.id, '已有');
+    const { store } = newStore();
+    const engine = engineFor(api, store);
+    await pulled(engine);
+
+    await expect(engine.createTask(list.id, { title: '只读时' })).rejects.toThrow('只读');
+
+    // The owner promotes this member; the next index refresh carries the role.
+    api.server.lists.set(list.id, { ...api.server.lists.get(list.id)!, role: 'editor' });
+    await engine.syncNow();
+    expect((await engine.read()).lists[0]?.editable).toBe(true);
+
+    await engine.createTask(list.id, { title: '升职后' });
+    await engine.syncNow();
+    expect([...api.server.tasks.values()].map((task) => task.title)).toEqual(['已有', '升职后']);
   });
 
   it('never writes shared entities into personal tables or the personal outbox', async () => {

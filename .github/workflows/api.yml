@@ -101,6 +101,25 @@ jobs:
           done
           echo "API failed to become ready"
           exit 1
+      # Multi-session E2E against the real API and PostgreSQL: lost acks, op_id
+      # replay/conflict, concurrent writes, cross-account invitations, viewer
+      # writes and logout revocation. Nothing here is mocked.
+      - name: Shared-list multi-session E2E
+        run: |
+          cargo run -p todo-api &
+          API_PID=$!
+          trap 'kill "$API_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/readyz > /dev/null; then
+              break
+            fi
+            if [ "$attempt" = 30 ]; then
+              echo "API failed to become ready"
+              exit 1
+            fi
+            sleep 1
+          done
+          node scripts/shared-e2e.mjs
 
   backup-restore:
     # Optional drill (docs/roadmap-v2/05-quality.md §4). It always runs on a

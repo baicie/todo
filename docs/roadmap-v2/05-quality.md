@@ -30,10 +30,15 @@
 - 发现并修复：sync 中含 NUL 的文本/标签/recurrence 与超出 PostgreSQL 日期范围的
   日期原返回 500，现为 `VALIDATION_FAILED` 拒绝回执；设备名含 NUL 原返回 500，
   现在含任何控制字符都返回 400；push 订阅路由原返回纯文本错误，现为 JSON。
-- 未修复：`shared.rs` 同类输入（NUL、超范围日期）仍返回 500，由
-  `known_defect_shared_routes_reject_values_postgres_cannot_store` 记录，CI 以
-  `--skip known_defect_` 跳过。`cargo-fuzz` 目标未实现。
-- 实测：本机 Windows + PostgreSQL 18.6 全部通过；CI（PostgreSQL 16）尚未运行。
+- 已修复（2026-11-02）：`shared.rs` 同一类输入（清单名/任务标题/备注含 NUL、
+  `due_on` 超出 PostgreSQL `date` 范围 4713 BC..5874897 AD）原返回 500
+  `INTERNAL_ERROR`，在隔离 PostgreSQL 上复现后在 `validate_text`/`validate_note`/
+  `validate_due_on` 中拒绝，现为 400 `VALIDATION_FAILED`，且不写库、不推进 revision、
+  不写回执。测试由 `known_defect_...` 更名为
+  `shared_routes_reject_values_postgres_cannot_store`，去掉 `#[ignore]` 之外的跳过逻辑，
+  CI 以 `--ignored` 运行全部边界用例，不再使用 `--skip known_defect_`。
+  `cargo-fuzz` 目标仍未实现。
+- 实测：本机 Windows + PostgreSQL 18.6 全部通过；CI（PostgreSQL 16）见 Phase G 记录。
 
 ## 3. 迁移测试
 

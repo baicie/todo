@@ -463,7 +463,15 @@ with HTTP `409`. Each successful mutation writes an applied
 `shared_op_receipts` row and increments the list revision exactly once. For
 task and member operations, repeating the same `op_id` on the same list returns
 the existing result/revision without applying the mutation twice. The optional
-`op_id` is also recorded for client audit/retry correlation.
+`op_id` is also recorded for client audit/retry correlation. Receipts are keyed
+by `(list_id, op_id)` and carry the actor: a different account reusing an
+`op_id` on the same list gets `409 OP_ID_CONFLICT` instead of another member's
+result.
+
+Values PostgreSQL cannot store are rejected before any write: NUL characters in
+list names, task titles and notes, and `due_on` outside `4713-01-01 BC ..
+5874897-12-31 AD`, answer `400 VALIDATION_FAILED`. They never produce a `500`,
+a revision bump or a receipt.
 
 `DELETE /api/v1/shared/lists/{id}` is owner-only, requires a revision, soft-deletes
 the list, and returns `204`.
