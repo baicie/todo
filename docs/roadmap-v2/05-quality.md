@@ -70,14 +70,30 @@
 
 CI 中作为可选 job，使用 Docker 服务和 `RESTORE_CONFIRM=YES`。
 
-**状态（2026-11-01）**：脚本已实现，复用 `backup.sh` / `restore.sh`。除上述步骤外还
-检查 `restore.sh` 拒绝未确认与 checksum 不符的 dump、恢复后每张表的行指纹与备份前一致、
-恢复后 API 就绪且 `ops all --dry-run` 通过、在已修改的库上再次恢复可回到备份状态。
-`.github/workflows/api.yml` 新增 `backup-restore` job：`workflow_dispatch` 时总是运行，
+**状态（2026-11-02，V1.1-RC1）**：脚本已实现，复用 `backup.sh` / `restore.sh`。除上述
+步骤外还检查 `restore.sh` 拒绝未确认与 checksum 不符的 dump、恢复后每张表的行指纹与备份
+前一致、恢复后 API 就绪且 `ops all --dry-run` 通过、在已修改的库上再次恢复可回到备份状态。
+`.github/workflows/api.yml` 的 `backup-restore` job 在 `workflow_dispatch` 时总是运行，
 push/PR 时仅在改动 `scripts/ops/`、`db/postgres/`、`docker-compose.yml` 或
-`apps/api/src/{db,ops}.rs` 时运行，使用 `--compose` 模式。
+`apps/api/src/{db,ops,shared}.rs` 时运行，使用 `--compose` 模式。
 
-- 实测：本机以现有服务器模式（PostgreSQL 18.6，Git Bash）完整通过。
+共享协作数据在恢复后通过真实 API 校验（仅比对行数不足以证明权限与幂等仍然成立）：
+
+- 黄金数据集包含待接受邀请（含未注册地址）、已接受邀请、以及"已接受后被移除"的成员
+  （membership 行软删除，邀请审计行保留）。
+- 恢复后列表 revision/tasks 不变；在职 editor 仍可访问，被移除成员仍是
+  `403 SHARED_LIST_ACCESS_REVOKED`（不会因邀请审计行而复活）。
+- op receipt 幂等：原 actor 重放返回 200 且不新增任务，其他 actor 重放同一 op_id 得到
+  `409 OP_ID_CONFLICT`。
+- 恢复后仍可新建任务、发起邀请、接受邀请；对已是成员的地址重复邀请得到
+  `409 SHARED_MEMBER_EXISTS`，且不产生重复邀请行。
+- 上述写入都是"恢复后的新状态"，脚本在指纹比对前会再次 restore 回到备份内容。
+
+**边界**：浏览器本地 `sharedOutbox`（IndexedDB）与 PostgreSQL 是两个独立持久化边界。
+数据库备份只能恢复服务端副本，无法恢复某台设备上尚未发送的离线编辑；本演练不覆盖、也
+不应声称覆盖该场景。
+
+- 实测：本机以现有服务器模式（PostgreSQL 18.6，Git Bash）完整通过，含上述共享数据检查。
 - 工具版本：`pg_dump` 比服务器新时，dump 会带上旧服务器不认识的设置
   （PostgreSQL 17 起写 `SET transaction_timeout`），恢复失败看起来却像备份损坏。
   脚本现在从服务器读取 `server_version_num`，与 `psql`/`pg_dump`/`pg_restore`
