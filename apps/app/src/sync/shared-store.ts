@@ -32,10 +32,7 @@ export function normalizeSharedIdentity(identity: SharedAccountIdentity): Shared
   };
 }
 
-export function sameSharedAccount(
-  a: SharedAccountIdentity,
-  b: SharedAccountIdentity,
-): boolean {
+export function sameSharedAccount(a: SharedAccountIdentity, b: SharedAccountIdentity): boolean {
   const left = normalizeSharedIdentity(a);
   const right = normalizeSharedIdentity(b);
   return left.email === right.email && left.apiUrl === right.apiUrl;
@@ -120,10 +117,7 @@ export interface SharedStore {
    * `ownerHint` is the personal `boundAccount` of the same data space, used
    * only to adopt shared data written before bindings existed.
    */
-  bindAccount?(
-    identity: SharedAccountIdentity,
-    ownerHint?: string | null,
-  ): Promise<boolean>;
+  bindAccount?(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean>;
 }
 
 export const SHARED_DB_STORES = {
@@ -177,10 +171,7 @@ async function claimBinding(
     const hint = ownerHint?.trim().toLowerCase() ?? '';
     if (!hint || hint !== next.email) return false;
   }
-  await tx.setMeta(
-    SHARED_BINDING_KEY,
-    JSON.stringify({ email: next.email, apiUrl: next.apiUrl }),
-  );
+  await tx.setMeta(SHARED_BINDING_KEY, JSON.stringify({ email: next.email, apiUrl: next.apiUrl }));
   return true;
 }
 
@@ -240,10 +231,7 @@ export class DexieSharedStore implements SharedStore {
     return this.transact(async (tx) => parseBinding(await tx.getMeta(SHARED_BINDING_KEY)));
   }
 
-  bindAccount(
-    identity: SharedAccountIdentity,
-    ownerHint?: string | null,
-  ): Promise<boolean> {
+  bindAccount(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
     return this.transact((tx) => claimBinding(tx, identity, ownerHint));
   }
 
@@ -328,10 +316,7 @@ export class MemorySharedStore implements SharedStore {
     return this.transact(async (tx) => parseBinding(await tx.getMeta(SHARED_BINDING_KEY)));
   }
 
-  bindAccount(
-    identity: SharedAccountIdentity,
-    ownerHint?: string | null,
-  ): Promise<boolean> {
+  bindAccount(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
     return this.transact((tx) => claimBinding(tx, identity, ownerHint));
   }
 

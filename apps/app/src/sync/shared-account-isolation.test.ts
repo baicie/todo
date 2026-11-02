@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SyncHttpError } from '@todo/sync';
-import type {
-  SharedListSummary,
-  SharedMember,
-  SharedSnapshot,
-  SharedTask,
-} from '@todo/contracts';
+import type { SharedListSummary, SharedMember, SharedSnapshot, SharedTask } from '@todo/contracts';
 import { DexieTaskRepository } from '../adapters/web-repository';
 import { SharedSyncEngine, type SharedSession } from './shared-sync';
 import type { SharedStore } from './shared-store';
@@ -345,7 +340,10 @@ describe('shared-list account isolation', () => {
     expect(api.calls.every((call) => call.account === ACCOUNT_A.account.email)).toBe(true);
     expect((await a.read()).lists.map((item) => item.record.summary.name)).toEqual(['共同清单']);
     const boundAfterA = await store.boundAccount!();
-    expect(boundAfterA).toEqual({ email: ACCOUNT_A.account.email, apiUrl: ACCOUNT_A.account.apiUrl });
+    expect(boundAfterA).toEqual({
+      email: ACCOUNT_A.account.email,
+      apiUrl: ACCOUNT_A.account.apiUrl,
+    });
 
     // 2. A goes offline and edits twice: one create, one patch of the old task.
     const originalRequest = api.request;
@@ -362,10 +360,7 @@ describe('shared-list account isolation', () => {
       ops: await tx.ops(shared.id),
     }));
     expect(offline.ops).toHaveLength(2);
-    expect(offline.tasks.map((task) => task.title).sort()).toEqual([
-      'A 的旧任务',
-      '地铁上写的',
-    ]);
+    expect(offline.tasks.map((task) => task.title).sort()).toEqual(['A 的旧任务', '地铁上写的']);
 
     // 3. A signs out without clearing local data (web keeps it, per the UI copy).
     a.stop();
@@ -401,8 +396,9 @@ describe('shared-list account isolation', () => {
     // 7. B cannot queue shared edits into A's space.
     await expect(b.createTask(shared.id, { title: 'B 写的' })).rejects.toThrow('另一个账号');
     expect(api.writesBy(ACCOUNT_B.account.email)).toHaveLength(0);
-    expect((await store.transact((tx) => tx.ops(shared.id))).every((op) => op.status === 'pending'))
-      .toBe(true);
+    expect(
+      (await store.transact((tx) => tx.ops(shared.id))).every((op) => op.status === 'pending'),
+    ).toBe(true);
 
     // 8. B signs out, A signs back in: the offline edits are intact and replay.
     b.stop();
@@ -424,22 +420,19 @@ describe('shared-list account isolation', () => {
     const creates = api
       .attemptsBy(ACCOUNT_A.account.email)
       .filter((call) => call.method === 'POST');
-    expect(
-      new Set(creates.map((call) => (call.body as { op_id?: string }).op_id)).size,
-    ).toBe(1);
+    expect(new Set(creates.map((call) => (call.body as { op_id?: string }).op_id)).size).toBe(1);
     const settled = await store.transact(async (tx) => ({
       tasks: await tx.tasks(shared.id),
       ops: await tx.ops(shared.id),
     }));
     expect(settled.ops).toHaveLength(0);
-    expect(settled.tasks.map((task) => task.title).sort()).toEqual([
-      'A 的旧任务',
-      '地铁上写的',
-    ]);
+    expect(settled.tasks.map((task) => task.title).sort()).toEqual(['A 的旧任务', '地铁上写的']);
     expect(settled.tasks.find((task) => task.title === 'A 的旧任务')?.note).toBe('离线备注');
     // The server saw both writes exactly once and only as A.
     expect(
-      [...api.tasks.values()].filter((task) => task.list_id === shared.id).map((task) => task.title)
+      [...api.tasks.values()]
+        .filter((task) => task.list_id === shared.id)
+        .map((task) => task.title)
         .sort(),
     ).toEqual(['A 的旧任务', '地铁上写的']);
     aAgain.stop();
@@ -520,7 +513,7 @@ describe('shared-list account isolation', () => {
       snapshotStarted = resolve;
     });
     const original = api.request;
-    const slow = (async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const slow = (async <T>(path: string, init?: RequestInit): Promise<T> => {
       api.current = session.current;
       if (path === `/lists/${shared.id}`) {
         snapshotStarted();

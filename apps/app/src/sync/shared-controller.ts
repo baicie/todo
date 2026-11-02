@@ -85,10 +85,12 @@ export function createSharedSyncController(
       }
       engine.stop();
       const cleared = options.clearOnDisconnect ? options.store.clear() : Promise.resolve();
-      void cleared.then(() => {
-        engine.rebind();
-        return refresh();
-      }).catch(() => {});
+      void cleared
+        .then(() => {
+          engine.rebind();
+          return refresh();
+        })
+        .catch(() => {});
     }),
   );
 
