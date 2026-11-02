@@ -16,6 +16,31 @@ import type {
 /** `revoked`: the member was removed; `deleted`: the owner deleted the list. */
 export type SharedAccess = 'active' | 'revoked' | 'deleted';
 
+/** The verified cloud identity a shared-data space belongs to. */
+export interface SharedAccountIdentity {
+  email: string;
+  apiUrl: string;
+}
+
+/** `sharedMeta` key holding the account that owns the local shared data. */
+export const SHARED_BINDING_KEY = 'accountBinding';
+
+export function normalizeSharedIdentity(identity: SharedAccountIdentity): SharedAccountIdentity {
+  return {
+    email: identity.email.trim().toLowerCase(),
+    apiUrl: identity.apiUrl.trim().replace(/\/+$/, '').toLowerCase(),
+  };
+}
+
+export function sameSharedAccount(
+  a: SharedAccountIdentity,
+  b: SharedAccountIdentity,
+): boolean {
+  const left = normalizeSharedIdentity(a);
+  const right = normalizeSharedIdentity(b);
+  return left.email === right.email && left.apiUrl === right.apiUrl;
+}
+
 export interface SharedListRecord {
   id: string;
   summary: SharedListSummary;
@@ -87,6 +112,18 @@ export interface SharedStore {
   /** Runs `fn` atomically. `fn` must not await network or timers. */
   transact<T>(fn: (tx: SharedTx) => Promise<T>): Promise<T>;
   clear(): Promise<void>;
+  /** The account this space belongs to, or null while nothing is queued. */
+  boundAccount?(): Promise<SharedAccountIdentity | null>;
+  /**
+   * Claim an unbound space for `identity`, or confirm it already belongs to it.
+   * Returns false when another account owns the data; nothing is erased.
+   * `ownerHint` is the personal `boundAccount` of the same data space, used
+   * only to adopt shared data written before bindings existed.
+   */
+  bindAccount?(
+    identity: SharedAccountIdentity,
+    ownerHint?: string | null,
+  ): Promise<boolean>;
 }
 
 export const SHARED_DB_STORES = {
@@ -104,6 +141,48 @@ export interface SharedTables {
 }
 
 const byPosition = (a: SharedTaskRecord, b: SharedTaskRecord) => a.position - b.position;
+
+function parseBinding(raw: string | undefined): SharedAccountIdentity | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SharedAccountIdentity>;
+    if (typeof parsed.email !== 'string' || typeof parsed.apiUrl !== 'string') return null;
+    if (!parsed.email.trim() || !parsed.apiUrl.trim()) return null;
+    return normalizeSharedIdentity({ email: parsed.email, apiUrl: parsed.apiUrl });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Claim or confirm the shared space inside one transaction.
+ *
+ * The space holds one account's shadow and outbox. Handing it to a different
+ * account would replay A's queued ops with B's token and show A's lists to B,
+ * so a mismatching binding is refused instead of overwritten. A space with no
+ * lists holds nothing to protect and is claimed by the signed-in account. Data
+ * written before bindings existed is adopted only when the personal data space
+ * is already bound to the same email — shared data can only have been created
+ * through a cloud login, which is what sets that personal binding.
+ */
+async function claimBinding(
+  tx: SharedTx,
+  identity: SharedAccountIdentity,
+  ownerHint?: string | null,
+): Promise<boolean> {
+  const next = normalizeSharedIdentity(identity);
+  const bound = parseBinding(await tx.getMeta(SHARED_BINDING_KEY));
+  if (bound) return sameSharedAccount(bound, next);
+  if ((await tx.allLists()).length > 0) {
+    const hint = ownerHint?.trim().toLowerCase() ?? '';
+    if (!hint || hint !== next.email) return false;
+  }
+  await tx.setMeta(
+    SHARED_BINDING_KEY,
+    JSON.stringify({ email: next.email, apiUrl: next.apiUrl }),
+  );
+  return true;
+}
 
 export class DexieSharedStore implements SharedStore {
   constructor(private readonly db: Dexie & SharedTables) {}
@@ -155,6 +234,17 @@ export class DexieSharedStore implements SharedStore {
 
   transact<T>(fn: (tx: SharedTx) => Promise<T>): Promise<T> {
     return this.db.transaction('rw', this.tables(), () => fn(this.tx));
+  }
+
+  async boundAccount(): Promise<SharedAccountIdentity | null> {
+    return this.transact(async (tx) => parseBinding(await tx.getMeta(SHARED_BINDING_KEY)));
+  }
+
+  bindAccount(
+    identity: SharedAccountIdentity,
+    ownerHint?: string | null,
+  ): Promise<boolean> {
+    return this.transact((tx) => claimBinding(tx, identity, ownerHint));
   }
 
   async clear(): Promise<void> {
@@ -232,6 +322,17 @@ export class MemorySharedStore implements SharedStore {
     const run = this.lock.then(() => fn(this.tx));
     this.lock = run.catch(() => undefined);
     return run;
+  }
+
+  boundAccount(): Promise<SharedAccountIdentity | null> {
+    return this.transact(async (tx) => parseBinding(await tx.getMeta(SHARED_BINDING_KEY)));
+  }
+
+  bindAccount(
+    identity: SharedAccountIdentity,
+    ownerHint?: string | null,
+  ): Promise<boolean> {
+    return this.transact((tx) => claimBinding(tx, identity, ownerHint));
   }
 
   clear(): Promise<void> {

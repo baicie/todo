@@ -13,6 +13,7 @@ import type { AppLifecycle } from '@todo/application';
 import { cleanNote, cleanSingleLine, isDateOnly, newUuidV7 } from '@todo/domain';
 import { SyncHttpError } from '@todo/sync';
 import type {
+  SharedAccountIdentity,
   SharedListRecord,
   SharedOpRecord,
   SharedStore,
@@ -21,6 +22,7 @@ import type {
   SharedTaskRecord,
   SharedTx,
 } from './shared-store';
+import { sameSharedAccount } from './shared-store';
 
 /**
  * Offline-capable client for shared lists.
@@ -43,6 +45,7 @@ const TASK_FIELDS: readonly SharedTaskField[] = ['title', 'note', 'status', 'imp
 const INVITATIONS_KEY = 'invitations';
 const SEQ_KEY = 'outboxSeq';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const FOREIGN_SPACE_MESSAGE = '本机共享数据属于另一个账号，请先清除本机数据或切换回该账号';
 
 export type SharedSyncStatus = 'idle' | 'syncing' | 'offline' | 'error';
 
@@ -78,6 +81,29 @@ export interface SharedSyncEngineOptions {
   now?: () => Date;
   newId?: () => string;
   pollMs?: number;
+  /**
+   * Resolves the session the caller is now in, or null when there is none.
+   * Every network exchange is checked against it so a response or a flush that
+   * belongs to a previous account can never land in the current store.
+   */
+  session?: () => SharedSession | null;
+  /** The personal `boundAccount` of the same data space, for adopting legacy shared data. */
+  ownerHint?: () => Promise<string | null>;
+}
+
+/** One authenticated client identity, as seen by the shared engine. */
+export interface SharedSession {
+  token: string;
+  account: SharedAccountIdentity;
+}
+
+export class SharedSessionChangedError extends Error {
+  readonly code = 'SHARED_SESSION_CHANGED';
+
+  constructor() {
+    super('云服务会话已切换，已丢弃旧账号的共享同步结果');
+    this.name = 'SharedSessionChangedError';
+  }
 }
 
 type Failure =
@@ -314,6 +340,12 @@ export class SharedSyncEngine {
   private generation = 0;
   private active = false;
   private stopTimers: (() => void) | null = null;
+  /** Session token the current run was started under; see `fence`. */
+  private runToken: string | null = null;
+  /** Resolved owner of the store for the current run. */
+  private runOwner: SharedAccountIdentity | null = null;
+  /** True when the store's binding must be (re)claimed before writing. */
+  private bindingDirty = true;
 
   constructor(private readonly options: SharedSyncEngineOptions) {}
 
@@ -357,11 +389,112 @@ export class SharedSyncEngine {
     return this.active && generation === this.generation;
   }
 
-  /** Begin network sync: immediately, every 15s while visible, and on resume/online. */
+  /**
+   * Throws when the session changed since this run started. Local writes and
+   * remote sends both go through it, so a logout, an account switch or an
+   * expired login cannot let account A's work land while account B is active.
+   */
+  private fence(generation: number): void {
+    if (!this.isCurrent(generation)) throw new SharedSessionChangedError();
+    if (!this.options.session) return;
+    const session = this.options.session();
+    if (session === null || session.token !== this.runToken) {
+      throw new SharedSessionChangedError();
+    }
+    if (this.runOwner && !sameSharedAccount(session.account, this.runOwner)) {
+      throw new SharedSessionChangedError();
+    }
+  }
+
+  /**
+   * Decide whether this run may touch the store and talk to the API. False
+   * when there is no session or the space belongs to another account; the run
+   * then does no network work at all, so nothing is shown or replayed across
+   * accounts. An unbound space is claimed only for the signed-in account.
+   */
+  private async ownerFor(generation: number): Promise<boolean> {
+    if (!this.options.session) {
+      // No session provider (standalone engine or tests): the store is the only
+      // scope and there is nothing to fence against.
+      this.runOwner = null;
+      return true;
+    }
+    const session = this.sessionNow();
+    if (!session) return false;
+    this.runOwner = session.account;
+    if (!this.isCurrent(generation)) return false;
+    if (!this.store.bindAccount) return true;
+    if (this.bindingDirty) {
+      const ownerHint = (await this.options.ownerHint?.()) ?? null;
+      const claimed = await this.store.bindAccount(session.account, ownerHint);
+      if (!this.isCurrent(generation)) return false;
+      if (!claimed) {
+        if (this.isCurrent(generation)) {
+          this.setState({ status: 'error', error: FOREIGN_SPACE_MESSAGE });
+        }
+        return false;
+      }
+      this.bindingDirty = false;
+    }
+    return true;
+  }
+
+  /** Mark the store's account binding for re-verification (after a clear). */
+  rebind(): void {
+    this.bindingDirty = true;
+  }
+
+  private sessionNow(): SharedSession | null {
+    return this.options.session?.() ?? null;
+  }
+
+  /** Throws when the signed-in account ended or changed since `started`. */
+  private assertSameSession(started: SharedSession | null): void {
+    if (!this.options.session) return;
+    const now = this.sessionNow();
+    if (!now || !started || now.token !== started.token) throw new SharedSessionChangedError();
+    if (!sameSharedAccount(now.account, started.account)) throw new SharedSessionChangedError();
+  }
+
+  /**
+   * Refuse to write local shared data for an account that does not own the
+   * space. Binding is idempotent; the check is repeated on every offline edit so
+   * local writes cannot cross accounts even when no network work happens.
+   */
+  private async ensureStoreOwner(): Promise<void> {
+    if (!this.options.session) return;
+    const session = this.sessionNow();
+    if (!session) throw new Error('请先登录云端账号再编辑共享清单');
+    if (!this.store.bindAccount) return;
+    const ownerHint = (await this.options.ownerHint?.()) ?? null;
+    const claimed = await this.store.bindAccount(session.account, ownerHint);
+    if (!claimed) {
+      // Kept in Chinese to match the rest of the shared-list UI copy.
+      throw new Error(FOREIGN_SPACE_MESSAGE);
+    }
+    if (this.sessionNow()?.token !== session.token) throw new SharedSessionChangedError();
+  }
+
+  /**
+   * Adopt a newly connected session without ever reusing the previous one's
+   * run identity. Called when the cloud session becomes connected, including a
+   * second connect without an intervening stop.
+   */
   start(lifecycle?: Pick<AppLifecycle, 'onResume' | 'onOnline'>): void {
-    if (this.active) return;
+    const token = this.options.session?.()?.token ?? null;
+    if (this.active && token === this.runToken) return;
+    if (this.active) {
+      this.active = false;
+      this.generation += 1;
+      this.stopTimers?.();
+      this.stopTimers = null;
+      this.queued = null;
+    }
     this.active = true;
     this.generation += 1;
+    this.runToken = token;
+    this.runOwner = null;
+    this.bindingDirty = true;
     const poll = setInterval(() => {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         void this.sync({ index: true });
@@ -382,6 +515,9 @@ export class SharedSyncEngine {
     if (!this.active) return;
     this.active = false;
     this.generation += 1;
+    this.runToken = null;
+    this.runOwner = null;
+    this.bindingDirty = true;
     this.stopTimers?.();
     this.stopTimers = null;
     this.queued = null;
@@ -420,6 +556,22 @@ export class SharedSyncEngine {
   private async runOnce(index: boolean, generation: number): Promise<void> {
     this.setState({ status: 'syncing' });
     try {
+      const owner = await this.ownerFor(generation);
+      if (!owner) {
+        // Another account owns the local shared data, or there is no session:
+        // do no network work and do not render anything. However, if the
+        // session is present but mismatched, surface an error so users know why
+        // their shared lists are unavailable.
+        if (this.isCurrent(generation)) {
+          const session = this.sessionNow();
+          this.setState({
+            status: session ? 'error' : 'idle',
+            error: session ? FOREIGN_SPACE_MESSAGE : null,
+            lastSyncedAt: this.now(),
+          });
+        }
+        return;
+      }
       if (index) await this.refreshIndex(generation);
       const records = await this.store.transact((tx) => tx.allLists());
       for (const record of records) {
@@ -440,6 +592,7 @@ export class SharedSyncEngine {
   }
 
   private async refreshIndex(generation: number): Promise<void> {
+    this.fence(generation);
     const [rawLists, rawInvitations] = await Promise.all([
       this.options.request<unknown>('/lists'),
       this.options.request<unknown>('/invitations'),
@@ -447,6 +600,7 @@ export class SharedSyncEngine {
     const summaries = sharedListSummarySchema.array().parse(rawLists);
     const invitations = sharedInvitationSchema.array().parse(rawInvitations);
     if (!this.isCurrent(generation)) return;
+    this.fence(generation);
     const missing = await this.store.transact(async (tx) => {
       await tx.setMeta(INVITATIONS_KEY, JSON.stringify(invitations));
       const local = await tx.allLists();
@@ -524,6 +678,7 @@ export class SharedSyncEngine {
    */
   private async pull(listId: string, generation?: number): Promise<boolean> {
     const stale = () => generation !== undefined && !this.isCurrent(generation);
+    if (generation !== undefined) this.fence(generation);
     let snapshot: SharedSnapshot;
     try {
       snapshot = sharedSnapshotSchema.parse(
@@ -533,10 +688,11 @@ export class SharedSyncEngine {
       if (stale()) return false;
       const lost = accessLoss(error);
       if (!lost) throw error;
-      await this.loseAccess(listId, lost.access, lost.code);
+      await this.loseAccess(listId, lost.access, lost.code, generation);
       return false;
     }
     if (stale()) return false;
+    if (generation !== undefined) this.fence(generation);
     const syncedAt = this.now();
     await this.store.transact(async (tx) => {
       const current = await tx.getList(listId);
@@ -568,7 +724,9 @@ export class SharedSyncEngine {
     listId: string,
     access: 'revoked' | 'deleted',
     code: string,
+    generation?: number,
   ): Promise<void> {
+    if (generation !== undefined) this.fence(generation);
     await this.store.transact(async (tx) => {
       const record = await tx.getList(listId);
       if (!record) return;
@@ -582,7 +740,13 @@ export class SharedSyncEngine {
     this.emit();
   }
 
-  private async rejectOps(listId: string, code: string, opId?: string): Promise<void> {
+  private async rejectOps(
+    listId: string,
+    code: string,
+    opId?: string,
+    generation?: number,
+  ): Promise<void> {
+    if (generation !== undefined) this.fence(generation);
     await this.store.transact(async (tx) => {
       const record = await tx.getList(listId);
       if (!record) return;
@@ -597,6 +761,7 @@ export class SharedSyncEngine {
   }
 
   private async push(listId: string, op: SharedOpRecord, generation: number): Promise<PushOutcome> {
+    this.fence(generation);
     const record = await this.readList(listId);
     if (!record || record.access !== 'active' || !record.snapshot) return 'stop';
     const expected = record.revision;
@@ -609,32 +774,34 @@ export class SharedSyncEngine {
       if (!this.isCurrent(generation)) return 'stop';
       const lost = accessLoss(error);
       if (lost) {
-        await this.loseAccess(listId, lost.access, lost.code);
+        await this.loseAccess(listId, lost.access, lost.code, generation);
         return 'stop';
       }
+      this.fence(generation);
       const failure = sharedFailure(error);
       if (failure.kind !== 'http') throw error;
       if (failure.code === 'REVISION_CONFLICT') return 'pull';
       if (failure.code === 'SHARED_LIST_FORBIDDEN') {
         // Demoted to viewer: nothing queued can be applied any more.
-        await this.rejectOps(listId, failure.code);
+        await this.rejectOps(listId, failure.code, undefined, generation);
         return 'pull';
       }
       if (failure.code === 'SHARED_TASK_NOT_FOUND' && op.kind === 'delete') {
-        await this.settle(listId, op, expected, null);
+        await this.settle(listId, op, expected, null, generation);
         return 'pull';
       }
-      await this.rejectOps(listId, failure.code, op.opId);
+      await this.rejectOps(listId, failure.code, op.opId, generation);
       return 'next';
     }
 
     if (!this.isCurrent(generation)) return 'stop';
+    this.fence(generation);
     // Only a task response exactly one revision later is known to be "our shadow
     // plus this op". A delete answers 204 without a revision and a replayed
     // receipt answers with the current revision, so both refresh the snapshot.
     const parsed = op.kind === 'delete' ? null : sharedTaskSchema.safeParse(response);
     const task = parsed?.success && parsed.data.revision === expected + 1 ? parsed.data : null;
-    await this.settle(listId, op, expected, task);
+    await this.settle(listId, op, expected, task, generation);
     return task ? 'next' : 'pull';
   }
 
@@ -644,7 +811,9 @@ export class SharedSyncEngine {
     op: SharedOpRecord,
     expected: number,
     applied: SharedTask | null,
+    generation?: number,
   ): Promise<void> {
+    if (generation !== undefined) this.fence(generation);
     const syncedAt = this.now();
     await this.store.transact(async (tx) => {
       await tx.deleteOp(op.opId);
@@ -675,6 +844,8 @@ export class SharedSyncEngine {
   }
 
   private async enqueue(listId: string, build: (tx: SharedTx) => Promise<OpDraft>): Promise<void> {
+    const session = this.sessionNow();
+    await this.ensureStoreOwner();
     await this.store.transact(async (tx) => {
       const record = await tx.getList(listId);
       if (!record || !isEditable(record)) throw new Error('这个共享清单当前只读，无法编辑');
@@ -692,6 +863,10 @@ export class SharedSyncEngine {
       });
       await applyRebase(tx, record);
     });
+    if (this.options.session) {
+      const now = this.sessionNow();
+      if (!session || !now || now.token !== session.token) return;
+    }
     this.emit();
     if (this.active) void this.sync({ index: false });
   }
@@ -732,6 +907,7 @@ export class SharedSyncEngine {
 
   /** Drop a rejected (or still pending) local edit and show the server copy. */
   async discardOp(listId: string, opId: string): Promise<void> {
+    await this.ensureStoreOwner();
     await this.store.transact(async (tx) => {
       await tx.deleteOp(opId);
       const record = await tx.getList(listId);
@@ -742,6 +918,7 @@ export class SharedSyncEngine {
 
   /** Re-apply an edit-conflict op on top of the current server values. */
   async retryOp(listId: string, opId: string): Promise<void> {
+    await this.ensureStoreOwner();
     await this.store.transact(async (tx) => {
       const record = await tx.getList(listId);
       if (!record || !isEditable(record)) throw new Error('这个共享清单当前只读，无法编辑');
@@ -766,8 +943,21 @@ export class SharedSyncEngine {
     if (this.active) void this.sync({ index: false });
   }
 
+  /**
+   * Gate a user-initiated shared action on the current account. Returns the
+   * session to re-check after the network round trip.
+   */
+  private async beginAction(): Promise<SharedSession | null> {
+    if (!this.options.session) return null;
+    const session = this.sessionNow();
+    if (!session) throw new Error('请先登录云端账号再使用共享清单');
+    await this.ensureStoreOwner();
+    return session;
+  }
+
   /** Remove the local read-only copy of a list we no longer have access to. */
   async removeLocalCopy(listId: string): Promise<void> {
+    await this.ensureStoreOwner();
     await this.store.transact(async (tx) => {
       const record = await tx.getList(listId);
       if (record?.access === 'active') throw new Error('仍是成员的清单不能只删除本机副本');
@@ -779,12 +969,14 @@ export class SharedSyncEngine {
   async createList(name: string): Promise<string> {
     const clean = cleanSingleLine(name, 120);
     if (!clean) throw new Error('清单名称不能为空');
+    const session = await this.beginAction();
     const summary = sharedListSummarySchema.parse(
       await this.options.request<unknown>('/lists', {
         method: 'POST',
         body: JSON.stringify({ name: clean, op_id: this.newId() }),
       }),
     );
+    this.assertSameSession(session);
     await this.store.transact((tx) => tx.putList(emptyRecord(summary)));
     this.emit();
     await this.pull(summary.id).catch(() => false);
@@ -820,9 +1012,11 @@ export class SharedSyncEngine {
   }
 
   async acceptInvitation(invitationId: string): Promise<string> {
+    const session = await this.beginAction();
     const summary = sharedListSummarySchema.parse(
       await this.answerInvitation(invitationId, 'accept'),
     );
+    this.assertSameSession(session);
     await this.dropInvitation(invitationId);
     await this.store.transact(async (tx) => {
       const existing = await tx.getList(summary.id);
@@ -836,13 +1030,16 @@ export class SharedSyncEngine {
   }
 
   async declineInvitation(invitationId: string): Promise<void> {
+    const session = await this.beginAction();
     await this.answerInvitation(invitationId, 'decline');
+    this.assertSameSession(session);
     await this.dropInvitation(invitationId);
   }
 
   async invite(listId: string, email: string, role: SharedInviteRole): Promise<SharedInvitation> {
     const address = email.trim().toLowerCase();
     if (!EMAIL.test(address)) throw new Error('请输入有效的邮箱地址');
+    const session = await this.beginAction();
     const opId = this.newId();
     for (let attempt = 0; ; attempt += 1) {
       let record = await this.readList(listId);
@@ -861,9 +1058,11 @@ export class SharedSyncEngine {
             body: JSON.stringify({ email: address, role, op_id: opId }),
           }),
         );
+        this.assertSameSession(session);
         await this.pull(listId).catch(() => false);
         return invitation;
       } catch (error) {
+        this.assertSameSession(session);
         if (attempt === 0 && error instanceof SyncHttpError && error.code === 'REVISION_CONFLICT') {
           await this.pull(listId);
           continue;
@@ -874,6 +1073,11 @@ export class SharedSyncEngine {
   }
 
   async read(): Promise<SharedViewState> {
+    // Never render a store that belongs to another account. The owner is the
+    // engine's verified run identity when it has one, otherwise the signed-in
+    // session's account; nothing here writes or clears data.
+    const allowed = await this.isStoreReadable();
+    if (!allowed) return { lists: [], invitations: [] };
     return this.store.transact(async (tx) => {
       const lists: SharedListView[] = [];
       for (const record of await tx.allLists()) {
@@ -894,5 +1098,22 @@ export class SharedSyncEngine {
       );
       return { lists, invitations: parseInvitations(await tx.getMeta(INVITATIONS_KEY)) };
     });
+  }
+
+  /**
+   * Local shared data is only readable while its binding matches the signed-in
+   * account. With no session (signed out) the last copy stays visible only
+   * while the same personal data space is still bound to the account that owns
+   * it, so signing out keeps offline edits readable but switching to another
+   * account never shows them.
+   */
+  private async isStoreReadable(): Promise<boolean> {
+    if (!this.store.boundAccount) return true;
+    const bound = await this.store.boundAccount();
+    if (!bound) return true;
+    const session = this.sessionNow();
+    if (session) return sameSharedAccount(session.account, bound);
+    const hint = (await this.options.ownerHint?.())?.trim().toLowerCase() ?? '';
+    return hint !== '' && hint === bound.email;
   }
 }

@@ -114,6 +114,8 @@ export function App(props: { platform: AppPlatform }): JSX.Element {
     request: (path, init) => cloud.sharedRequest(path, init),
     lifecycle: props.platform.lifecycle,
     connected: () => cloud.state().phase === 'connected',
+    session: () => cloud.sharedSession(),
+    ownerHint: async () => (await props.platform.repository.syncGetDiagnostics()).boundAccount,
     clearOnDisconnect: props.platform.kind === 'tauri',
   });
   const [view, setView] = createSignal<AppView>({ kind: 'smart', id: 'my-day' });
