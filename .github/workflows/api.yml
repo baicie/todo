@@ -81,8 +81,8 @@ jobs:
           cargo test -p todo-api --test postgres_smoke -- --ignored --test-threads=1
           cargo test -p todo-api --test postgres_production -- --ignored --test-threads=1
           cargo test -p todo-api --test postgres_shared -- --ignored --test-threads=1
-          # known_defect_* tests document tracked defects; run them explicitly.
-          cargo test -p todo-api --test postgres_boundaries -- --ignored --skip known_defect_ --test-threads=1
+          # Every boundary contract now runs: no known_defect_ test is skipped.
+          cargo test -p todo-api --test postgres_boundaries -- --ignored --test-threads=1
           # Creates and drops temporary databases; the CI role is a superuser.
           cargo test -p todo-api --test postgres_migrations -- --ignored --test-threads=1
       - name: Operations CLI dry-run

@@ -31,14 +31,14 @@ name: release-dev
 # fails when the platform is missing: a provisioning warning is never a reported
 # PASS.
 #
-# Two-phase publish (RC2-D.15 Phase D): staging and publishing are separate jobs
-# so the GitHub Environment approval can gate the single write that makes a
-# release public.
-#   1. stage-release, read-only first: the workflow provenance guard, the
-#      pre/final asset gates and "Check the existing release" (a GET by tag
-#      through the gh CLI) all run before anything is written, so a missing
-#      asset, a hash mismatch or a manifest refusal can no longer damage a
-#      release that is already public;
+# Two-phase publish (RC2-D.15 Phase D, hardened by V1.1-RC1 Phase B): staging and
+# publishing are separate workflows so that NOTHING triggered by a tag push can
+# make a release public.
+#   1. stage-release (this workflow, read-only until the single draft write): the
+#      workflow provenance guard, the pre/final asset gates and "Check the
+#      existing release" (a GET by tag through the gh CLI) all run before
+#      anything is written, so a missing asset, a hash mismatch or a manifest
+#      refusal can no longer damage a release that is already public;
 #   2. write #1 only: the release is created as a DRAFT by the pinned
 #      softprops/action-gh-release (draft: true). An existing release is never
 #      modified, renamed or stripped of assets: it is either a byte-identical
@@ -48,40 +48,38 @@ name: release-dev
 #      assets through the gh CLI and compares name, size and sha256 with
 #      release-manifest.json, plus the release target commit and the commit the
 #      published manifest records. The manifest, its sha256 and the staging
-#      evidence are then uploaded as the stage-evidence artifact;
-#   4. publish-release declares the "dev-pre-release" environment, so required
-#      reviewers - when the maintainer has configured them - block the job. After
-#      the approval it REVALIDATES read-only and only then writes: the same
-#      TagCommitSHA, the same draft release id, the staged manifest (sha256)
-#      against the re-downloaded build outputs, the remote draft asset set, and
-#      the workflow SHA guard;
-#   5. write #2, and only after that proof: the draft is flipped to a public
-#      pre-release with
-#      gh api -X PATCH .../releases/<id> --field draft=false --field prerelease=true
-#      (typed fields, so the API receives JSON booleans rather than strings);
-#   6. read-only last: "Verify the published release provenance" re-reads the
-#      public release and proves it targets TagCommitSHA and carries a manifest
-#      that records the same commit. A duplicate run for a version that is
-#      already public revalidates and performs no write at all.
+#      evidence are uploaded as the stage-evidence artifact - the stage manifest
+#      sha256 printed by that job is the input the publish workflow requires;
+#   4. publishing is a SEPARATE manual workflow: .github/workflows/publish-dev.yml.
+#      It is workflow_dispatch-only, requires the exact confirmation phrase, an
+#      approval from a required reviewer of the dev-pre-release environment, and
+#      it adopts the draft by the recorded manifest sha256 before revalidating
+#      every remote asset and performing the single PATCH.
 #
-# Both jobs share ONE release context: stage-release re-exports the context
-# outputs plus the decision, the release id and the staged manifest sha256
-# through needs.<job>.outputs, and publish-release reads them from there - it
-# never recomputes a version, a tag or an artifact name.
+# FAIL-CLOSED AUTHORIZATION (V1.1-RC1 Phase B - the P0 of this round). Earlier
+# revisions of this file ran publish-release inside the tag-push run, gated only
+# by `environment: dev-pre-release`. An environment is a REPOSITORY SETTING: when
+# the maintainer had not configured required reviewers, GitHub ran the job
+# without asking anyone and the PATCH published the release. A tag push is not a
+# publish decision, and an unreadable environments API (403) is not evidence of
+# an approval. Hence:
+#   * this workflow has no publish job at all;
+#   * publish-dev.yml refuses unless event=workflow_dispatch, confirm ==
+#     "publish <tag>", and the environment gate was read successfully AND shows
+#     a required_reviewers rule with at least one reviewer;
+#   * an unverified/not-configured gate is a refusal, never a warning.
 #
-# The environment gate is a REPOSITORY SETTING, not a workflow fact. This file
-# declares environment: dev-pre-release and its evidence step prints and records
-# what the API reports (gate=enforced|not-configured|unverified); it never
-# pretends to have verified an approval it cannot see, and no step anywhere
+# The environment gate is a REPOSITORY SETTING, not a workflow fact: this file
+# never pretends to have verified an approval it cannot see, and no step anywhere
 # claims release readiness. Maintainer action: Settings -> Environments ->
-# dev-pre-release -> Required reviewers, at least one reviewer. Without it the
-# publish job runs unapproved and the evidence says so.
+# dev-pre-release -> Required reviewers, at least one reviewer. Without it,
+# publish-dev.yml refuses to publish.
 #
-# Failure residue: a failed, cancelled or unapproved run leaves a DRAFT release,
-# which is never publicly visible, plus the evidence artifact of the phase that
-# ran (and the step summary says the draft stays a draft). Remove a partial
-# draft by hand before retrying (a retry over a draft that already carries the
-# exact same build is allowed and only flips it public):
+# Failure residue: a failed, cancelled or unapproved staging run leaves a DRAFT
+# release, which is never publicly visible, plus the evidence artifact of the
+# phase that ran (and the step summary says the draft stays a draft). Remove a
+# partial draft by hand before retrying (a retry over a draft that already carries
+# the exact same build is allowed and only re-stages it):
 #     gh release delete <tag> --yes --cleanup-tag=false
 #
 # MANUAL maintenance only, never part of this workflow: the pre-rename generic
@@ -99,12 +97,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Existing dev tag to publish; the tag must already exist, e.g. 0.0.1-dev.1'
+        description: 'Existing dev tag to stage as a draft; the tag must already exist, e.g. 0.0.1-dev.1'
         required: true
         default: '0.0.1-dev.1'
         type: string
       allow_foreign_workflow:
-        description: 'Acknowledge publishing with workflow logic from a commit other than the release tag commit (refused by default)'
+        description: 'Acknowledge staging with workflow logic from a commit other than the release tag commit (refused by default)'
         required: false
         default: false
         type: boolean
@@ -570,6 +568,11 @@ jobs:
           path: release-android/*
           if-no-files-found: error
 
+  # The staging job is the LAST job of this workflow. Publishing is a separate
+  # workflow_dispatch run (.github/workflows/publish-dev.yml) that adopts the
+  # draft by its recorded manifest sha256 and revalidates every asset before the
+  # single PATCH. A tag push therefore cannot make anything public: it stops at a
+  # draft, which is invisible to the public. See the header for the full matrix.
   stage-release:
     name: Verify the artifact set and stage the draft release
     needs: [context, web, windows, macos, android]
@@ -715,10 +718,12 @@ jobs:
             - **Provenance**: `release-manifest.json` (commit SHA, tag SHA, app version, channel,
               toolchain versions, asset sizes and sha256, workflow run id).
 
-            Publishing this draft is a separate, approval-gated job: it revalidates the tag
-            commit, the draft release id and every asset hash before the single call that makes
-            the release public. Tauri updater signatures and `latest.json` are not published
-            because no signing key is configured.
+            Publishing this draft is a separate, MANUAL workflow (publish-dev.yml): a tag push can
+            stage a draft but can never make it public. Publishing requires the maintainer to
+            dispatch publish-dev.yml with the confirmation phrase, an approval from a required
+            reviewer of the dev-pre-release environment, and the manifest sha256 printed by this
+            staging run. Tauri updater signatures and `latest.json` are not published because no
+            signing key is configured.
           files: |
             artifacts/*
           token: ${{ github.token }}
@@ -730,7 +735,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_RELEASE_ID: ${{ steps.existing.outputs.release-id }}
-        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts --expect-release-id "${EXPECTED_RELEASE_ID}"
+        run: |
+          set -euo pipefail
+          node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts --expect-release-id "${EXPECTED_RELEASE_ID}"
+          # This workflow never publishes. A draft that already matches the build
+          # leaves the decision as publish-draft, and the step summary below must
+          # say what to do next instead of implying anything became public.
+          shasum -a 256 artifacts/release-manifest.json | awk '{print "STAGE_MANIFEST_SHA256=" $1}' | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Reviewable evidence of this phase, success or failure: the manifest, its
       # sha256, SHA256SUMS and a record that says whether the release is still a
@@ -752,147 +763,5 @@ jobs:
         with:
           name: stage-evidence
           path: stage-evidence/*
-          if-no-files-found: warn
-          retention-days: 30
-
-  publish-release:
-    name: Publish the staged draft as a public pre-release (approval gate)
-    needs: stage-release
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # The gate. GitHub pauses this job until a required reviewer of the
-    # "dev-pre-release" Environment approves it - WHEN the maintainer has
-    # configured that environment (Settings -> Environments -> dev-pre-release
-    # -> Required reviewers). The workflow cannot create or verify that setting;
-    # the evidence step below reports what the API says and no step claims
-    # release readiness.
-    environment: dev-pre-release
-    permissions:
-      contents: write
-    # Publishing must remain non-cancellable: a cancelled publish could leave a
-    # draft behind, or a release whose verification never ran.
-    concurrency:
-      group: release-dev-publish-${{ needs.stage-release.outputs.ReleaseVersion }}
-      cancel-in-progress: false
-    env:
-      RELEASE_VERSION: ${{ needs.stage-release.outputs.ReleaseVersion }}
-      RELEASE_TAG: ${{ needs.stage-release.outputs.ReleaseTag }}
-      APP_VERSION: ${{ needs.stage-release.outputs.AppVersion }}
-      ARTIFACT_VERSION: ${{ needs.stage-release.outputs.ArtifactVersion }}
-      TAG_COMMIT_SHA: ${{ needs.stage-release.outputs.TagCommitSHA }}
-      BUILD_COMMIT_SHA: ${{ needs.stage-release.outputs.BuildCommitSHA }}
-      RELEASE_CHANNEL: ${{ needs.stage-release.outputs.ReleaseChannel }}
-      STAGE_DECISION: ${{ needs.stage-release.outputs.Decision }}
-      STAGED_RELEASE_ID: ${{ needs.stage-release.outputs.ReleaseId }}
-      STAGED_MANIFEST_SHA256: ${{ needs.stage-release.outputs.ManifestSHA256 }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ needs.stage-release.outputs.TagCommitSHA }}
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Assert the checkout is the release tag commit
-        shell: bash
-        run: node scripts/release/release-context.mjs assert-checkout
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: release-*
-          merge-multiple: true
-          path: artifacts
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: stage-evidence
-          path: staged
-
-      # ---------------------------------------------------------------------
-      # Read-only revalidation AFTER the approval. Everything below only reads
-      # until "Publish the verified draft"; any mismatch fails without writing.
-      # ---------------------------------------------------------------------
-      - name: Re-guard the workflow provenance
-        shell: bash
-        env:
-          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
-          INPUT_ALLOW_FOREIGN: ${{ inputs.allow_foreign_workflow }}
-        run: node scripts/release/release-transaction.mjs guard-workflow
-
-      - name: Adopt the staged release identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${STAGE_DECISION}" != "noop" ] && [ -z "${STAGED_RELEASE_ID}" ]; then
-            echo "::error::stage-release recorded no draft release id for decision '${STAGE_DECISION}': the publish job cannot pin the release it would write to" >&2
-            exit 1
-          fi
-          echo "stage-release verified release ${STAGED_RELEASE_ID} of tag ${RELEASE_TAG} at ${TAG_COMMIT_SHA}"
-          node scripts/release/release-transaction.mjs adopt-staged --artifacts-dir artifacts --staged-dir staged
-
-      - name: Revalidate the staged asset set
-        shell: bash
-        run: node scripts/release/release-context.mjs verify-assets --artifacts-dir artifacts --stage final
-
-      - name: Revalidate the draft against the remote release
-        if: needs.stage-release.outputs.Decision != 'noop'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs verify-draft --artifacts-dir artifacts --expect-release-id "${STAGED_RELEASE_ID}"
-
-      # A duplicate run for a version that is already public must not write
-      # anything: it only proves the published release is byte-identical.
-      - name: Revalidate the already published release (duplicate run)
-        if: needs.stage-release.outputs.Decision == 'noop'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir artifacts
-
-      - name: Inspect the environment gate (evidence only)
-        id: gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs environment-gate --environment dev-pre-release
-
-      # ---------------------------------------------------------------------
-      # Write phase: the single PATCH that publishes, and only after the proof.
-      # ---------------------------------------------------------------------
-      - name: Publish the verified draft
-        if: needs.stage-release.outputs.Decision != 'noop'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs publish-draft --artifacts-dir artifacts --expect-release-id "${STAGED_RELEASE_ID}"
-
-      - name: Verify the published release provenance
-        if: needs.stage-release.outputs.Decision != 'noop'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir artifacts
-
-      - name: Write the publishing evidence
-        id: evidence
-        if: always()
-        shell: bash
-        env:
-          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          STAGE_DECISION: ${{ needs.stage-release.outputs.Decision }}
-          RELEASE_JOB_STATUS: ${{ job.status }}
-          RELEASE_ENVIRONMENT_NAME: dev-pre-release
-          RELEASE_ENVIRONMENT_GATE: ${{ steps.gate.outputs.gate }}
-          RELEASE_ENVIRONMENT_ENFORCED: ${{ steps.gate.outputs.enforced }}
-        run: node scripts/release/release-transaction.mjs write-evidence --phase publish --artifacts-dir artifacts --out-dir publish-evidence
-
-      - name: Upload the publishing evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: publish-evidence
-          path: publish-evidence/*
           if-no-files-found: warn
           retention-days: 30

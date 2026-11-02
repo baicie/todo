@@ -1,0 +1,230 @@
+name: publish-dev
+
+# The ONLY workflow allowed to make a dev release public.
+#
+# Why this is separate from release-dev.yml: the staging workflow is triggered by
+# a tag push, and a tag push is not a human decision to publish. It used to flip
+# the draft public in the same run, gated only by `environment: dev-pre-release`
+# - a repository setting the workflow cannot read or prove. With no environment
+# configured (the documented state of this repository at the time of writing)
+# nothing blocked the PATCH: pushing a tag was enough to publish.
+#
+# This workflow replaces that with three independent gates that a workflow cannot
+# forge, all of which must hold before the single PATCH:
+#
+#   1. it is a MANUAL workflow_dispatch (no push/tag/schedule trigger exists);
+#   2. the maintainer typed the exact confirmation phrase for the tag;
+#   3. the dev-pre-release environment requires at least one reviewer, and
+#      GitHub therefore blocks the job until one approves it. The gate state is
+#      read BEFORE the approval-gated job, and an unreadable or unconfigured
+#      environment fails closed - an API 403 is NEVER read as "approved".
+#
+# After those hold, the job re-proves the world did not move: it adopts the draft
+# (downloading its manifest and SHA256SUMS), checks the manifest sha256 against the
+# one the staging run recorded, revalidates every asset name/size/sha256 from the
+# remote draft, asserts the tag still points at the same commit, and only then
+# performs one PATCH. Any mismatch fails with nothing written.
+#
+# Required repository setup (maintainer action, cannot be done from a workflow):
+#   Settings -> Environments -> dev-pre-release -> Required reviewers: add one.
+# Without it, `authorize-publish` refuses and this workflow publishes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The dev tag whose staged DRAFT should become public, e.g. 0.0.1-dev.1'
+        required: true
+        type: string
+      confirm:
+        description: 'Type exactly: publish <tag>   (e.g. "publish 0.0.1-dev.1")'
+        required: true
+        type: string
+      stage_manifest_sha256:
+        description: 'The draft manifest sha256 from the stage run evidence (stage-release summary). Required.'
+        required: true
+        type: string
+      allow_foreign_workflow:
+        description: 'Acknowledge publishing with workflow logic from a commit other than the release tag commit (refused by default)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a publish: a cancelled run could leave a release whose verify
+  # step never ran. A second dispatch waits, then sees the release already public.
+  group: publish-dev-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  TAURI_CLI_VERSION: '2.12.4'
+
+jobs:
+  # Read-only. Resolves the one release context from the tag and records the
+  # environment gate. Runs BEFORE the approval-gated job on purpose: if the
+  # environment is missing, unconfigured or unreadable, this job fails and the
+  # publish job never starts.
+  authorize:
+    name: Prove the publish is authorized and the environment is enforced
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ReleaseVersion: ${{ steps.resolve.outputs.ReleaseVersion }}
+      ReleaseTag: ${{ steps.resolve.outputs.ReleaseTag }}
+      TagCommitSHA: ${{ steps.resolve.outputs.TagCommitSHA }}
+      ArtifactVersion: ${{ steps.resolve.outputs.ArtifactVersion }}
+      EnvironmentGate: ${{ steps.gate.outputs.gate }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve the release context from the tag
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: workflow_dispatch
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: node scripts/release/release-context.mjs resolve
+
+      - name: Inspect the environment gate (decides, does not just report)
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs environment-gate --environment dev-pre-release
+
+      - name: Authorize the publish (fail closed)
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: 'true'
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          RELEASE_TAG: ${{ steps.resolve.outputs.ReleaseTag }}
+          TAG_COMMIT_SHA: ${{ steps.resolve.outputs.TagCommitSHA }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_ENVIRONMENT_GATE: ${{ steps.gate.outputs.gate }}
+        run: node scripts/release/release-transaction.mjs authorize-publish
+
+  # The approval gate. GitHub holds this job until a required reviewer of the
+  # environment approves; when the environment has no reviewers the authorize job
+  # above already failed, so this job is only reached on a real approval.
+  publish:
+    name: Adopt the staged draft, revalidate, then publish it
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: dev-pre-release
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.authorize.outputs.ReleaseVersion }}
+      RELEASE_TAG: ${{ needs.authorize.outputs.ReleaseTag }}
+      ARTIFACT_VERSION: ${{ needs.authorize.outputs.ArtifactVersion }}
+      TAG_COMMIT_SHA: ${{ needs.authorize.outputs.TagCommitSHA }}
+      BUILD_COMMIT_SHA: ${{ needs.authorize.outputs.TagCommitSHA }}
+      STAGED_MANIFEST_SHA256: ${{ inputs.stage_manifest_sha256 }}
+      RELEASE_ENVIRONMENT_GATE: ${{ needs.authorize.outputs.EnvironmentGate }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.authorize.outputs.TagCommitSHA }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Assert the checkout is the release tag commit
+        shell: bash
+        run: node scripts/release/release-context.mjs assert-checkout
+
+      # Re-guard after the approval: the workflow logic must belong to the tag.
+      - name: Re-guard the workflow provenance
+        shell: bash
+        env:
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          INPUT_ALLOW_FOREIGN: ${{ inputs.allow_foreign_workflow }}
+        run: node scripts/release/release-transaction.mjs guard-workflow
+
+      # Adopt the draft by its recorded manifest sha256. Everything below compares
+      # against these downloaded bytes, never against a fresh local rebuild.
+      - name: Adopt the staged draft identity from the remote release
+        id: adopt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release/release-transaction.mjs adopt-draft \
+            --tag "$RELEASE_TAG" \
+            --out-dir staged \
+            --expect-draft-sha "$STAGED_MANIFEST_SHA256"
+
+      - name: Revalidate the adopted asset set
+        shell: bash
+        run: node scripts/release/release-context.mjs verify-assets --artifacts-dir staged --stage final
+
+      - name: Prove the published draft still matches the build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release/release-transaction.mjs verify-draft \
+            --artifacts-dir staged \
+            --expect-release-id "${{ steps.adopt.outputs.releaseId }}" \
+            --expect-draft-sha "$STAGED_MANIFEST_SHA256"
+
+      - name: Re-check the authorization after the approval
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: 'true'
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: node scripts/release/release-transaction.mjs authorize-publish
+
+      # ---------------------------------------------------------------------
+      # The ONE write of this workflow, and only after every proof above.
+      # ---------------------------------------------------------------------
+      - name: Publish the verified draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: 'true'
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          node scripts/release/release-transaction.mjs publish-draft \
+            --artifacts-dir staged \
+            --expect-release-id "${{ steps.adopt.outputs.releaseId }}"
+
+      - name: Verify the published release provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/release-transaction.mjs verify-published --artifacts-dir staged
+
+      - name: Write the publishing evidence
+        id: evidence
+        if: always()
+        shell: bash
+        env:
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          RELEASE_JOB_STATUS: ${{ job.status }}
+          RELEASE_ENVIRONMENT_NAME: dev-pre-release
+        run: node scripts/release/release-transaction.mjs write-evidence --phase publish --artifacts-dir staged --out-dir publish-evidence
+
+      - name: Upload the publishing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publish-evidence
+          path: publish-evidence/*
+          if-no-files-found: warn
+          retention-days: 30

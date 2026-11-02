@@ -21,3 +21,6 @@ test-results/
 
 artifacts/
 *.log
+
+# Disposable PostgreSQL cluster used by local integration runs.
+.ci-pg/

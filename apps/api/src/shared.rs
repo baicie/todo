@@ -398,6 +398,7 @@ async fn create_task(
 
     let title = validate_text("title", &request.title, 1000)?;
     let note = validate_note(request.note.unwrap_or_default())?;
+    let due_on = validate_due_on(request.due_on)?;
     let task_id = request.id.unwrap_or_else(Uuid::new_v4);
     let created_at = Utc::now();
     sqlx::query(
@@ -410,7 +411,7 @@ async fn create_task(
     .bind(&title)
     .bind(&note)
     .bind(request.important.unwrap_or(false))
-    .bind(request.due_on)
+    .bind(due_on)
     .bind(created_at)
     .execute(&mut *tx)
     .await
@@ -427,7 +428,7 @@ async fn create_task(
         note,
         status: "open".to_owned(),
         important: request.important.unwrap_or(false),
-        due_on: request.due_on,
+        due_on,
         rank: "a0".to_owned(),
         revision: new_revision,
         created_at,
@@ -492,7 +493,7 @@ async fn patch_task(
         None => row.status,
     };
     let important = request.important.unwrap_or(row.important);
-    let due_on = request.due_on.unwrap_or(row.due_on);
+    let due_on = validate_due_on(request.due_on.unwrap_or(row.due_on))?;
     sqlx::query(
         "UPDATE shared_tasks SET title = $3, note = $4, status = $5, \
          important = $6, due_on = $7, updated_at = now() \
@@ -1195,8 +1196,20 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// Rejects a value PostgreSQL's `text` type cannot store. A NUL character makes
+/// the bind fail at the database, which surfaced as a 500 for client input.
+fn reject_unstorable_chars(name: &str, value: &str) -> ApiResult<()> {
+    if value.contains('\0') {
+        return Err(AppError::validation(format!(
+            "{name} may not contain NUL characters"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_text(name: &str, value: &str, max: usize) -> ApiResult<String> {
     let value = value.trim();
+    reject_unstorable_chars(name, value)?;
     if value.is_empty() || value.chars().count() > max {
         return Err(AppError::validation(format!(
             "{name} must contain 1–{max} characters"
@@ -1206,6 +1219,7 @@ fn validate_text(name: &str, value: &str, max: usize) -> ApiResult<String> {
 }
 
 fn validate_note(value: String) -> ApiResult<String> {
+    reject_unstorable_chars("note", &value)?;
     if value.len() > 100_000 {
         return Err(AppError::validation("note is too long"));
     }
@@ -1217,13 +1231,34 @@ fn validate_optional_text(
     value: Option<&str>,
     max: usize,
 ) -> ApiResult<Option<String>> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) if value.chars().count() <= max => Ok(Some(value.to_owned())),
-        Some(_) => Err(AppError::validation(format!(
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    reject_unstorable_chars(name, value)?;
+    if value.chars().count() > max {
+        return Err(AppError::validation(format!(
             "{name} must be at most {max} characters"
-        ))),
-        None => Ok(None),
+        )));
     }
+    Ok(Some(value.to_owned()))
+}
+
+/// PostgreSQL's `date` range. chrono parses wider values (for example
+/// `-5000-01-01`), and the insert then fails as a 500.
+const PG_DATE_MIN_YEAR: i32 = -4713;
+const PG_DATE_MAX_YEAR: i32 = 5874897;
+
+fn validate_due_on(value: Option<NaiveDate>) -> ApiResult<Option<NaiveDate>> {
+    if let Some(date) = value {
+        use chrono::Datelike;
+        let year = date.year();
+        if !(PG_DATE_MIN_YEAR..=PG_DATE_MAX_YEAR).contains(&year) {
+            return Err(AppError::validation(
+                "due_on must be a date PostgreSQL can store",
+            ));
+        }
+    }
+    Ok(value)
 }
 
 fn parse_role(value: &str) -> ApiResult<SharedRole> {

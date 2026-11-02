@@ -45,10 +45,12 @@ import {
   buildReleaseEvidence,
   decideEnvironmentGate,
   decideExistingRelease,
+  decidePublishAuthorization,
   decidePublishOutcome,
   describeBuiltRelease,
   describePipelineOutcome,
   guardWorkflowProvenance,
+  publishConfirmationPhrase,
   renderReleaseEvidence,
   verifyPublishedRelease,
   verifyRemoteAssets,
@@ -71,6 +73,7 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RELEASE_DEV = '.github/workflows/release-dev.yml';
+const PUBLISH_DEV = '.github/workflows/publish-dev.yml';
 const VERSION = '0.0.1-dev.0';
 const TAG = VERSION;
 const TAG_SHA = '3f4d2c1b0a99887766554433221100ffeeddccbb';
@@ -653,19 +656,31 @@ test('workflow transaction: nothing writes to GitHub before the draft release ex
   assert.ok(block.includes('assert-checkout'), 'the tag-SHA checkout assertion must survive');
 });
 
-test('workflow transaction: the release is a draft until verification flips it public', () => {
+test('workflow transaction: the release is a draft until a SEPARATE workflow publishes it', () => {
   const text = workflowText(RELEASE_DEV);
   const stage = jobBlock(text, 'stage-release');
-  const publish = jobBlock(text, 'publish-release');
   assert.ok(stage, 'release-dev.yml must stage the release in its own job');
-  assert.ok(publish, 'release-dev.yml must publish from its own job');
   const createIndex = stage.indexOf('softprops/action-gh-release@');
   const verifyDraft = stage.indexOf('verify-draft');
   assert.ok(createIndex !== -1, 'the staging job must create the release');
   assert.ok(stage.includes('draft: true'), 'the release must be created as a draft');
   assert.ok(!/draft:\s*false/.test(stage), 'the workflow must never create a release as public');
   assert.ok(createIndex < verifyDraft, 'the draft must exist before it is verified');
-  assert.ok(!stage.includes('publish-draft'), 'staging must never publish the draft');
+  assert.ok(
+    !/release-transaction\.mjs\s+publish-draft/.test(stage),
+    'staging must never invoke publish-draft',
+  );
+  // The whole staging workflow must not contain any publish job: a tag push is
+  // not a publish decision (V1.1-RC1 Phase B).
+  assert.equal(jobBlock(text, 'publish-release'), '', 'release-dev.yml must have no publish job');
+  assert.ok(
+    !/release-transaction\.mjs\s+publish-draft/.test(text),
+    'release-dev.yml must never invoke publish-draft anywhere',
+  );
+
+  const publishText = workflowText(PUBLISH_DEV);
+  const publish = jobBlock(publishText, 'publish');
+  assert.ok(publish, 'publish-dev.yml must do the publishing');
   const revalidate = publish.indexOf('verify-draft');
   const publishDraft = publish.indexOf('publish-draft');
   const verifyPublished = publish.lastIndexOf('verify-published');
@@ -677,8 +692,8 @@ test('workflow transaction: the release is a draft until verification flips it p
     'the public release must be re-verified after the flip',
   );
   assert.ok(
-    !publish.includes('softprops/action-gh-release@'),
-    'only the staging job creates the release',
+    !publishText.includes('softprops/action-gh-release@'),
+    'only the staging workflow creates a release; the publish workflow never creates one',
   );
   assert.ok(stage.includes("if: steps.existing.outputs.decision == 'create-draft'"));
   assert.ok(stage.includes("if: steps.existing.outputs.decision != 'noop'"));
@@ -703,53 +718,69 @@ test('workflow transaction: the publishing module only ever flips a draft public
 });
 
 test('workflow transaction: every action in the release path stays pinned to a 40-hex sha', () => {
-  const text = workflowText(RELEASE_DEV);
-  const refs = text
-    .split(/\r?\n/)
-    .map((line) => /^\s*-?\s*uses:\s*(\S+)/.exec(line))
-    .filter((match) => match !== null)
-    .map((match) => match[1]);
-  assert.ok(refs.length >= 10, 'the release path must keep its pinned actions');
-  for (const ref of refs) {
-    assert.match(ref, /^[^\s@]+@[0-9a-f]{40}$/, 'unpinned action in the release path: ' + ref);
-    assert.ok(!/@(v\d|stable|main|master|latest)/.test(ref), 'mutable action ref: ' + ref);
+  const stageText = workflowText(RELEASE_DEV);
+  const publishText = workflowText(PUBLISH_DEV);
+  for (const text of [stageText, publishText]) {
+    const refs = text
+      .split(/\r?\n/)
+      .map((line) => /^\s*-?\s*uses:\s*(\S+)/.exec(line))
+      .filter((match) => match !== null)
+      .map((match) => match[1]);
+    assert.ok(refs.length >= 2, 'the release path must keep its pinned actions');
+    for (const ref of refs) {
+      assert.match(ref, /^[^\s@]+@[0-9a-f]{40}$/, 'unpinned action in the release path: ' + ref);
+      assert.ok(!/@(v\d|stable|main|master|latest)/.test(ref), 'mutable action ref: ' + ref);
+    }
   }
   assert.equal(
-    text.split('contents: write').length - 1,
-    2,
-    'contents: write belongs to the staging and the publishing job',
+    stageText.split('contents: write').length - 1,
+    1,
+    'contents: write belongs to the staging job only in release-dev.yml',
   );
-  assert.ok(jobBlock(text, 'stage-release').includes('contents: write'));
-  assert.ok(jobBlock(text, 'publish-release').includes('contents: write'));
+  assert.ok(jobBlock(stageText, 'stage-release').includes('contents: write'));
+  assert.equal(
+    publishText.split('contents: write').length - 1,
+    1,
+    'contents: write belongs to the publishing job only in publish-dev.yml',
+  );
+  assert.ok(jobBlock(publishText, 'publish').includes('contents: write'));
   for (const job of ['context', 'web', 'windows', 'macos', 'android']) {
-    assert.ok(!jobBlock(text, job).includes('contents: write'), job + ' must stay read-only');
+    assert.ok(!jobBlock(stageText, job).includes('contents: write'), job + ' must stay read-only');
   }
+  assert.ok(
+    !jobBlock(publishText, 'authorize').includes('contents: write'),
+    'the authorization job must stay read-only',
+  );
 });
 
 test('workflow transaction: publishing is not cancellable and serializes per version', () => {
   const text = workflowText(RELEASE_DEV);
-  assert.ok(text.includes('cancel-in-progress: false'));
-  assert.ok(
-    !/cancel-in-progress:\s*true/.test(text),
-    'a cancelled publish can leave a half release',
-  );
+  const publishText = workflowText(PUBLISH_DEV);
+  for (const workflow of [text, publishText]) {
+    assert.ok(workflow.includes('cancel-in-progress: false'));
+    assert.ok(
+      !/cancel-in-progress:\s*true/.test(workflow),
+      'a cancelled publish can leave a half release',
+    );
+  }
   assert.ok(
     jobBlock(text, 'stage-release').includes('cancel-in-progress: false'),
     'staging must never be cancelled either',
   );
-  const block = jobBlock(text, 'publish-release');
   assert.match(
-    block,
-    /concurrency:\n\s+group:.*needs\.stage-release\.outputs\.ReleaseVersion.*\n\s+cancel-in-progress: false/,
-    'the publish job must serialize on the resolved version and never cancel',
+    publishText,
+    /concurrency:\n(?:[ \t]*#[^\n]*\n)*[ \t]*group: publish-dev-\$\{\{ inputs\.version \}\}\n(?:[ \t]*#[^\n]*\n)*[ \t]*cancel-in-progress: false/,
+    'publishing must serialize on the requested version and never cancel',
   );
 });
 
 test('workflow transaction: a foreign workflow commit needs an explicit acknowledgement', () => {
-  const text = workflowText(RELEASE_DEV);
-  const stage = jobBlock(text, 'stage-release');
-  const publish = jobBlock(text, 'publish-release');
-  assert.match(text, /allow_foreign_workflow:\n\s+description:[\s\S]*?default: false/);
+  const stageText = workflowText(RELEASE_DEV);
+  const publishText = workflowText(PUBLISH_DEV);
+  const stage = jobBlock(stageText, 'stage-release');
+  const publish = jobBlock(publishText, 'publish');
+  assert.match(stageText, /allow_foreign_workflow:\n\s+description:[\s\S]*?default: false/);
+  assert.match(publishText, /allow_foreign_workflow:\n\s+description:[\s\S]*?default: false/);
   assert.ok(stage.includes('allow_foreign_workflow'), 'the guard input must reach the staging job');
   assert.ok(
     publish.includes('allow_foreign_workflow'),
@@ -1172,35 +1203,157 @@ test('release evidence: a staged run records the environment as unverified', () 
 });
 
 test('workflow transaction: the publish job records the environment gate instead of assuming it', () => {
-  const text = workflowText(RELEASE_DEV);
-  const stage = jobBlock(text, 'stage-release');
-  const publish = jobBlock(text, 'publish-release');
+  const stageText = workflowText(RELEASE_DEV);
+  const publishText = workflowText(PUBLISH_DEV);
+  const stage = jobBlock(stageText, 'stage-release');
+  const authorize = jobBlock(publishText, 'authorize');
+  const publish = jobBlock(publishText, 'publish');
   assert.match(publish, /environment: dev-pre-release/, 'the gate must be declared');
-  assert.ok(publish.includes('environment-gate'), 'the publish job must inspect the gate');
+  assert.ok(authorize.includes('environment-gate'), 'the gate must be inspected before approval');
   assert.ok(
-    publish.includes('RELEASE_ENVIRONMENT_GATE'),
-    'the gate result must reach the evidence',
+    authorize.includes('authorize-publish'),
+    'the gate result must decide, not merely be reported',
   );
   assert.ok(
-    publish.includes('RELEASE_ENVIRONMENT_ENFORCED'),
-    'the enforced flag must reach the evidence',
+    authorize.indexOf('environment-gate') < authorize.indexOf('authorize-publish'),
+    'the environment gate must be read before the authorization decision',
+  );
+  assert.ok(
+    publish.includes('authorize-publish'),
+    'the authorization must be re-checked after the approval',
   );
   assert.ok(publish.includes('write-evidence --phase publish'));
   assert.ok(stage.includes('write-evidence --phase stage'));
   assert.ok(stage.includes('name: stage-evidence'), 'staging must upload its evidence');
+  assert.ok(publish.includes('adopt-draft'), 'publishing must adopt the staged draft');
   assert.ok(
-    publish.includes('name: stage-evidence'),
-    'publishing must consume the staged evidence',
+    publish.includes('--expect-draft-sha'),
+    'publishing must pin the staged manifest sha256',
   );
-  assert.ok(publish.includes('--staged-dir staged'));
   assert.ok(publish.includes('--expect-release-id'), 'the write must pin the staged release id');
   assert.match(
     publish,
-    /name: Revalidate the draft against the remote release[\s\S]*?publish-draft/,
+    /name: Prove the published draft still matches the build[\s\S]*?publish-draft/,
     'the draft must be revalidated after the approval and before the write',
   );
   assert.ok(
-    !/productions?-ready|GOOD TO SHIP|release ready/i.test(stage + publish),
+    !/productions?-ready|GOOD TO SHIP|release ready/i.test(stage + authorize + publish),
     'no job may claim release readiness',
+  );
+});
+
+/* ---------------------------------------------------------------------------
+ * V1.1-RC1 Phase B (P0): no human authorization, no public release. Every case
+ * below is the pure decision the workflow commands call, so the whole matrix
+ * runs without a network.
+ * ------------------------------------------------------------------------- */
+
+const AUTHORIZED = {
+  eventName: 'workflow_dispatch',
+  publishInput: true,
+  confirmInput: 'publish ' + TAG,
+  releaseTag: TAG,
+  workflowSha: TAG_SHA,
+  tagCommitSHA: TAG_SHA,
+  environmentGate: GATE_ENFORCED,
+};
+
+test('publish authorization: the one authorized path is manual dispatch + phrase + approved environment', () => {
+  const decision = decidePublishAuthorization(AUTHORIZED);
+  assert.equal(decision.ok, true, decision.failures.join(' | '));
+  assert.deepEqual(decision.failures, []);
+  assert.equal(decision.publishRequested, true);
+  assert.equal(decision.confirmed, true);
+  assert.equal(decision.environmentGate, GATE_ENFORCED);
+  assert.match(decision.notes.join(' '), /manual dispatch/);
+});
+
+test('publish authorization: a tag push can never publish', () => {
+  for (const eventName of ['push', 'schedule', 'workflow_run', '']) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, eventName });
+    assert.equal(decision.ok, false, eventName + ' must not publish');
+    assert.match(decision.failures.join(' '), /only a manual workflow_dispatch may publish/);
+  }
+});
+
+test('publish authorization: publish must be requested explicitly', () => {
+  for (const publishInput of [false, 'false', '', undefined, null]) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, publishInput });
+    assert.equal(decision.ok, false);
+    assert.match(decision.failures.join(' '), /publish input is not set/);
+  }
+  for (const publishInput of [true, 'true', 'TRUE', '1']) {
+    assert.equal(decidePublishAuthorization({ ...AUTHORIZED, publishInput }).ok, true);
+  }
+});
+
+test('publish authorization: the confirmation phrase must match the exact tag', () => {
+  for (const confirmInput of [
+    '',
+    'publish',
+    'yes',
+    'publish 0.0.1-dev.2',
+    TAG,
+    'publish 0.0.1-dev.0 extra',
+  ]) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, confirmInput });
+    assert.equal(decision.ok, false, JSON.stringify(confirmInput) + ' must not authorize');
+    assert.match(decision.failures.join(' '), /confirmation phrase does not match/);
+  }
+  // A trailing space is trimmed, so a paste with whitespace still works.
+  assert.equal(
+    decidePublishAuthorization({ ...AUTHORIZED, confirmInput: '  publish ' + TAG + '  ' }).ok,
+    true,
+  );
+});
+
+test('publish authorization: an unproven environment fails closed', () => {
+  for (const environmentGate of [
+    GATE_UNVERIFIED,
+    GATE_NOT_CONFIGURED,
+    'enforced ',
+    '',
+    undefined,
+    null,
+  ]) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, environmentGate });
+    assert.equal(decision.ok, false, String(environmentGate) + ' must not authorize');
+    assert.match(decision.failures.join(' '), /environment gate is/);
+  }
+});
+
+test('publish authorization: an unknown tag commit or workflow commit fails closed', () => {
+  for (const tagCommitSHA of ['', 'main', 'abc', null]) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, tagCommitSHA });
+    assert.equal(decision.ok, false);
+    assert.match(decision.failures.join(' '), /TagCommitSHA is not a 40-hex commit/);
+  }
+  for (const workflowSha of ['', 'main', null]) {
+    const decision = decidePublishAuthorization({ ...AUTHORIZED, workflowSha });
+    assert.equal(decision.ok, false);
+    assert.match(decision.failures.join(' '), /workflow commit is unknown/);
+  }
+});
+
+test('publish authorization: the confirmation phrase is the tag, not a constant', () => {
+  assert.equal(publishConfirmationPhrase('0.0.1-dev.1'), 'publish 0.0.1-dev.1');
+  assert.notEqual(
+    publishConfirmationPhrase('0.0.1-dev.1'),
+    publishConfirmationPhrase('0.0.1-dev.2'),
+  );
+});
+
+test('publish authorization: the publish workflow has no push trigger and refuses without the gate', () => {
+  const text = workflowText(PUBLISH_DEV);
+  const triggers = text.slice(0, text.indexOf('\npermissions:'));
+  assert.ok(!/^\s+push:/m.test(triggers), 'publish-dev.yml must not run on a push');
+  assert.ok(!/^\s+schedule:/m.test(triggers), 'publish-dev.yml must not run on a schedule');
+  assert.match(triggers, /^\s+workflow_dispatch:/m);
+  assert.ok(text.includes('authorize-publish'), 'the workflow must run the authorization command');
+  assert.ok(text.includes('environment: dev-pre-release'), 'the approval must gate the write');
+  const authorizeJob = jobBlock(text, 'authorize');
+  assert.ok(
+    !authorizeJob.includes('publish-draft'),
+    'the authorization job must be read-only and cannot publish',
   );
 });

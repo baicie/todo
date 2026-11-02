@@ -816,6 +816,7 @@ export const EXPRESSION_FUNCTIONS = Object.freeze([
 export const EXPRESSION_LITERALS = Object.freeze(['true', 'false', 'null']);
 export const RELEASE_WORKFLOW_PATHS = Object.freeze([
   '.github/workflows/release-dev.yml',
+  '.github/workflows/publish-dev.yml',
   '.github/workflows/release-acceptance.yml',
   '.github/workflows/release-desktop.yml',
   '.github/workflows/release-web.yml',
