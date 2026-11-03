@@ -3,9 +3,17 @@ import fc from 'fast-check';
 import { normalizeTags, taskQueryPredicate } from './tasks';
 import { makeTask } from './tasks';
 
+// Hash-prefixed values are generated explicitly: a plain string arbitrary hits
+// them rarely, which is how "# #" slipped past this property until CI failed on
+// it. Generation is seeded so a failure is reproducible from the log alone.
 const tagArbitrary = fc
-  .string({ minLength: 0, maxLength: 40 })
+  .oneof(
+    fc.string({ minLength: 0, maxLength: 40 }),
+    fc.string({ minLength: 1, maxLength: 40 }).map((value) => `#${value}`),
+  )
   .map((value) => value.replace(/[\r\n\t]/g, ' '));
+
+const SEED = 1_132_800_433;
 
 describe('domain properties', () => {
   test('tag normalization is idempotent and bounded', () => {
@@ -16,8 +24,11 @@ describe('domain properties', () => {
         expect(twice).toEqual(once);
         expect(once.length).toBeLessThanOrEqual(20);
         expect(once.every((tag) => tag.length > 0 && tag.length <= 32)).toBe(true);
+        // Stored tags must never carry a leading hash: the UI renders "#" itself,
+        // and a stored hash is what made normalization non-idempotent.
+        expect(once.every((tag) => !tag.startsWith('#'))).toBe(true);
       }),
-      { numRuns: 200 },
+      { numRuns: 400, seed: SEED },
     );
   });
 

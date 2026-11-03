@@ -21,7 +21,15 @@ export function normalizeTags(tags: string[] | undefined): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const raw of tags ?? []) {
-    const tag = cleanSingleLine(String(raw), MAX_TAG_LENGTH).replace(/^#+/, '').trim();
+    // Strip leading hashes and the spaces between them, then cut to length, so
+    // normalizing an already-normalized tag is a no-op. Cutting first would let
+    // a tag like "# #" become "#" and then "" (not idempotent), and cutting
+    // again after stripping would let a long hash prefix survive in full.
+    const tag = cleanSingleLine(String(raw))
+      .replace(/^(?:#+\s*)+/, '')
+      .trim()
+      .slice(0, MAX_TAG_LENGTH)
+      .trim();
     if (!tag) continue;
     const key = tag.toLowerCase();
     if (seen.has(key)) continue;
