@@ -1040,9 +1040,13 @@ test('workflow gates: the publish job verifies assets and identity before publis
   // It must not run the local-inventory asset gate (`verify-assets`), which can
   // only fail here: a publish run would have to rebuild every platform.
   const publish = jobBlock(workflowText(DEV_PUBLISH), 'publish');
-  const revalidateIndex = publish.indexOf('verify-draft');
-  const adoptIndex = publish.indexOf('adopt-draft');
-  const patchIndex = publish.indexOf('publish-draft');
+  // Match the command invocation, not the bare word: the job's comments name
+  // these commands too, and a comment must never be mistaken for a step.
+  const commandIndex = (name) =>
+    publish.search(new RegExp('release-transaction\\.mjs\\s+' + name + '\\b'));
+  const revalidateIndex = commandIndex('verify-draft');
+  const adoptIndex = commandIndex('adopt-draft');
+  const patchIndex = commandIndex('publish-draft');
   assert.ok(adoptIndex !== -1, 'the publish job must adopt the staged identity');
   assert.ok(revalidateIndex !== -1, 'the publish job must revalidate the draft');
   assert.ok(patchIndex !== -1, 'the publish job must flip the draft public');

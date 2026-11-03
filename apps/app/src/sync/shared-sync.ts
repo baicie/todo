@@ -1106,12 +1106,31 @@ export class SharedSyncEngine {
    * while the same personal data space is still bound to the account that owns
    * it, so signing out keeps offline edits readable but switching to another
    * account never shows them.
+   *
+   * An UNBOUND space is the legacy shape: earlier releases wrote shared lists
+   * and an outbox without `accountBinding`. It is not "everyone's" data - it is
+   * whoever's data it happens to be - so it may only be read when the personal
+   * data space proves the same account. Reading it for anyone else would show
+   * one account's tasks and invitations to the next account on the device, and
+   * `read()` is reachable before any network call. The space is left untouched
+   * either way: nothing here adopts, clears or rewrites it, so the owner's
+   * offline edits survive a different account signing in.
    */
   private async isStoreReadable(): Promise<boolean> {
     if (!this.store.boundAccount) return true;
+    // No session provider at all (a standalone engine or a unit test): the store
+    // is the only scope, exactly as `ownerFor` treats it, so there is nothing to
+    // fence against.
+    if (!this.options.session) return true;
     const bound = await this.store.boundAccount();
-    if (!bound) return true;
     const session = this.sessionNow();
+    if (!bound) {
+      // Legacy space: require proof from the personal data space. A signed-out
+      // session proves nothing, so the only safe answer is no.
+      if (!session) return false;
+      const hint = (await this.options.ownerHint?.())?.trim().toLowerCase() ?? '';
+      return hint !== '' && hint === session.account.email.trim().toLowerCase();
+    }
     if (session) return sameSharedAccount(session.account, bound);
     const hint = (await this.options.ownerHint?.())?.trim().toLowerCase() ?? '';
     return hint !== '' && hint === bound.email;

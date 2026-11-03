@@ -687,9 +687,17 @@ test('workflow transaction: the release is a draft until a SEPARATE workflow pub
   const publishText = workflowText(PUBLISH_DEV);
   const publish = jobBlock(publishText, 'publish');
   assert.ok(publish, 'publish-dev.yml must do the publishing');
-  const revalidate = publish.indexOf('verify-draft');
-  const publishDraft = publish.indexOf('publish-draft');
-  const verifyPublished = publish.lastIndexOf('verify-published');
+  // Command invocations, not bare words: the job comments name these commands.
+  const invocation = (name) =>
+    publish.search(new RegExp('release-transaction\\.mjs\\s+' + name + '\\b'));
+  const revalidate = invocation('verify-draft');
+  const publishDraft = invocation('publish-draft');
+  const verifyPublished = (() => {
+    let last = -1;
+    const pattern = /release-transaction\.mjs\s+verify-published\b/g;
+    for (const match of publish.matchAll(pattern)) last = match.index;
+    return last;
+  })();
   assert.ok(revalidate !== -1, 'the publish job must revalidate the draft after the approval');
   assert.ok(publishDraft !== -1, 'the publish job must flip the verified draft public');
   assert.ok(revalidate < publishDraft, 'the draft must be verified before it is published');
@@ -802,9 +810,10 @@ test('workflow transaction: a foreign workflow commit needs an explicit acknowle
   const createIndex = stage.indexOf('softprops/action-gh-release@');
   assert.ok(guardIndex !== -1, 'the staging job must guard the workflow provenance');
   assert.ok(guardIndex < createIndex, 'the guard must run before the first write');
-  const publishGuard = publish.indexOf('guard-workflow');
-  const patchIndex = publish.indexOf('publish-draft');
+  const publishGuard = publish.search(/release-transaction\.mjs\s+guard-workflow\b/);
+  const patchIndex = publish.search(/release-transaction\.mjs\s+publish-draft\b/);
   assert.ok(publishGuard !== -1, 'the publish job must re-guard the workflow provenance');
+  assert.ok(patchIndex !== -1, 'the publish job must publish the draft');
   assert.ok(publishGuard < patchIndex, 'the re-guard must run before the single write');
 });
 
@@ -1485,5 +1494,237 @@ test('publish authorization: the publish workflow has no push trigger and refuse
   assert.ok(
     !authorizeJob.includes('publish-draft'),
     'the authorization job must be read-only and cannot publish',
+  );
+});
+
+/* ---------------------------------------------------------------------------
+ * Publish workflow ENV contract (V1.1-RC1 final review).
+ *
+ * `authorize-publish` and `publish-draft` both read the authorization facts from
+ * process.env. Two of those names are also runner-injected defaults, so a step
+ * that does not declare them still works - until an `env:` block or a policy
+ * overrides one. The gate must not depend on that: every input it reads is
+ * declared on the JOB, and each step that re-runs the gate must inherit it.
+ *
+ * These tests parse the job and its steps, so they fail if a step stops
+ * inheriting the context - not merely if a substring disappears.
+ * ------------------------------------------------------------------------- */
+
+const AUTHORIZATION_INPUTS = [
+  'GITHUB_EVENT_NAME',
+  'GITHUB_WORKFLOW_SHA',
+  'RELEASE_TAG',
+  'TAG_COMMIT_SHA',
+  'RELEASE_ENVIRONMENT_GATE',
+  'INPUT_PUBLISH',
+  'INPUT_CONFIRM',
+];
+
+/** Indentation width, ignoring blank and comment-only lines. */
+function indentOf(line) {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * Parse a job's `env:` map and its `steps:` list from the workflow text.
+ * Returns { jobEnv, steps: [{ name, env, run }] }, where each step's `env`
+ * contains inherited job values followed by its own overrides.
+ */
+function parseJob(text, jobId) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.indexOf('  ' + jobId + ':');
+  assert.notEqual(start, -1, 'job ' + jobId + ' must exist');
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
+      end = index;
+      break;
+    }
+    if (lines[index] !== '' && !/^\s/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+
+  const body = lines.slice(start + 1, end);
+  const jobEnv = {};
+  let index = 0;
+  // Job-level env sits at exactly 4 spaces of indentation.
+  for (; index < body.length; index += 1) {
+    if (/^    env:\s*$/.test(body[index])) break;
+    if (/^    steps:\s*$/.test(body[index])) break;
+  }
+  if (index < body.length && /^    env:\s*$/.test(body[index])) {
+    for (index += 1; index < body.length; index += 1) {
+      const line = body[index];
+      if (line.trim() === '' || /^\s*#/.test(line)) continue;
+      if (indentOf(line) < 6) break;
+      const match = /^\s+([A-Z_][A-Z0-9_]*):\s*(.*)$/.exec(line);
+      if (match) jobEnv[match[1]] = match[2].trim();
+    }
+  }
+
+  const steps = [];
+  for (; index < body.length; index += 1) {
+    if (!/^      - /.test(body[index])) continue;
+    const stepLines = [body[index]];
+    let cursor = index + 1;
+    for (; cursor < body.length; cursor += 1) {
+      if (/^      - /.test(body[cursor])) break;
+      stepLines.push(body[cursor]);
+    }
+    index = cursor - 1;
+
+    const step = { name: '', env: { ...jobEnv }, ownEnvKeys: [], hasOwnEnv: false, run: '' };
+    const nameMatch = /^\s+- name:\s*(.+)$/.exec(stepLines[0]);
+    if (nameMatch) step.name = nameMatch[1].trim();
+    let runIndent = null;
+    for (let line = 0; line < stepLines.length; line += 1) {
+      const textLine = stepLines[line];
+      if (textLine.trim() === '' || /^\s*#/.test(textLine)) continue;
+      if (/^        env:\s*$/.test(textLine)) {
+        step.hasOwnEnv = true;
+        for (let sub = line + 1; sub < stepLines.length; sub += 1) {
+          const entry = stepLines[sub];
+          if (entry.trim() === '' || /^\s*#/.test(entry)) continue;
+          if (indentOf(entry) < 10) break;
+          const match = /^\s+([A-Z_][A-Z0-9_]*):\s*(.*)$/.exec(entry);
+          // A step-level value overrides the job value of the same name.
+          if (match) {
+            step.env[match[1]] = match[2].trim();
+            step.ownEnvKeys.push(match[1]);
+          }
+        }
+        continue;
+      }
+      // Block scalar (`run: |`) and the single-line form (`run: node ...`).
+      if (/^        run:\s*\|\s*$/.test(textLine)) {
+        runIndent = 10;
+        continue;
+      }
+      const inlineRun = /^        run:\s*(\S.*)$/.exec(textLine);
+      if (inlineRun) {
+        step.run += inlineRun[1].trim() + '\n';
+        runIndent = null;
+        continue;
+      }
+      if (runIndent !== null && indentOf(textLine) >= runIndent) {
+        step.run += textLine.trim() + '\n';
+      } else if (runIndent !== null) {
+        runIndent = null;
+      }
+    }
+    steps.push(step);
+  }
+  return { jobEnv, steps };
+}
+
+function stepsRunning(parsed, command) {
+  const pattern = new RegExp('release-transaction\\.mjs\\s+' + command + '\\b');
+  return parsed.steps.filter((step) => pattern.test(step.run));
+}
+
+test('publish workflow env: every authorization command inherits one complete job env', () => {
+  const parsed = parseJob(workflowText(PUBLISH_DEV), 'publish');
+  const authorizeSteps = stepsRunning(parsed, 'authorize-publish');
+  const publishSteps = stepsRunning(parsed, 'publish-draft');
+  const guardSteps = stepsRunning(parsed, 'guard-workflow');
+
+  // The publish job re-runs the gate after the approval and again inside the
+  // write command; both must exist, or the "recheck" claim is false.
+  assert.equal(authorizeSteps.length, 1, 'the publish job must re-run authorize-publish once');
+  assert.equal(publishSteps.length, 1, 'the publish job must run publish-draft once');
+  assert.equal(guardSteps.length, 1, 'the publish job must re-guard the workflow provenance');
+
+  for (const input of AUTHORIZATION_INPUTS) {
+    assert.ok(
+      Object.hasOwn(parsed.jobEnv, input),
+      'the publish job env must declare ' + input + ' so no step depends on a runner default',
+    );
+  }
+
+  for (const step of [...authorizeSteps, ...publishSteps]) {
+    for (const input of AUTHORIZATION_INPUTS) {
+      assert.equal(
+        step.env[input],
+        parsed.jobEnv[input],
+        'step "' +
+          step.name +
+          '" must inherit the job-level ' +
+          input +
+          ' (expected ' +
+          parsed.jobEnv[input] +
+          ', got ' +
+          String(step.env[input]) +
+          ')',
+      );
+    }
+    // Inheriting is not enough: a step-level copy of an authorization input is
+    // how drift starts. The next edit changes one copy and the two gates end up
+    // reading different facts. The job env is the single source.
+    assert.deepEqual(
+      step.ownEnvKeys.filter((key) => AUTHORIZATION_INPUTS.includes(key)),
+      [],
+      'step "' + step.name + '" must not redeclare an authorization input',
+    );
+  }
+
+  // The guard needs the same workflow SHA the authorization checks; the tag
+  // commit it compares against lives in the job env too.
+  for (const input of ['GITHUB_WORKFLOW_SHA', 'GITHUB_WORKFLOW_REF', 'TAG_COMMIT_SHA']) {
+    assert.equal(
+      guardSteps[0].env[input],
+      parsed.jobEnv[input],
+      'the post-approval guard must read the same ' + input + ' as the authorization checks',
+    );
+  }
+
+  // A literal event name would keep the gate passing if a trigger were added;
+  // the value must come from the event that actually started the run.
+  assert.match(
+    parsed.jobEnv.GITHUB_EVENT_NAME,
+    /^\$\{\{\s*github\.event_name\s*\}\}$/,
+    'GITHUB_EVENT_NAME must be the triggering event, never a literal',
+  );
+  assert.match(
+    parsed.jobEnv.GITHUB_WORKFLOW_SHA,
+    /^\$\{\{\s*github\.workflow_sha\s*\}\}$/,
+    'GITHUB_WORKFLOW_SHA must be the workflow commit, not a literal',
+  );
+
+  // The approval itself is carried across jobs: the recorded gate value, not a
+  // fresh read that could differ from what was approved.
+  assert.match(
+    parsed.jobEnv.RELEASE_ENVIRONMENT_GATE,
+    /needs\.authorize\.outputs\.EnvironmentGate/,
+    'the publish job must consume the recorded environment gate',
+  );
+});
+
+test('publish workflow env: the read-only authorize job proves the same facts', () => {
+  const parsed = parseJob(workflowText(PUBLISH_DEV), 'authorize');
+  const authorizeSteps = stepsRunning(parsed, 'authorize-publish');
+  assert.equal(authorizeSteps.length, 1, 'the authorize job runs authorize-publish once');
+  const step = authorizeSteps[0];
+  for (const input of [
+    'GITHUB_EVENT_NAME',
+    'GITHUB_WORKFLOW_SHA',
+    'TAG_COMMIT_SHA',
+    'INPUT_CONFIRM',
+  ]) {
+    assert.ok(step.env[input], 'authorize job must pass ' + input + ' to ' + step.name);
+  }
+  // It resolves the tag itself rather than trusting the approval job's output:
+  // this job runs before the approval exists.
+  assert.match(
+    step.env.RELEASE_TAG,
+    /steps\.resolve\.outputs\.ReleaseTag/,
+    'the authorize job must resolve the tag itself',
+  );
+  assert.match(
+    step.env.RELEASE_ENVIRONMENT_GATE,
+    /steps\.gate\.outputs\.gate/,
+    'the authorize job must record the gate it read',
   );
 });

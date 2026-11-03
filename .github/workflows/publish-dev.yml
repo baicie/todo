@@ -123,6 +123,22 @@ jobs:
     permissions:
       contents: write
     env:
+      # Every authorization input the steps below read is declared here, once.
+      # A step-level copy drifts: the second `authorize-publish` and the
+      # `publish-draft` write re-run the same decision, and a key missing from
+      # one of them fails closed only AFTER a human has approved - the worst
+      # moment to discover it.
+      #
+      # GITHUB_WORKFLOW_SHA and GITHUB_EVENT_NAME are also runner-injected
+      # defaults, but an authorization input must not depend on an implicit
+      # value that a repository-level or step-level `env:` could silently
+      # override. Declaring them makes the value the gate sees the one written
+      # here.
+      #
+      # GITHUB_EVENT_NAME is deliberately `github.event_name` and not the
+      # literal "workflow_dispatch": if a trigger is ever added to this
+      # workflow, the gate must start failing closed instead of being told the
+      # run is a dispatch.
       RELEASE_VERSION: ${{ needs.authorize.outputs.ReleaseVersion }}
       RELEASE_TAG: ${{ needs.authorize.outputs.ReleaseTag }}
       ARTIFACT_VERSION: ${{ needs.authorize.outputs.ArtifactVersion }}
@@ -130,6 +146,11 @@ jobs:
       BUILD_COMMIT_SHA: ${{ needs.authorize.outputs.TagCommitSHA }}
       STAGED_MANIFEST_SHA256: ${{ inputs.stage_manifest_sha256 }}
       RELEASE_ENVIRONMENT_GATE: ${{ needs.authorize.outputs.EnvironmentGate }}
+      GITHUB_EVENT_NAME: ${{ github.event_name }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+      INPUT_PUBLISH: 'true'
+      INPUT_CONFIRM: ${{ inputs.confirm }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -142,11 +163,11 @@ jobs:
         run: node scripts/release/release-context.mjs assert-checkout
 
       # Re-guard after the approval: the workflow logic must belong to the tag.
+      # The SHA and ref come from the job env so this check and the two
+      # authorization checks below read the same values.
       - name: Re-guard the workflow provenance
         shell: bash
         env:
-          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
           INPUT_ALLOW_FOREIGN: ${{ inputs.allow_foreign_workflow }}
         run: node scripts/release/release-transaction.mjs guard-workflow
 
@@ -182,12 +203,12 @@ jobs:
             --expect-release-id "${{ steps.adopt.outputs.releaseId }}" \
             --expect-draft-sha "$STAGED_MANIFEST_SHA256"
 
+      # No step env: the authorization context is the job env, identical to the
+      # one the first `authorize-publish` ran with. Only the environment gate
+      # differs in provenance (it is carried across jobs as the recorded output),
+      # so the approval itself cannot be re-derived from a re-read of GitHub.
       - name: Re-check the authorization after the approval
         shell: bash
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          INPUT_PUBLISH: 'true'
-          INPUT_CONFIRM: ${{ inputs.confirm }}
         run: node scripts/release/release-transaction.mjs authorize-publish
 
       # ---------------------------------------------------------------------
@@ -197,9 +218,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          INPUT_PUBLISH: 'true'
-          INPUT_CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
           node scripts/release/release-transaction.mjs publish-draft \
