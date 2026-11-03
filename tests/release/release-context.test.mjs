@@ -1063,8 +1063,12 @@ test('workflow gates: the publish job verifies assets and identity before publis
   );
 });
 
-test('workflow expressions: all four release workflows pass the expression lint today', () => {
-  assert.equal(RELEASE_WORKFLOW_PATHS.length, 5);
+test('workflow expressions: every release-path workflow passes the expression lint today', () => {
+  // Five release workflows plus web.yml, which runs the release and QA contract
+  // suites. The list is asserted so a workflow cannot be dropped from the lint
+  // unnoticed.
+  assert.equal(RELEASE_WORKFLOW_PATHS.length, 6);
+  assert.ok(RELEASE_WORKFLOW_PATHS.includes('.github/workflows/web.yml'));
   for (const path of RELEASE_WORKFLOW_PATHS) {
     const problems = lintWorkflowExpressions(workflowText(path), path);
     const report = problems.map(

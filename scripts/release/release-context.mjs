@@ -820,6 +820,9 @@ export const RELEASE_WORKFLOW_PATHS = Object.freeze([
   '.github/workflows/release-acceptance.yml',
   '.github/workflows/release-desktop.yml',
   '.github/workflows/release-web.yml',
+  // Not a release workflow, but it runs the release and QA contract suites, so
+  // a malformed expression here would disable the gate that guards publishing.
+  '.github/workflows/web.yml',
 ]);
 
 const EXPRESSION_TOKEN =

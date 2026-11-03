@@ -1702,6 +1702,37 @@ test('publish workflow env: every authorization command inherits one complete jo
   );
 });
 
+test('release contract: CI actually runs the release and QA contract suites', () => {
+  // These suites guard the publish path. They were runnable via `pnpm
+  // test:release` but no workflow invoked them, so a regression would have
+  // merged with every visible check green. Pin the wiring, not just the script.
+  const scripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
+  assert.ok(scripts['test:release'], 'package.json must define test:release');
+  assert.ok(scripts['test:qa-harness'], 'package.json must define test:qa-harness');
+
+  const workflows = [
+    '.github/workflows/web.yml',
+    '.github/workflows/api.yml',
+    '.github/workflows/native.yml',
+    '.github/workflows/release-acceptance.yml',
+  ];
+  const runners = workflows.filter((path) => {
+    const text = workflowText(path);
+    return /pnpm\s+test:release\b/.test(text) && /pnpm\s+test:qa-harness\b/.test(text);
+  });
+  assert.ok(
+    runners.length > 0,
+    'at least one workflow must run both contract suites; currently none does',
+  );
+
+  // The workflow that runs them must actually be triggered on pull requests, or
+  // it never guards a merge.
+  for (const path of runners) {
+    const triggers = workflowText(path).slice(0, workflowText(path).indexOf('\njobs:'));
+    assert.match(triggers, /pull_request/, path + ' must run on pull_request');
+  }
+});
+
 test('publish workflow env: the read-only authorize job proves the same facts', () => {
   const parsed = parseJob(workflowText(PUBLISH_DEV), 'authorize');
   const authorizeSteps = stepsRunning(parsed, 'authorize-publish');

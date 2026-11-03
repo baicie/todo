@@ -6,6 +6,25 @@ on:
   pull_request:
 
 jobs:
+  # The release and QA contract suites guard the publish path: tag-vs-draft
+  # separation, the authorization matrix, artifact identity and the QA harness
+  # target. They were runnable (`pnpm test:release`) but no workflow called them,
+  # so a regression there would have merged with every other check green.
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:release
+      - run: pnpm test:qa-harness
+
   verify:
     runs-on: ubuntu-latest
     steps:
