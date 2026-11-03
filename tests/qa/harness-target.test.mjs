@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -449,14 +449,17 @@ test('PARTIAL exit code semantics are encoded once and shared with PowerShell', 
 test('QA evidence root points inside the QA data root, never at production', () => {
   const decision = resolveHarnessTarget(probe({ appCandidates: [exe()] }));
   assert.equal(decision.qa.identifier, 'app.shishi.todo.qa');
-  assert.match(decision.qa.dataRoot, /AppData\\Roaming\\app\.shishi\.todo\.qa$/);
+  // The separator comes from path.join on the host running the harness logic,
+  // so the assertion accepts either one. The production checks normalise them
+  // (`pathKey`), and this test must not be Windows-only: it runs in CI on Linux.
+  assert.match(decision.qa.dataRoot, /AppData[\\/]Roaming[\\/]app\.shishi\.todo\.qa$/);
   assert.equal(decision.qa.evidenceRoot, join(decision.qa.dataRoot, 'evidence'));
   assert.ok(
-    decision.qa.evidenceRoot.toLowerCase().startsWith(decision.qa.dataRoot.toLowerCase() + '\\'),
+    decision.qa.evidenceRoot.toLowerCase().startsWith(decision.qa.dataRoot.toLowerCase() + sep),
     'evidence root must live inside the QA data root',
   );
   assert.notEqual(decision.qa.productionDataRoot, decision.qa.dataRoot);
-  assert.match(decision.qa.productionDataRoot, /AppData\\Roaming\\app\.shishi\.todo$/);
+  assert.match(decision.qa.productionDataRoot, /AppData[\\/]Roaming[\\/]app\.shishi\.todo$/);
 
   const missingRoots = resolveHarnessTarget({
     ...probe({ appCandidates: [exe()] }),

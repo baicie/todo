@@ -398,6 +398,7 @@ async fn create_task(
 
     let title = validate_text("title", &request.title, 1000)?;
     let note = validate_note(request.note.unwrap_or_default())?;
+    let due_on = validate_due_on(request.due_on)?;
     let task_id = request.id.unwrap_or_else(Uuid::new_v4);
     let created_at = Utc::now();
     sqlx::query(
@@ -410,7 +411,7 @@ async fn create_task(
     .bind(&title)
     .bind(&note)
     .bind(request.important.unwrap_or(false))
-    .bind(request.due_on)
+    .bind(due_on)
     .bind(created_at)
     .execute(&mut *tx)
     .await
@@ -427,7 +428,7 @@ async fn create_task(
         note,
         status: "open".to_owned(),
         important: request.important.unwrap_or(false),
-        due_on: request.due_on,
+        due_on,
         rank: "a0".to_owned(),
         revision: new_revision,
         created_at,
@@ -492,7 +493,7 @@ async fn patch_task(
         None => row.status,
     };
     let important = request.important.unwrap_or(row.important);
-    let due_on = request.due_on.unwrap_or(row.due_on);
+    let due_on = validate_due_on(request.due_on.unwrap_or(row.due_on))?;
     sqlx::query(
         "UPDATE shared_tasks SET title = $3, note = $4, status = $5, \
          important = $6, due_on = $7, updated_at = now() \
@@ -1195,8 +1196,20 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// Rejects a value PostgreSQL's `text` type cannot store. A NUL character makes
+/// the bind fail at the database, which surfaced as a 500 for client input.
+fn reject_unstorable_chars(name: &str, value: &str) -> ApiResult<()> {
+    if value.contains('\0') {
+        return Err(AppError::validation(format!(
+            "{name} may not contain NUL characters"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_text(name: &str, value: &str, max: usize) -> ApiResult<String> {
     let value = value.trim();
+    reject_unstorable_chars(name, value)?;
     if value.is_empty() || value.chars().count() > max {
         return Err(AppError::validation(format!(
             "{name} must contain 1–{max} characters"
@@ -1206,6 +1219,7 @@ fn validate_text(name: &str, value: &str, max: usize) -> ApiResult<String> {
 }
 
 fn validate_note(value: String) -> ApiResult<String> {
+    reject_unstorable_chars("note", &value)?;
     if value.len() > 100_000 {
         return Err(AppError::validation("note is too long"));
     }
@@ -1217,13 +1231,44 @@ fn validate_optional_text(
     value: Option<&str>,
     max: usize,
 ) -> ApiResult<Option<String>> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) if value.chars().count() <= max => Ok(Some(value.to_owned())),
-        Some(_) => Err(AppError::validation(format!(
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    reject_unstorable_chars(name, value)?;
+    if value.chars().count() > max {
+        return Err(AppError::validation(format!(
             "{name} must be at most {max} characters"
-        ))),
-        None => Ok(None),
+        )));
     }
+    Ok(Some(value.to_owned()))
+}
+
+/// PostgreSQL's `date` range is Julian days 0 ..= 3_652_424, i.e.
+/// `4714-11-24 BC` ..= `5874897-12-31`.
+///
+/// The lower end is not the same as a year range: the first year is partial,
+/// so `-4713-01-01` (astronomical numbering for 4714 BC) is out of range even
+/// though its year is not. chrono parses that far, and the insert then fails
+/// as a 500. Verified against PostgreSQL 18.6; `select '4714-11-23 BC'::date`
+/// raises `date out of range` while `'4714-11-24 BC'` is the first valid day.
+///
+/// The upper end needs no guard here: `chrono::NaiveDate` stops at
+/// `262143-12-31`, far below PostgreSQL's maximum, so a larger year already
+/// fails JSON deserialization and is answered with a 400 by the extractor.
+const PG_DATE_FLOOR: NaiveDate = match NaiveDate::from_ymd_opt(-4713, 11, 24) {
+    Some(date) => date,
+    None => panic!("the PostgreSQL date floor is a valid calendar date"),
+};
+
+fn validate_due_on(value: Option<NaiveDate>) -> ApiResult<Option<NaiveDate>> {
+    if let Some(date) = value
+        && date < PG_DATE_FLOOR
+    {
+        return Err(AppError::validation(
+            "due_on must be a date PostgreSQL can store",
+        ));
+    }
+    Ok(value)
 }
 
 fn parse_role(value: &str) -> ApiResult<SharedRole> {
@@ -1339,6 +1384,27 @@ mod tests {
         assert_eq!(parse_invite_role("viewer").unwrap(), SharedRole::Viewer);
         assert!(parse_invite_role("owner").is_err());
         assert!(parse_invite_role("admin").is_err());
+    }
+
+    #[test]
+    fn due_on_uses_postgresqls_exact_lower_bound() {
+        // The first storable day. A year-only check would also accept
+        // -4713-11-23, which PostgreSQL refuses with "date out of range".
+        let floor = NaiveDate::from_ymd_opt(-4713, 11, 24).unwrap();
+        assert_eq!(validate_due_on(Some(floor)).unwrap(), Some(floor));
+        for rejected in [
+            NaiveDate::from_ymd_opt(-4713, 11, 23).unwrap(),
+            NaiveDate::from_ymd_opt(-4713, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(-5000, 1, 1).unwrap(),
+        ] {
+            assert!(validate_due_on(Some(rejected)).is_err(), "{rejected}");
+        }
+        // Ordinary and far-future dates stay accepted; the ceiling is unreachable
+        // because chrono itself stops far below PostgreSQL's maximum.
+        for accepted in [NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(), NaiveDate::MAX] {
+            assert_eq!(validate_due_on(Some(accepted)).unwrap(), Some(accepted));
+        }
+        assert_eq!(validate_due_on(None).unwrap(), None);
     }
 
     #[test]

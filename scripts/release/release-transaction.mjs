@@ -81,6 +81,15 @@ export const OUTCOME_STAY_DRAFT = 'stay-draft';
 /** The remote asset whose own sha256 has no remote record, by construction. */
 export const HASH_UNVERIFIABLE_BY_DESIGN = Object.freeze([SUMS_NAME]);
 
+/**
+ * The build jobs upload a `toolchain-<platform>.json` next to their artifacts.
+ * Those files are carried by the release but are not part of the release
+ * contract. The pattern - not a fixed list - is allowed, because the macOS
+ * matrix names its records per architecture; anything else unexpected still
+ * fails closed.
+ */
+export const TOOLCHAIN_ASSET_PATTERN = /^toolchain-[A-Za-z0-9._-]+\.json$/;
+
 export class ReleaseTransactionError extends Error {
   constructor(message) {
     super(message);
@@ -186,6 +195,7 @@ export function verifyRemoteAssets({
   remote,
   hashes = {},
   allowedExtras = [],
+  allowedExtraPattern = null,
   requireSha256 = true,
   unhashedAllowed = HASH_UNVERIFIABLE_BY_DESIGN,
 } = {}) {
@@ -193,6 +203,10 @@ export function verifyRemoteAssets({
   if (!Array.isArray(remote)) fail('no remote asset inventory supplied');
   const allowed = new Set(allowedExtras);
   const exempt = new Set(unhashedAllowed);
+  const extraPattern =
+    allowedExtraPattern instanceof RegExp && allowedExtraPattern.global === false
+      ? allowedExtraPattern
+      : null;
   const failures = [];
   const notes = [];
   const byName = new Map();
@@ -251,8 +265,9 @@ export function verifyRemoteAssets({
 
   for (const name of byName.keys()) {
     if (expected.some((asset) => asset.name === name)) continue;
-    if (allowed.has(name)) notes.push('extra asset carried by the release: ' + name);
-    else failures.push('unexpected remote asset: ' + name);
+    if (allowed.has(name) || (extraPattern && extraPattern.test(name))) {
+      notes.push('extra asset carried by the release: ' + name);
+    } else failures.push('unexpected remote asset: ' + name);
   }
 
   return { ok: failures.length === 0, failures, notes };
@@ -410,7 +425,8 @@ export function compareRemoteRelease({ built, remote } = {}) {
     expected: built.assets,
     remote: Array.isArray(remote?.assets) ? remote.assets : [],
     hashes,
-    allowedExtras: built.extras,
+    allowedExtras: built.extras ?? [],
+    allowedExtraPattern: TOOLCHAIN_ASSET_PATTERN,
     requireSha256: true,
   });
   failures.push(...assets.failures);
@@ -664,6 +680,107 @@ export const PIPELINE_ALREADY_PUBLISHED = 'already-published';
 export const PIPELINE_AWAITING_APPROVAL = 'awaiting-approval';
 export const PIPELINE_NOT_APPROVED = 'not-approved';
 export const PIPELINE_FAILED = 'failed';
+
+/* ---------------------------------------------------------------------------
+ * P0 fail-closed publish authorization.
+ *
+ * A tag push, or any event this workflow did not ask for explicitly, may only
+ * stage a DRAFT. Publishing is a second, deliberate act: a manual dispatch of
+ * this workflow with `publish=true`, which still has to pass the environment
+ * approval and the explicit acknowledgement below. The decision is a pure
+ * function so the whole matrix runs in tests/release/ without a network.
+ * ------------------------------------------------------------------------- */
+
+/** The only event that may ever make a release public. */
+export const PUBLISH_EVENT = 'workflow_dispatch';
+
+/**
+ * The value the maintainer must type into `confirm`, so a mis-click in the
+ * dispatch form cannot publish anything.
+ */
+export function publishConfirmationPhrase(tag) {
+  return 'publish ' + String(tag ?? '').trim();
+}
+
+/** Authorization facts the caller gathered; none of them imply each other. */
+export function decidePublishAuthorization({
+  eventName = '',
+  publishInput = false,
+  confirmInput = '',
+  releaseTag = '',
+  workflowSha = '',
+  tagCommitSHA = '',
+  environmentGate = GATE_UNVERIFIED,
+} = {}) {
+  const failures = [];
+  const notes = [];
+  const event = String(eventName ?? '').trim();
+  const publishRequested = toBoolean(publishInput);
+  const tag = String(releaseTag ?? '').trim();
+  const expectedPhrase = publishConfirmationPhrase(tag);
+  const confirmation = String(confirmInput ?? '').trim();
+
+  if (event !== PUBLISH_EVENT) {
+    failures.push(
+      'the run was triggered by "' +
+        (event || '(unknown)') +
+        '": only a manual workflow_dispatch may publish. A tag push stages a draft and stops there',
+    );
+  }
+  if (!publishRequested) {
+    failures.push(
+      'the publish input is not set: this run may stage a draft, but the Publish job must be ' +
+        'dispatched explicitly with publish=true',
+    );
+  }
+  if (expectedPhrase === 'publish' || confirmation !== expectedPhrase) {
+    failures.push(
+      'the confirmation phrase does not match: dispatch with publish=true and confirm set to "' +
+        expectedPhrase +
+        '"',
+    );
+  }
+  if (!shaOf(tagCommitSHA)) {
+    failures.push('TagCommitSHA is not a 40-hex commit: there is no release target to authorize');
+  } else if (!shaOf(workflowSha)) {
+    failures.push('the workflow commit is unknown: the publishing logic cannot be tied to the tag');
+  }
+  // The environment is the second gate. It is the only input this decision takes
+  // that a workflow cannot forge: when it is unreadable or not configured, the
+  // maintainer's approval provably did not run.
+  if (environmentGate !== GATE_ENFORCED) {
+    failures.push(
+      'the ' +
+        ENVIRONMENT_NAME +
+        ' environment gate is ' +
+        environmentGate +
+        ': configure at least one required reviewer, otherwise no human approved this publish',
+    );
+  }
+
+  if (failures.length === 0) {
+    notes.push(
+      'publishing was requested explicitly by a manual dispatch and the environment required an ' +
+        'approval; the single PATCH below still revalidates every asset first',
+    );
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+    notes,
+    publishRequested,
+    environmentGate,
+    confirmed: confirmation === expectedPhrase,
+  };
+}
+
+function toBoolean(value) {
+  if (value === true) return true;
+  const text = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  return text === 'true' || text === '1' || text === 'yes';
+}
 
 /**
  * No run of this workflow ever claims release readiness. The environment gate is
@@ -1167,9 +1284,9 @@ function readRemoteManifest(repo, assets) {
   const text = ghApiAssetText(repo, asset.id);
   if (text === null) return null;
   try {
-    return { manifest: JSON.parse(text) };
+    return { manifest: JSON.parse(text), manifestText: text };
   } catch (error) {
-    return { manifest: null, error: error.message };
+    return { manifest: null, manifestText: null, error: error.message };
   }
 }
 
@@ -1194,8 +1311,68 @@ function fetchReleaseSnapshot({ repo, tag }) {
     release,
     assets,
     manifest: read?.manifest ?? null,
+    manifestText: read?.manifestText ?? null,
     manifestError: read?.error ?? null,
     sumsText,
+  };
+}
+
+/**
+ * The built side of a publish run. The publish job has NO build artifacts on
+ * disk: it downloaded the draft's manifest and SHA256SUMS and nothing else, so
+ * describing the build from a local inventory can never succeed there. The
+ * staged manifest is the build record, and its own sha256 was pinned by the
+ * staging run (a different workflow run) before this one started - that pin is
+ * what keeps the comparison below from being circular.
+ *
+ * The manifest records the BUILD assets only: it is written before itself and
+ * SHA256SUMS exist, so it cannot list either. The release contract adds those
+ * two, and they are what `extras` carries here.
+ *
+ * A manifest without a recorded asset table is refused: there would be nothing
+ * left to compare the remote draft against.
+ */
+export function describeDraftRelease({ manifest } = {}) {
+  if (!manifest || typeof manifest !== 'object') fail('the staged release manifest is missing');
+  const version = normalizeVersion(manifest.release?.version);
+  const recorded = Array.isArray(manifest.assets) ? manifest.assets : [];
+  if (recorded.length === 0) {
+    fail(
+      'the staged ' +
+        MANIFEST_NAME +
+        ' records no asset inventory: the remote draft cannot be compared against it',
+    );
+  }
+  const assets = recorded.map((asset) => {
+    const name = typeof asset?.name === 'string' ? asset.name.trim() : '';
+    if (name === '') fail('the staged manifest carries an asset without a name');
+    const sha256 = hexOf(asset.sha256);
+    if (!sha256) fail('the staged manifest records no sha256 for ' + name);
+    if (!Number.isFinite(asset.size) || asset.size <= 0) {
+      fail('the staged manifest records no size for ' + name);
+    }
+    return { name, size: asset.size, sha256 };
+  });
+  const expected = expectedBuildAssets(version);
+  const missing = expected.filter((name) => !assets.some((asset) => asset.name === name));
+  if (missing.length > 0) {
+    fail(
+      'the staged manifest does not describe the release contract: missing ' + missing.join(', '),
+    );
+  }
+  const extra = [...assets.map((asset) => asset.name), MANIFEST_NAME, SUMS_NAME].filter(
+    (name) => !expected.includes(name),
+  );
+  return {
+    tag: String(manifest.release?.tag ?? version),
+    version,
+    channel: String(manifest.release?.channel ?? ''),
+    identifier: String(manifest.app?.identifier ?? ''),
+    tagCommitSHA: shaOf(manifest.commit?.tagSHA),
+    manifest,
+    assets,
+    extras: [...new Set(extra)].sort(),
+    source: 'draft-manifest',
   };
 }
 
@@ -1210,7 +1387,27 @@ function readBuiltRelease(options) {
         ': the manifest must be written before the decision',
     );
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, ''));
+  const bytes = readFileSync(manifestPath);
+  const declared = options['expect-draft-sha'] ? hexOf(options['expect-draft-sha']) : null;
+  if (options['expect-draft-sha'] && !declared) {
+    fail('--expect-draft-sha must be a 64-hex sha256');
+  }
+  if (declared) {
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (actual !== declared) {
+      fail(
+        'the staged ' +
+          MANIFEST_NAME +
+          ' sha256 ' +
+          actual +
+          ' is not the one staging recorded (' +
+          declared +
+          ')',
+      );
+    }
+  }
+  const manifest = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
+  if (options['from-manifest']) return describeDraftRelease({ manifest });
   return describeBuiltRelease({ manifest, inventory: readArtifactInventory(dir) });
 }
 
@@ -1295,6 +1492,31 @@ function verifyDraftCommand(options) {
   const remote = fetchReleaseSnapshot({ repo: repoSlug(), tag: built.tag });
   if (remote.manifestError)
     console.log('note: ' + MANIFEST_NAME + ' is unreadable: ' + remote.manifestError);
+  // A publish run re-downloaded the draft's manifest; it must be byte-identical
+  // to the one the staging run recorded, or this is a different draft.
+  const expectDraftSha = options['expect-draft-sha'] ? hexOf(options['expect-draft-sha']) : null;
+  if (options['expect-draft-sha'] && !expectDraftSha) {
+    fail('--expect-draft-sha must be a 64-hex sha256');
+  }
+  if (expectDraftSha) {
+    const exact = remote.manifestText
+      ? shaOf256(remote.manifestText)
+      : shaOf256(JSON.stringify(remote.manifest, null, 2) + '\n');
+    if (exact !== expectDraftSha) {
+      for (const failure of [
+        'the remote draft ' +
+          MANIFEST_NAME +
+          ' sha256 ' +
+          exact +
+          ' is not the staged one (' +
+          expectDraftSha +
+          '): the draft changed after staging',
+      ])
+        console.error('::error::' + failure);
+      fail('the remote draft is not the build that was staged; it stays a draft');
+    }
+    console.log('note: the remote draft manifest matches the staged sha256 ' + exact);
+  }
   const outcome = decidePublishOutcome({ built, remote });
   assertExpectedReleaseId(outcome, options['expect-release-id']);
   for (const note of outcome.notes ?? []) console.log('note: ' + note);
@@ -1312,7 +1534,70 @@ function verifyDraftCommand(options) {
   );
 }
 
+/** Read the authorization facts from the workflow environment. */
+function readPublishAuthorization() {
+  return decidePublishAuthorization({
+    eventName: process.env.GITHUB_EVENT_NAME ?? '',
+    publishInput: process.env.INPUT_PUBLISH ?? false,
+    confirmInput: process.env.INPUT_CONFIRM ?? '',
+    releaseTag: process.env.RELEASE_TAG ?? '',
+    workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? '',
+    tagCommitSHA: process.env.TAG_COMMIT_SHA ?? '',
+    environmentGate: process.env.RELEASE_ENVIRONMENT_GATE ?? GATE_UNVERIFIED,
+  });
+}
+
+/**
+ * The fail-closed authorization gate. It runs BEFORE the publish job is allowed
+ * to do anything else, so a tag push, a missing confirmation or an unconfigured
+ * environment stops the job before it downloads, revalidates or writes.
+ */
+function authorizePublishCommand(options) {
+  const authorization = readPublishAuthorization();
+  for (const note of authorization.notes) console.log('note: ' + note);
+  appendStepSummary([
+    '## Publish authorization',
+    '',
+    '| fact | value |',
+    '| --- | --- |',
+    '| trigger | ' + (process.env.GITHUB_EVENT_NAME ?? '(unknown)') + ' |',
+    '| publish requested | ' + String(authorization.publishRequested) + ' |',
+    '| confirmation phrase matched | ' + String(authorization.confirmed) + ' |',
+    '| environment gate | ' + authorization.environmentGate + ' |',
+    '| authorized | ' + String(authorization.ok) + ' |',
+    '',
+    authorization.ok
+      ? 'Publishing is authorized: the dispatch was manual, the confirmation phrase matched and ' +
+        'the environment required an approval.'
+      : 'Publishing is NOT authorized. The draft stays a draft.',
+  ]);
+  for (const failure of authorization.failures) console.error('::error::' + failure);
+  if (!authorization.ok) {
+    fail(
+      'refusing to publish: the run is not an authorized publish (' +
+        authorization.failures.join(' | ') +
+        '); nothing was written',
+    );
+  }
+  writeGithubOutputs({ authorized: 'true' });
+  console.log(
+    'OK publishing is authorized: manual dispatch, confirmation phrase matched, environment gate ' +
+      authorization.environmentGate,
+  );
+}
+
 function publishDraftCommand(options) {
+  // Defence in depth: the workflow already ran authorize-publish, but the write
+  // command refuses on its own if that proof is missing.
+  const authorization = readPublishAuthorization();
+  if (!authorization.ok) {
+    for (const failure of authorization.failures) console.error('::error::' + failure);
+    fail(
+      'refusing to publish: the run is not an authorized publish (' +
+        authorization.failures.join(' | ') +
+        '); nothing was written',
+    );
+  }
   const built = readBuiltRelease(options);
   const repo = repoSlug();
   const outcome = decidePublishOutcome({
@@ -1349,6 +1634,95 @@ function publishDraftCommand(options) {
   console.log(
     'published release ' + outcome.releaseId + ' for tag ' + built.tag + ' as a public pre-release',
   );
+}
+
+/**
+ * Download the draft's own manifest and SHA256SUMS from the remote release, so a
+ * later publish run can prove the remote build without the staging run's
+ * artifacts still existing. Every downloaded byte is checksummed.
+ *
+ * `expectDraftSha256` is the manifest sha256 the staging run recorded; when it is
+ * given, the adopted manifest must hash exactly to it.
+ */
+function adoptDraftCommand(options) {
+  const repo = repoSlug();
+  const tag = requireString(options.tag, 'tag');
+  const outDir = resolve(REPO_ROOT, options['out-dir'] ?? 'staged');
+  const expectedSHA = options['expect-draft-sha'] ? hexOf(options['expect-draft-sha']) : null;
+  if (options['expect-draft-sha'] && !expectedSHA) {
+    fail('--expect-draft-sha must be a 64-hex sha256');
+  }
+  const snapshot = fetchReleaseSnapshot({ repo, tag });
+  const release = snapshot.release;
+  if (!release) fail('there is no release for tag ' + tag + ' to adopt');
+  if (release.draft !== true) {
+    fail(
+      'release ' +
+        release.id +
+        ' for tag ' +
+        tag +
+        ' is already public: a publish run cannot adopt it and will verify it instead',
+    );
+  }
+  mkdirSync(outDir, { recursive: true });
+  const wanted = [MANIFEST_NAME, SUMS_NAME];
+  const written = [];
+  for (const name of wanted) {
+    const asset = (snapshot.assets ?? []).find((entry) => entry?.name === name);
+    if (!asset) {
+      fail('the draft release ' + release.id + ' does not carry ' + name + ': nothing to adopt');
+    }
+    const text = ghApiAssetText(repo, asset.id);
+    if (text === null) fail('could not download ' + name + ' from draft release ' + release.id);
+    const actual = shaOf256(text);
+    const remoteDigest = digestOf(asset.digest);
+    if (remoteDigest && remoteDigest !== actual) {
+      fail(
+        'the downloaded ' +
+          name +
+          ' sha256 ' +
+          actual +
+          ' != the digest GitHub reports for it (' +
+          remoteDigest +
+          ')',
+      );
+    }
+    if (name === MANIFEST_NAME && expectedSHA && expectedSHA !== actual) {
+      fail(
+        'the draft ' +
+          MANIFEST_NAME +
+          ' sha256 ' +
+          actual +
+          ' is not the staged one (' +
+          expectedSHA +
+          '): the remote draft is not the build this publish was approved for',
+      );
+    }
+    writeFileSync(join(outDir, name), text);
+    written.push({ name, sha256: actual });
+  }
+  writeGithubOutputs({
+    releaseId: String(release.id),
+    draftManifestSha256: written.find((entry) => entry.name === MANIFEST_NAME).sha256,
+  });
+  console.log(
+    'OK adopted draft release ' +
+      release.id +
+      ' for tag ' +
+      tag +
+      ': ' +
+      written.map((entry) => entry.name + '=' + entry.sha256).join(' '),
+  );
+}
+
+function requireString(value, label) {
+  const text = String(value ?? '').trim();
+  if (text === '') fail('--' + label + ' is required');
+  return text;
+}
+
+function shaOf256(value) {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function verifyPublishedCommand(options) {
@@ -1655,6 +2029,8 @@ const COMMANDS = {
   'verify-published': (options) => verifyPublishedCommand(options),
   'adopt-staged': (options) => adoptStagedCommand(options),
   'environment-gate': (options) => environmentGateCommand(options),
+  'authorize-publish': (options) => authorizePublishCommand(options),
+  'adopt-draft': (options) => adoptDraftCommand(options),
   'write-evidence': (options) => writeEvidenceCommand(options),
 };
 

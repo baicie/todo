@@ -13,6 +13,7 @@ import type {
   RejectedMutation,
 } from './storage';
 import { StaleSyncSessionError } from './storage';
+import { SharedSessionChangedError, type SharedSession } from './shared-sync';
 import { resolveCloudSyncOutcome } from './cloud-status';
 import {
   normalizeBootstrap,
@@ -90,6 +91,12 @@ export interface CloudController {
   disablePush(): Promise<void>;
   testPush(): Promise<void>;
   sharedRequest<T>(path: string, init?: RequestInit): Promise<T>;
+  /**
+   * The identity shared-list sync may act as, or null when no verified cloud
+   * session is connected. The token changes with every session, so shared-list
+   * work started under one session can never be applied under another.
+   */
+  sharedSession(): SharedSession | null;
 }
 
 class RepositorySyncStore {
@@ -237,6 +244,8 @@ export function createCloudController(options: {
   let queuedSync: Promise<void> | null = null;
   let sessionGeneration = 0;
   let sessionToken: string | null = null;
+  /** Identity accepted by the last successful activation, never a typed input. */
+  let connectedIdentity: { email: string; apiUrl: string } | null = null;
   let disposed = false;
   let fenceTail: Promise<void> = Promise.resolve();
   let unsubscribe: (() => void) | null = null;
@@ -311,6 +320,7 @@ export function createCloudController(options: {
     const generation = (sessionGeneration += 1);
     const expectedToken = sessionToken;
     sessionToken = null;
+    connectedIdentity = null;
     engine = null;
     runInFlight = null;
     bootstrapInFlight = null;
@@ -456,6 +466,10 @@ export function createCloudController(options: {
 
   const expireSession = async (): Promise<void> => {
     await clearTokens();
+    // Expiring the login also ends this client's shared-data scope: the next
+    // login gets a new session token, and the shared engine refuses to replay
+    // the previous session's outbox under it until the account is re-verified.
+    await invalidateSession().catch(() => {});
     update({
       phase: 'expired',
       syncStatus: 'auth-required',
@@ -617,6 +631,10 @@ export function createCloudController(options: {
         ? existing
         : await beginSession();
     const generation = session.generation;
+    connectedIdentity = {
+      email: state().email.trim().toLowerCase(),
+      apiUrl: normalizeApiUrl(state().apiUrl),
+    };
     installEngine(generation, session.token);
     const next = await diagnostics(generation);
     if (!isCurrentGeneration(generation)) return;
@@ -986,6 +1004,7 @@ export function createCloudController(options: {
       }
       await clearTokens();
       await repository.syncSetEnabled(false);
+      connectedIdentity = null;
       if (clearLocal) {
         await repository.clearAll();
         await repository.syncClearAccountBinding();
@@ -1111,7 +1130,23 @@ export function createCloudController(options: {
   const sharedRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     if (!auth) throw new Error('请先在同步设置中登录云端账号');
     await ensureAccessToken();
+    if (state().phase !== 'connected') throw new SharedSessionChangedError();
     return auth.sharedRequest<T>(path, init);
+  };
+
+  /**
+   * Identity of the connected cloud session. The token is the session's DB
+   * fence token, so it changes on every beginSession/invalidateSession; a
+   * different account can never inherit a token because the state's email is
+   * the verified one from `verifyCode`/`initialize`.
+   */
+  const sharedSession = (): SharedSession | null => {
+    if (disposed || !sessionToken || state().phase !== 'connected') return null;
+    const identity = connectedIdentity;
+    if (!identity) return null;
+    const current = normalizeApiUrl(state().apiUrl);
+    if (!identity.email || !identity.apiUrl || current !== identity.apiUrl) return null;
+    return { token: sessionToken, account: { ...identity } };
   };
 
   const quiesceForAccountSwitch = async (): Promise<void> => {
@@ -1158,5 +1193,6 @@ export function createCloudController(options: {
     disablePush,
     testPush,
     sharedRequest,
+    sharedSession,
   };
 }

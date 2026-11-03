@@ -5,11 +5,10 @@
 //! tests need a disposable PostgreSQL database:
 //!
 //!   DATABASE_URL=postgres://todo:todo@127.0.0.1:5432/todo \
-//!     cargo test -p todo-api --test postgres_boundaries -- --ignored --skip known_defect_
+//!     cargo test -p todo-api --test postgres_boundaries -- --ignored
 //!
-//! Tests named `known_defect_*` describe the intended contract for defects that
-//! are tracked but not fixed in this change. CI skips them by name; run them
-//! explicitly to check whether a defect is still present.
+//! Every ignored test asserts a fixed contract; a defect that is fixed must be
+//! renamed away from `known_defect_` and executed by CI instead of skipped.
 
 use std::{sync::Arc, time::Duration};
 
@@ -1838,12 +1837,13 @@ async fn shared_op_ids_replay_the_original_result() {
     assert_eq!(count(&pool, receipts, fixture.list_id).await, 4);
 }
 
-/// `apps/api/src/shared.rs` validates lengths but not NUL characters or the
-/// PostgreSQL date range, so these inputs reach the database and fail as 500.
-/// shared.rs is being changed in a parallel branch, so the fix is left to it.
+/// `apps/api/src/shared.rs` used to validate lengths but not NUL characters or
+/// the PostgreSQL date range, so these inputs reached the database and failed as
+/// 500. Both checks now run before any write; this test also proves the rejected
+/// request leaves no trace: no revision bump and no op receipt.
 #[tokio::test]
-#[ignore = "known defect in shared.rs: NUL characters and out-of-range dates return 500 instead of 400; run explicitly"]
-async fn known_defect_shared_routes_reject_values_postgres_cannot_store() {
+#[ignore = "needs a disposable PostgreSQL database; run with --ignored"]
+async fn shared_routes_reject_values_postgres_cannot_store() {
     let (app, pool) = pg_app().await;
     let users = SharedUsers::login(&app, &pool).await;
     let fixture = shared_fixture(&pool, &users).await;
@@ -1875,6 +1875,14 @@ async fn known_defect_shared_routes_reject_values_postgres_cannot_store() {
             tasks.clone(),
             json!({ "title": "ok", "due_on": "-5000-01-01", "revision": 1 }),
         ),
+        // One day before the first storable date. A year-only range check would
+        // accept this and let PostgreSQL answer with a 500.
+        (
+            "due_on one day before PostgreSQL's first storable day",
+            Method::POST,
+            tasks.clone(),
+            json!({ "title": "ok", "due_on": "-4713-11-23", "revision": 1 }),
+        ),
         (
             "NUL in patched task title",
             Method::PATCH,
@@ -1882,6 +1890,7 @@ async fn known_defect_shared_routes_reject_values_postgres_cannot_store() {
             json!({ "title": "a\u{0}b", "revision": 1 }),
         ),
     ];
+    let before = shared_state(&pool, fixture.list_id).await;
     let mut failures = Vec::new();
     for (context, method, uri, body) in cases {
         let reply = send(&app, json_request(method, &uri, token, &body)).await;
@@ -1890,4 +1899,46 @@ async fn known_defect_shared_routes_reject_values_postgres_cannot_store() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(
+        shared_state(&pool, fixture.list_id).await,
+        before,
+        "a rejected request must not change the list, its tasks or its members"
+    );
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 1);
+    let receipts = "SELECT count(*) FROM shared_op_receipts WHERE list_id = $1";
+    assert_eq!(count(&pool, receipts, fixture.list_id).await, 0);
+    // The same values on the patch route must not advance the revision either.
+    let reply = send(
+        &app,
+        json_request(
+            Method::PATCH,
+            &format!("{tasks}/{}", fixture.task_id),
+            token,
+            &json!({ "due_on": "-5000-01-01", "revision": 1 }),
+        ),
+    )
+    .await;
+    reply.assert_error(StatusCode::BAD_REQUEST, "VALIDATION_FAILED");
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 1);
+
+    // The boundary itself must still be accepted: the fix may not narrow the
+    // valid range, only stop rejecting what PostgreSQL can store. 4714-11-24 BC
+    // is Julian day 0 and the first day a `date` column holds.
+    let floor = send(
+        &app,
+        json_request(
+            Method::POST,
+            &tasks,
+            token,
+            &json!({ "title": "floor date", "due_on": "-4713-11-24", "revision": 1 }),
+        ),
+    )
+    .await;
+    assert_eq!(floor.status, StatusCode::OK, "{}", floor.body);
+    assert_eq!(
+        floor.body["due_on"].as_str(),
+        Some("-4713-11-24"),
+        "the stored date must round-trip unchanged"
+    );
+    assert_eq!(list_revision(&pool, fixture.list_id).await, 2);
 }

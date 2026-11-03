@@ -4,6 +4,7 @@ import {
   SharedSyncEngine,
   type SharedEngineState,
   type SharedRequest,
+  type SharedSession,
   type SharedViewState,
 } from './shared-sync';
 import type { SharedStore } from './shared-store';
@@ -23,6 +24,10 @@ export interface SharedSyncControllerOptions {
   lifecycle: Pick<AppLifecycle, 'onResume' | 'onOnline'>;
   /** True while the cloud session is connected; the engine only talks to the API then. */
   connected: Accessor<boolean>;
+  /** The connected cloud session, or null. Shared data is fenced to it. */
+  session?: Accessor<SharedSession | null>;
+  /** Personal `boundAccount` of the same data space, for legacy-data adoption. */
+  ownerHint?: () => Promise<string | null>;
   /** Native keeps shared lists online-only and drops the copy whenever the session ends. */
   clearOnDisconnect?: boolean;
   pollMs?: number;
@@ -36,6 +41,8 @@ export function createSharedSyncController(
     request: options.request,
     store: options.store,
     pollMs: options.pollMs,
+    session: options.session ? () => options.session!() : undefined,
+    ownerHint: options.ownerHint,
   });
   const [state, setState] = createSignal(engine.getState());
   const [view, setView] = createSignal<SharedViewState>({ lists: [], invitations: [] });
@@ -71,12 +78,19 @@ export function createSharedSyncController(
   createEffect(
     on(options.connected, (connected) => {
       if (connected) {
+        // start() adopts the new session token; a reconnect to a different
+        // account supersedes the previous run instead of reusing its identity.
         engine.start(options.lifecycle);
         return;
       }
       engine.stop();
       const cleared = options.clearOnDisconnect ? options.store.clear() : Promise.resolve();
-      void cleared.then(refresh).catch(() => {});
+      void cleared
+        .then(() => {
+          engine.rebind();
+          return refresh();
+        })
+        .catch(() => {});
     }),
   );
 

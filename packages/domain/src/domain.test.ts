@@ -5,6 +5,7 @@ import {
   isDateOnly,
   nextOccurrence,
   normalizeRecurrence,
+  normalizeTags,
   parseQuickAdd,
   todayInTimeZone,
   weekdayIso,
@@ -90,6 +91,36 @@ describe('recurrence', () => {
 
   it('requires a weekday for weekly rules', () => {
     expect(() => normalizeRecurrence({ frequency: 'weekly' })).toThrow();
+  });
+});
+
+describe('tag normalization', () => {
+  it('is idempotent when a tag is only hashes and spaces', () => {
+    // Regression: cutting to 32 chars before stripping hashes turned "# #"
+    // into "#" on the first pass and "" on the second, so a stored tag could
+    // disappear on the next edit. The CI property test found it as a
+    // fast-check counterexample; this pins the exact input.
+    expect(normalizeTags(['# #'])).toEqual([]);
+    expect(normalizeTags(['#'])).toEqual([]);
+    expect(normalizeTags(['##'])).toEqual([]);
+  });
+
+  it('strips every leading hash and the spaces around it', () => {
+    expect(normalizeTags(['# 工作'])).toEqual(['工作']);
+    expect(normalizeTags(['##工作'])).toEqual(['工作']);
+    expect(normalizeTags(['# # 工作'])).toEqual(['工作']);
+    expect(normalizeTags(['工作#'])).toEqual(['工作#']);
+  });
+
+  it('bounds the stored tag by content length, not by the raw hash prefix', () => {
+    const long = 'x'.repeat(40);
+    const [tag] = normalizeTags([`#${long}`]);
+    expect(tag).toBe('x'.repeat(32));
+    expect(normalizeTags([tag ?? ''])).toEqual([tag]);
+  });
+
+  it('keeps the first spelling of a case-insensitive duplicate', () => {
+    expect(normalizeTags(['Work', 'work', 'WORK'])).toEqual(['Work']);
   });
 });
 
