@@ -21,6 +21,7 @@ const NOW = '2026-11-01T00:00:00.000Z';
 const OWNER_ID = '019a0000-0000-7000-8000-000000000001';
 /** The list owner when the cached account was only invited to it. */
 const INVITER_EMAIL = 'owner@example.com';
+const OWNER_EMAIL_O = INVITER_EMAIL;
 const ACCOUNT_A: SharedSession = {
   token: 'session-a',
   account: { email: 'a@example.com', apiUrl: 'https://api.example' },
@@ -52,7 +53,18 @@ async function seedLegacy(
   {
     ownerEmail = ACCOUNT_A.account.email,
     role = 'owner',
-  }: { ownerEmail?: string; role?: 'owner' | 'editor' | 'viewer' } = {},
+    // A second member in the same snapshot. It shares the cached role by
+    // default, which is the genuinely ambiguous case: nothing in the cache then
+    // distinguishes the two accounts. `peerRole` is for the case where another
+    // member exists but the cached role is still uniquely held.
+    peerEmail,
+    peerRole = role,
+  }: {
+    ownerEmail?: string;
+    role?: 'owner' | 'editor' | 'viewer';
+    peerEmail?: string;
+    peerRole?: 'owner' | 'editor' | 'viewer';
+  } = {},
 ): Promise<void> {
   const summary = {
     id: listId,
@@ -74,20 +86,35 @@ async function seedLegacy(
     snapshot: {
       members: [
         // The owner is always someone else on an invited list; on an owned list
-        // it is the cached account itself. The rule reads the entry for the
+        // the cached account is the owner, and listing it twice would invent a
+        // member table no server ever sends. The rule reads the entry for the
         // signed-in email, so both shapes are exercised.
-        {
-          user_id: OWNER_ID,
-          email: role === 'owner' ? ownerEmail : INVITER_EMAIL,
-          role: 'owner',
-          created_at: NOW,
-        },
+        ...(role === 'owner'
+          ? []
+          : [
+              {
+                user_id: OWNER_ID,
+                email: INVITER_EMAIL,
+                role: 'owner' as const,
+                created_at: NOW,
+              },
+            ]),
         {
           user_id: '019a0000-0000-7000-8000-000000000002',
           email: ownerEmail,
           role,
           created_at: NOW,
         },
+        ...(peerEmail === undefined
+          ? []
+          : [
+              {
+                user_id: '019a0000-0000-7000-8000-000000000003',
+                email: peerEmail,
+                role: peerRole,
+                created_at: NOW,
+              },
+            ]),
       ],
       invitations: [],
       tasks: [],
@@ -147,6 +174,17 @@ async function seedLegacy(
       ]),
     );
   });
+}
+
+/** Every raw row of the legacy space, for "nothing was touched" assertions. */
+function rawLegacyRows(store: SharedStore, listId: string): Promise<unknown> {
+  return store.transact(async (tx) => ({
+    lists: await tx.allLists(),
+    tasks: await tx.tasks(listId),
+    ops: await tx.ops(listId),
+    invitations: await tx.getMeta('invitations'),
+    binding: await tx.getMeta('accountBinding'),
+  }));
 }
 
 function engineFor(
@@ -279,7 +317,7 @@ describe('legacy shared cache read isolation', () => {
       'pending',
     ]);
     await expect(b.createTask(LIST_ID, { title: 'B 不能写进 A 的空间' })).rejects.toThrow(
-      '另一个账号',
+      '无法归属到当前账号',
     );
 
     // The owner can still claim the same bytes once their own login binds the
@@ -412,5 +450,137 @@ describe('legacy shared cache read isolation', () => {
     await seedLegacy(seeded, LIST_ID);
     expect(await seeded.bindAccount!(ACCOUNT_A.account, null)).toBe(false);
     expect(await seeded.boundAccount!()).toBeNull();
+  });
+});
+
+/**
+ * Same-role counterexample (final review).
+ *
+ * The evidence rule matches the cached account against its own `m.role` in the
+ * snapshot. That is only unique when the account's role on the list is unique.
+ * On a list where O owns and BOTH A and B are editors, the same member table and
+ * the same `summary.role = 'editor'` describe both accounts, so a rule built on
+ * the role alone accepts either one. That is not a cosmetic ambiguity: it lets
+ * B read A's cached tasks and replay A's unsent outbox, so it is a real
+ * cross-account privilege escalation between equals.
+ *
+ * Such a cache has no reliable identity marker at all - the role is shared, the
+ * member table is identical for every member, and the pre-binding release stored
+ * nothing else. It is therefore refused for every account, left byte-for-byte
+ * untouched, and never auto-claimed. The test stays even though no released
+ * build can produce this state: the shared store and its binding both landed
+ * after the last release candidate, and every supported account switch clears
+ * the shared tables first. It guards dev builds, hand-edited storage and any
+ * future regression.
+ */
+describe('legacy cache attribution: same-role members', () => {
+  it("refuses A's unbound cache for both editors instead of handing it to B", async () => {
+    const repository = newRepository();
+    await repository.initialize();
+    const store = legacyStore(repository);
+    // A's cache: editor on a list owned by O, with A's unsent outbox and no
+    // invitation row that could tell A and B apart.
+    await seedLegacy(store, LIST_ID, {
+      role: 'editor',
+      ownerEmail: ACCOUNT_A.account.email,
+      peerEmail: ACCOUNT_B.account.email,
+    });
+    const original = await rawLegacyRows(store, LIST_ID);
+
+    // B is a real editor on that same list and has completed a login here.
+    await bindPersonal(repository, ACCOUNT_B);
+    let requests = 0;
+    const session: { current: SharedSession | null } = { current: ACCOUNT_B };
+    const b = new SharedSyncEngine({
+      request: () => {
+        requests += 1;
+        throw new TypeError('Failed to fetch');
+      },
+      store,
+      session: () => session.current,
+      ownerHint: async () => (await repository.syncGetDiagnostics()).boundAccount,
+    });
+
+    // 1. B must not read A's cache.
+    expect(await b.read()).toEqual({ lists: [], invitations: [] });
+
+    // 2. B must not claim it.
+    expect(await store.boundAccount!()).toBeNull();
+    expect(await store.bindAccount!(ACCOUNT_B.account, ACCOUNT_B.account.email)).toBe(false);
+    expect(await store.boundAccount!()).toBeNull();
+
+    // 3. B must not replay A's outbox - not even after a full sync run, and no
+    //    network call may be attempted with B's token. The refusal must name the
+    //    real reason: nobody can prove ownership, so the user is not told to
+    //    clear the only copy of the data.
+    b.start();
+    await b.syncNow();
+    const refusal = b.getState().error;
+    b.stop();
+    expect(requests).toBe(0);
+    expect(refusal).toContain('无法归属到当前账号');
+    expect(await store.transact((tx) => tx.ops(LIST_ID))).toHaveLength(1);
+
+    // 4. A cannot auto-claim it either: the shared role proves nothing about
+    //    which editor wrote the cache, so awarding it to A would be a guess. The
+    //    refusal must not erase, rewrite or adopt anything - every row, the
+    //    pending outbox included, is still exactly as it was.
+    await bindPersonal(repository, ACCOUNT_A);
+    expect(await store.bindAccount!(ACCOUNT_A.account, ACCOUNT_A.account.email)).toBe(false);
+    expect(await store.boundAccount!()).toBeNull();
+    expect(await rawLegacyRows(store, LIST_ID)).toEqual(original);
+
+    // Recovery: the bytes stay put. Once the list's membership makes the role
+    // unique again (the peer leaves, or a fresh snapshot is written by a build
+    // that records ownership), the surviving account can still claim this exact
+    // cache - nothing was discarded to make the refusal safe.
+    await store.transact(async (tx) => {
+      const record = await tx.getList(LIST_ID);
+      const snapshot = record?.snapshot;
+      if (!record || !snapshot) throw new Error('the fixture lost its snapshot');
+      await tx.putList({
+        ...record,
+        snapshot: {
+          ...snapshot,
+          members: snapshot.members.filter((member) => member.email !== ACCOUNT_B.account.email),
+        },
+      });
+    });
+    expect(await store.bindAccount!(ACCOUNT_A.account, ACCOUNT_A.account.email)).toBe(true);
+    expect((await store.transact((tx) => tx.ops(LIST_ID))).map((op) => op.status)).toEqual([
+      'pending',
+    ]);
+    expect(await store.transact((tx) => tx.tasks(LIST_ID))).toHaveLength(1);
+  });
+
+  it('still lets the editor recover when another member holds a different role', async () => {
+    // Fail closed must key on ambiguity, not on "a peer exists". A viewer peer
+    // does not share the editor role, so the cached role still names A alone.
+    const repository = newRepository();
+    await repository.initialize();
+    const store = legacyStore(repository);
+    await seedLegacy(store, LIST_ID, {
+      role: 'editor',
+      ownerEmail: ACCOUNT_A.account.email,
+      peerEmail: ACCOUNT_B.account.email,
+      peerRole: 'viewer',
+    });
+
+    // B, a real viewer on that list, cannot take the cache.
+    await bindPersonal(repository, ACCOUNT_B);
+    const session: { current: SharedSession | null } = { current: ACCOUNT_B };
+    const engine = engineFor(repository, store, session);
+    expect(await engine.read()).toEqual({ lists: [], invitations: [] });
+    expect(await store.bindAccount!(ACCOUNT_B.account, ACCOUNT_B.account.email)).toBe(false);
+
+    // A, the only editor, still recovers the list and its unsent outbox.
+    await bindPersonal(repository, ACCOUNT_A);
+    session.current = ACCOUNT_A;
+    const view = await engine.read();
+    expect(view.lists.map((item) => item.record.summary.name)).toEqual(['A 的旧清单']);
+    expect(await store.bindAccount!(ACCOUNT_A.account, ACCOUNT_A.account.email)).toBe(true);
+    expect((await store.transact((tx) => tx.ops(LIST_ID))).map((op) => op.status)).toEqual([
+      'pending',
+    ]);
   });
 });

@@ -46,6 +46,15 @@ const INVITATIONS_KEY = SHARED_INVITATIONS_KEY;
 const SEQ_KEY = 'outboxSeq';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const FOREIGN_SPACE_MESSAGE = '本机共享数据属于另一个账号，请先清除本机数据或切换回该账号';
+/**
+ * An unbound legacy cache the signed-in account cannot prove it owns. It may
+ * belong to another account, or to no provable account at all when the cached
+ * role is shared, so the message must not suggest clearing local data: that
+ * would destroy an outbox nobody else holds a copy of. Nothing was modified
+ * when it is shown, and the original account keeps a path back in.
+ */
+const UNPROVEN_SPACE_MESSAGE =
+  '本机共享数据无法归属到当前账号，已停止同步且未修改任何数据。请用原先使用共享清单的账号登录；若仍无法同步，请保留本机数据并联系支持，不要清除本机数据';
 
 export type SharedSyncStatus = 'idle' | 'syncing' | 'offline' | 'error';
 
@@ -344,6 +353,8 @@ export class SharedSyncEngine {
   private runToken: string | null = null;
   /** Resolved owner of the store for the current run. */
   private runOwner: SharedAccountIdentity | null = null;
+  /** Why the current run was refused, when the store would not accept it. */
+  private refusal: string | null = null;
   /** True when the store's binding must be (re)claimed before writing. */
   private bindingDirty = true;
 
@@ -417,10 +428,14 @@ export class SharedSyncEngine {
       // No session provider (standalone engine or tests): the store is the only
       // scope and there is nothing to fence against.
       this.runOwner = null;
+      this.refusal = null;
       return true;
     }
     const session = this.sessionNow();
-    if (!session) return false;
+    if (!session) {
+      this.refusal = null;
+      return false;
+    }
     this.runOwner = session.account;
     if (!this.isCurrent(generation)) return false;
     if (!this.store.bindAccount) return true;
@@ -429,14 +444,26 @@ export class SharedSyncEngine {
       const claimed = await this.store.bindAccount(session.account, ownerHint);
       if (!this.isCurrent(generation)) return false;
       if (!claimed) {
+        this.refusal = await this.spaceRefusalMessage();
         if (this.isCurrent(generation)) {
-          this.setState({ status: 'error', error: FOREIGN_SPACE_MESSAGE });
+          this.setState({ status: 'error', error: this.refusal });
         }
         return false;
       }
+      this.refusal = null;
       this.bindingDirty = false;
     }
     return true;
+  }
+
+  /**
+   * Why the store refused this account. A space bound to somebody else names
+   * them; an unbound refusal means the legacy cache cannot be attributed to any
+   * account, and the user must not be told to clear the only copy of it.
+   */
+  private async spaceRefusalMessage(): Promise<string> {
+    const bound = await this.store.boundAccount?.();
+    return bound == null ? UNPROVEN_SPACE_MESSAGE : FOREIGN_SPACE_MESSAGE;
   }
 
   /** Mark the store's account binding for re-verification (after a clear). */
@@ -470,7 +497,7 @@ export class SharedSyncEngine {
     const claimed = await this.store.bindAccount(session.account, ownerHint);
     if (!claimed) {
       // Kept in Chinese to match the rest of the shared-list UI copy.
-      throw new Error(FOREIGN_SPACE_MESSAGE);
+      throw new Error(await this.spaceRefusalMessage());
     }
     if (this.sessionNow()?.token !== session.token) throw new SharedSessionChangedError();
   }
@@ -517,6 +544,7 @@ export class SharedSyncEngine {
     this.generation += 1;
     this.runToken = null;
     this.runOwner = null;
+    this.refusal = null;
     this.bindingDirty = true;
     this.stopTimers?.();
     this.stopTimers = null;
@@ -566,7 +594,7 @@ export class SharedSyncEngine {
           const session = this.sessionNow();
           this.setState({
             status: session ? 'error' : 'idle',
-            error: session ? FOREIGN_SPACE_MESSAGE : null,
+            error: session ? (this.refusal ?? FOREIGN_SPACE_MESSAGE) : null,
             lastSyncedAt: this.now(),
           });
         }

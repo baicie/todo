@@ -173,18 +173,32 @@ function parseBinding(raw: string | undefined): SharedAccountIdentity | null {
  * The role match is what keeps the rule from being a free pass in the other
  * direction. Any account that was ever a member saw the same member table, so
  * membership alone does not prove who wrote this space; the recorded role does,
- * because the server only sends a member their own `m.role`. A snapshot that
- * does not contain the account in exactly that role proves nothing, and a list
- * with no snapshot proves nothing at all, so both fail closed.
+ * because the server only sends a member their own `m.role`.
+ *
+ * A role is only identity evidence while exactly one member holds it. On a list
+ * where O owns and both A and B are editors, A's cache and B's cache contain the
+ * same member table and the same `summary.role`, so matching on the role alone
+ * would let either of them read and claim the other's outbox - a real privilege
+ * escalation between equals, not a hypothetical one. Such a cache has no
+ * reliable identity marker at all: the role is shared, the member table is
+ * identical for every member, and the pre-binding release stored nothing else.
+ * It is therefore refused for everyone rather than awarded to whoever signs in
+ * first. The bytes are left untouched, so an account that can later prove
+ * ownership (for example after the peer leaves the list and a snapshot without
+ * the peer is written) still finds its unsent work intact.
+ *
+ * A snapshot that does not contain the account alone in that role proves
+ * nothing, and a list with no snapshot proves nothing at all, so both fail
+ * closed.
  */
 function snapshotsProveMembership(lists: SharedListRecord[], email: string): boolean {
   const owner = email.trim().toLowerCase();
   if (owner === '') return false;
   for (const record of lists) {
     const members = record.snapshot?.members ?? [];
-    const self = members.find((member) => member.email.trim().toLowerCase() === owner);
-    if (!self) return false;
-    if (self.role !== record.summary.role) return false;
+    const sameRole = members.filter((member) => member.role === record.summary.role);
+    if (sameRole.length !== 1) return false;
+    if (sameRole[0]!.email.trim().toLowerCase() !== owner) return false;
   }
   return true;
 }
@@ -235,7 +249,9 @@ function invitationsBelongTo(raw: string | undefined, email: string): boolean {
  * A space with no cached data protects nothing and belongs to whoever is signed
  * in - that is how a brand-new space is created. Anything else needs the
  * personal `ownerHint` to name the same account AND the cached rows to be
- * attributable to it.
+ * attributable to it. Data that cannot be attributed (an ambiguous member
+ * table, a missing snapshot, unreadable metadata) is refused for every account;
+ * it is never erased, and no account is allowed to claim it by signing in.
  *
  * Pure on purpose: it runs inside a Dexie transaction, where a nested `async`
  * helper that awaits its own table reads breaks the zone and commits early.
