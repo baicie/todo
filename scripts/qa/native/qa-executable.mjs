@@ -11,8 +11,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
-const QA_PRODUCT = 'Shishi QA RC2D';
-const QA_IDENTIFIER = 'app.shishi.todo.qa';
+import { QA_IDENTIFIER, QA_PRODUCT_NAME as QA_PRODUCT, qaInstallRoots } from './qa-identity.mjs';
 
 export class QaExecutableError extends Error {
   constructor(message) {
@@ -39,12 +38,10 @@ function canonical(path, context) {
 }
 
 function defaultQaRoots() {
-  const roots = [resolve('apps/native/src-tauri/target/release')];
-  if (process.env.LOCALAPPDATA) {
-    roots.push(resolve(process.env.LOCALAPPDATA, 'Shishi QA RC2D'));
-    roots.push(resolve(process.env.LOCALAPPDATA, 'Programs', 'Shishi QA RC2D'));
-  }
-  return roots;
+  return [
+    resolve('apps/native/src-tauri/target/release'),
+    ...qaInstallRoots(process.env.LOCALAPPDATA),
+  ];
 }
 
 function inside(root, target) {

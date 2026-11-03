@@ -95,7 +95,7 @@ jobs:
           Get-Content artifacts/native-qa-installer.sha256 | Write-Output
       - uses: actions/upload-artifact@v4
         with:
-          name: shishi-rc2d-qa-windows
+          name: shishi-qa-v1.1-rc1-windows
           path: |
             apps/native/src-tauri/target/release/bundle/nsis/*.exe
             artifacts/native-qa-installer.sha256

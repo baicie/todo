@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { QaExecutableError, verifyQaExecutable } from './qa-executable.mjs';
+import { QA_PRODUCT_NAME } from './qa-identity.mjs';
 
 const HEAD = 'a'.repeat(40);
 const temps = [];
@@ -44,7 +45,7 @@ function verify(f, overrides = {}) {
     artifactRoot: f.root,
     expectedHead: HEAD,
     allowedRoots: [f.qaRoot],
-    productReader: () => 'Shishi QA RC2D',
+    productReader: () => QA_PRODUCT_NAME,
     ...overrides,
   });
 }
@@ -57,7 +58,7 @@ test('accepts a matching QA executable before any spawn', () => {
   const f = fixture();
   const result = verify(f);
   assert.equal(result.realPath.toLowerCase(), f.exe.toLowerCase());
-  assert.equal(result.productName, 'Shishi QA RC2D');
+  assert.equal(result.productName, QA_PRODUCT_NAME);
 });
 
 test('rejects hash mismatch', () => {

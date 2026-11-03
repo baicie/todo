@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
+import { QA_PRODUCT_VERSION } from './qa-identity.mjs';
 
 const artifactRoot = process.env.QA_ARTIFACT_ROOT;
 const cdp = `http://127.0.0.1:${process.env.QA_CDP_PORT || '9345'}`;
@@ -110,7 +111,7 @@ function bundle(count, run) {
     format: 'todo-export',
     version: 1,
     exportedAt: stamp,
-    appVersion: '1.0.0-rc2d',
+    appVersion: QA_PRODUCT_VERSION,
     tasks,
     lists: [],
     steps: [],

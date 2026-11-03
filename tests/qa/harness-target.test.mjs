@@ -206,7 +206,10 @@ test('Wrong ProductName is rejected', () => {
   assert.equal(decision.ok, false);
   assert.equal(decision.errorCode, ERROR_CODES.PRODUCT_NAME_MISMATCH);
   assert.match(decision.message, /refusing non-QA app/);
-  assert.match(decision.message, /Shishi QA RC2D/);
+  // Against the configured QA name, not a literal: the name moves with each
+  // release candidate, the requirement ("the message must name the QA identity
+  // it expected") does not.
+  assert.ok(decision.message.includes(QA_PRODUCT_NAME), decision.message);
   assert.match(decision.message, /never runs against production/);
 });
 
@@ -228,7 +231,10 @@ test('Stable package passed as installer is rejected', () => {
   assert.equal(decision.ok, false);
   assert.equal(decision.errorCode, ERROR_CODES.INSTALLER_PRODUCT_MISMATCH);
   assert.match(decision.message, /refusing non-QA installer/);
-  assert.match(decision.message, /expected ProductName "Shishi QA RC2D"/);
+  assert.ok(
+    decision.message.includes(`expected ProductName "${QA_PRODUCT_NAME}"`),
+    decision.message,
+  );
   assert.match(decision.message, /Shishi_0\.0\.1-dev\.1_x64-setup\.exe/);
 });
 

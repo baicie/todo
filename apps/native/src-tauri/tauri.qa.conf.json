@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Shishi QA RC2D",
-  "version": "1.0.0-rc2d",
+  "productName": "Shishi QA V1.1-RC1",
+  "version": "1.1.0-rc1",
   "identifier": "app.shishi.todo.qa",
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "Shishi QA RC2D",
+        "title": "Shishi QA V1.1-RC1",
         "width": 1180,
         "height": 780,
         "minWidth": 880,
@@ -23,7 +23,7 @@
     "targets": ["nsis"],
     "category": "Productivity",
     "shortDescription": "Shishi QA build - not a production release",
-    "longDescription": "Isolated QA build for RC2-D native reliability validation.",
+    "longDescription": "Isolated QA build for V1.1-RC1 native reliability and notification validation.",
     "windows": {
       "nsis": {
         "installMode": "currentUser"
