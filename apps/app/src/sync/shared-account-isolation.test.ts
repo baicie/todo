@@ -446,15 +446,28 @@ describe('shared-list account isolation', () => {
     const store = repository.sharedStore();
     const session: { current: SharedSession | null } = { current: ACCOUNT_A };
 
-    // Simulate the previous release: a list record already stored, but no
-    // account binding was ever written.
+    // Simulate the previous release: a list and its server snapshot were
+    // stored, but no account binding was ever written. The snapshot carries
+    // the historical owner evidence the compatibility path requires.
     await store.transact(async (tx) => {
       await tx.setMeta('invitations', '[]');
       await tx.putList({
         id: shared.id,
         summary: shared,
-        snapshot: null,
-        revision: 0,
+        snapshot: {
+          members: [
+            {
+              user_id: OWNER_ID,
+              email: ACCOUNT_A.account.email,
+              role: 'owner',
+              created_at: NOW,
+            },
+          ],
+          invitations: [],
+          tasks: [],
+          steps: [],
+        },
+        revision: 1,
         access: 'active',
         syncedAt: null,
         error: null,

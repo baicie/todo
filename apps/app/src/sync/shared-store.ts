@@ -24,6 +24,8 @@ export interface SharedAccountIdentity {
 
 /** `sharedMeta` key holding the account that owns the local shared data. */
 export const SHARED_BINDING_KEY = 'accountBinding';
+/** `sharedMeta` key holding the cached invitation index. */
+export const SHARED_INVITATIONS_KEY = 'invitations';
 
 export function normalizeSharedIdentity(identity: SharedAccountIdentity): SharedAccountIdentity {
   return {
@@ -118,6 +120,13 @@ export interface SharedStore {
    * only to adopt shared data written before bindings existed.
    */
   bindAccount?(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean>;
+  /**
+   * Whether `identity` may read this space without changing it. Bound spaces
+   * require an exact identity match. An unbound (legacy) space also requires
+   * the personal `ownerHint` and cached owner evidence, so reading never becomes
+   * a weaker gate than adoption.
+   */
+  canReadAs?(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean>;
 }
 
 export const SHARED_DB_STORES = {
@@ -149,15 +158,136 @@ function parseBinding(raw: string | undefined): SharedAccountIdentity | null {
 }
 
 /**
+ * True when the cached snapshots prove `email` was a member of every shared
+ * list, in the role the cache records for this device.
+ *
+ * The pre-binding release wrote lists and their snapshots together but no
+ * account marker. The snapshot's member table is the only identity evidence in
+ * that cache.
+ *
+ * Membership, not ownership: a legacy cache legitimately holds lists the
+ * account was only invited to, and `summary.role` is the role THIS account had
+ * on each list. Requiring the owner member to be the account would lock a
+ * legitimate editor out of their whole cache - lists and unsent outbox alike.
+ *
+ * The role match is what keeps the rule from being a free pass in the other
+ * direction. Any account that was ever a member saw the same member table, so
+ * membership alone does not prove who wrote this space; the recorded role does,
+ * because the server only sends a member their own `m.role`. A snapshot that
+ * does not contain the account in exactly that role proves nothing, and a list
+ * with no snapshot proves nothing at all, so both fail closed.
+ */
+function snapshotsProveMembership(lists: SharedListRecord[], email: string): boolean {
+  const owner = email.trim().toLowerCase();
+  if (owner === '') return false;
+  for (const record of lists) {
+    const members = record.snapshot?.members ?? [];
+    const self = members.find((member) => member.email.trim().toLowerCase() === owner);
+    if (!self) return false;
+    if (self.role !== record.summary.role) return false;
+  }
+  return true;
+}
+
+function hasCachedInvitations(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    // Unreadable metadata is data we cannot attribute, so fail closed.
+    return true;
+  }
+}
+
+/**
+ * Whether every cached invitation is addressed to `email`.
+ *
+ * The invitation index is fetched with the signed-in token and every row names
+ * its invitee, so it is attributable account data - unlike a task list, which
+ * needs the snapshot evidence below. Unparseable metadata cannot be attributed
+ * and so fails closed; `true` when there is nothing cached to attribute.
+ */
+function invitationsBelongTo(raw: string | undefined, email: string): boolean {
+  if (!raw) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) return false;
+  const owner = email.trim().toLowerCase();
+  if (owner === '') return false;
+  return parsed.every((entry) => {
+    const address = (entry as { email?: unknown } | null)?.email;
+    return typeof address === 'string' && address.trim().toLowerCase() === owner;
+  });
+}
+
+/**
+ * The one rule for an unbound (legacy) space, shared by reading and adoption.
+ *
+ * Reading must never be a weaker gate than adopting: if `read()` shows a space,
+ * `bindAccount()` may claim it, and vice versa. Both paths read the same three
+ * facts and call this.
+ *
+ * A space with no cached data protects nothing and belongs to whoever is signed
+ * in - that is how a brand-new space is created. Anything else needs the
+ * personal `ownerHint` to name the same account AND the cached rows to be
+ * attributable to it.
+ *
+ * Pure on purpose: it runs inside a Dexie transaction, where a nested `async`
+ * helper that awaits its own table reads breaks the zone and commits early.
+ */
+function unboundSpaceBelongsTo(
+  facts: {
+    lists: SharedListRecord[];
+    invitations: string | undefined;
+    ownerHint?: string | null;
+  },
+  identity: SharedAccountIdentity,
+): boolean {
+  const { lists, invitations } = facts;
+  if (lists.length === 0 && !hasCachedInvitations(invitations)) return true;
+
+  const hint = facts.ownerHint?.trim().toLowerCase() ?? '';
+  if (!hint || hint !== identity.email) return false;
+  if (!invitationsBelongTo(invitations, identity.email)) return false;
+  // A record with no snapshot carries no tasks and no outbox rows: `isEditable`
+  // and `enqueue` both require a snapshot, so no writer can attach payload to
+  // one. Such records carry no evidence either, and a space made only of them
+  // falls through to the ownerHint above - the shape a list created offline
+  // leaves behind before its first pull.
+  const evidenced = lists.filter((record) => record.snapshot !== null);
+  return evidenced.length === 0 || snapshotsProveMembership(evidenced, identity.email);
+}
+
+async function canReadBinding(
+  tx: SharedTx,
+  identity: SharedAccountIdentity,
+  ownerHint?: string | null,
+): Promise<boolean> {
+  const next = normalizeSharedIdentity(identity);
+  const bound = parseBinding(await tx.getMeta(SHARED_BINDING_KEY));
+  if (bound) return sameSharedAccount(bound, next);
+  // Read inline: a helper that awaits its own table reads inside this
+  // transaction breaks Dexie's zone and commits before the enclosing step.
+  const lists = await tx.allLists();
+  const invitations = await tx.getMeta(SHARED_INVITATIONS_KEY);
+  return unboundSpaceBelongsTo({ lists, invitations, ownerHint }, next);
+}
+
+/**
  * Claim or confirm the shared space inside one transaction.
  *
  * The space holds one account's shadow and outbox. Handing it to a different
  * account would replay A's queued ops with B's token and show A's lists to B,
- * so a mismatching binding is refused instead of overwritten. A space with no
- * lists holds nothing to protect and is claimed by the signed-in account. Data
- * written before bindings existed is adopted only when the personal data space
- * is already bound to the same email — shared data can only have been created
- * through a cloud login, which is what sets that personal binding.
+ * so a mismatching binding is refused instead of overwritten. A space that
+ * holds nothing is claimed by the signed-in account. Data written before
+ * bindings existed is adopted only when `unboundSpaceBelongsTo` accepts it,
+ * which is the same rule `canReadAs` applies: a completed login proves who is
+ * signed in now, not who wrote the unbound cache.
  */
 async function claimBinding(
   tx: SharedTx,
@@ -167,10 +297,9 @@ async function claimBinding(
   const next = normalizeSharedIdentity(identity);
   const bound = parseBinding(await tx.getMeta(SHARED_BINDING_KEY));
   if (bound) return sameSharedAccount(bound, next);
-  if ((await tx.allLists()).length > 0) {
-    const hint = ownerHint?.trim().toLowerCase() ?? '';
-    if (!hint || hint !== next.email) return false;
-  }
+  const lists = await tx.allLists();
+  const invitations = await tx.getMeta(SHARED_INVITATIONS_KEY);
+  if (!unboundSpaceBelongsTo({ lists, invitations, ownerHint }, next)) return false;
   await tx.setMeta(SHARED_BINDING_KEY, JSON.stringify({ email: next.email, apiUrl: next.apiUrl }));
   return true;
 }
@@ -233,6 +362,10 @@ export class DexieSharedStore implements SharedStore {
 
   bindAccount(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
     return this.transact((tx) => claimBinding(tx, identity, ownerHint));
+  }
+
+  canReadAs(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
+    return this.transact((tx) => canReadBinding(tx, identity, ownerHint));
   }
 
   async clear(): Promise<void> {
@@ -318,6 +451,10 @@ export class MemorySharedStore implements SharedStore {
 
   bindAccount(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
     return this.transact((tx) => claimBinding(tx, identity, ownerHint));
+  }
+
+  canReadAs(identity: SharedAccountIdentity, ownerHint?: string | null): Promise<boolean> {
+    return this.transact((tx) => canReadBinding(tx, identity, ownerHint));
   }
 
   clear(): Promise<void> {

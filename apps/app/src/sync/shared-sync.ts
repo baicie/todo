@@ -22,7 +22,7 @@ import type {
   SharedTaskRecord,
   SharedTx,
 } from './shared-store';
-import { sameSharedAccount } from './shared-store';
+import { SHARED_INVITATIONS_KEY, sameSharedAccount } from './shared-store';
 
 /**
  * Offline-capable client for shared lists.
@@ -42,7 +42,7 @@ export const SHARED_POLL_MS = 15_000;
 export const SHARED_PUSH_BATCH = 50;
 const MAX_PULLS_PER_LIST = 5;
 const TASK_FIELDS: readonly SharedTaskField[] = ['title', 'note', 'status', 'important', 'due_on'];
-const INVITATIONS_KEY = 'invitations';
+const INVITATIONS_KEY = SHARED_INVITATIONS_KEY;
 const SEQ_KEY = 'outboxSeq';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const FOREIGN_SPACE_MESSAGE = '本机共享数据属于另一个账号，请先清除本机数据或切换回该账号';
@@ -1115,24 +1115,29 @@ export class SharedSyncEngine {
    * `read()` is reachable before any network call. The space is left untouched
    * either way: nothing here adopts, clears or rewrites it, so the owner's
    * offline edits survive a different account signing in.
+   *
+   * The store owns that decision (`canReadAs`), because adoption applies exactly
+   * the same rule - reading must never be a weaker gate than claiming.
    */
   private async isStoreReadable(): Promise<boolean> {
-    if (!this.store.boundAccount) return true;
     // No session provider at all (a standalone engine or a unit test): the store
     // is the only scope, exactly as `ownerFor` treats it, so there is nothing to
     // fence against.
     if (!this.options.session) return true;
-    const bound = await this.store.boundAccount();
+    // A store that cannot attribute its data (an in-memory one, or a store from
+    // before this method existed) cannot prove ownership. Fail closed rather than
+    // assume it is fine.
+    if (!this.store.canReadAs) return false;
+    const hint = (await this.options.ownerHint?.()) ?? null;
     const session = this.sessionNow();
-    if (!bound) {
-      // Legacy space: require proof from the personal data space. A signed-out
-      // session proves nothing, so the only safe answer is no.
-      if (!session) return false;
-      const hint = (await this.options.ownerHint?.())?.trim().toLowerCase() ?? '';
-      return hint !== '' && hint === session.account.email.trim().toLowerCase();
+    // Signed out, there is no verified identity to test the space against. A
+    // bound space stays readable only while the personal space still names the
+    // same owner, so signing out keeps the last copy visible; an unbound space
+    // has no proof at all and stays hidden.
+    if (!session) {
+      const bound = await this.store.boundAccount?.();
+      return bound != null && hint !== null && hint.trim().toLowerCase() === bound.email;
     }
-    if (session) return sameSharedAccount(session.account, bound);
-    const hint = (await this.options.ownerHint?.())?.trim().toLowerCase() ?? '';
-    return hint !== '' && hint === bound.email;
+    return this.store.canReadAs(session.account, hint);
   }
 }

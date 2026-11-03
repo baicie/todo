@@ -127,12 +127,59 @@ test('release CLI: publish must be requested explicitly', () => {
 
 test('release CLI: publish-draft refuses an unauthorized run before touching the network', () => {
   // No artifact directory is supplied on purpose: the authorization check runs
-  // first, so the refusal proves nothing reached GitHub.
-  const reply = run('publish-draft', authorizedEnv({ GITHUB_WORKFLOW_SHA: undefined }));
-  assert.notEqual(reply.status, 0);
-  assert.match(reply.output, /refusing to publish/);
-  assert.ok(
-    !/gh api|HTTP \d{3}/.test(reply.output),
-    'the refusal must happen before any GitHub call: ' + reply.output,
+  // first, so the refusal proves nothing reached GitHub. Every one of these is a
+  // distinct way the publish job could lose its authorization context, and each
+  // must stop the write itself - not only the read-only authorize step.
+  const cases = {
+    'missing workflow SHA': { GITHUB_WORKFLOW_SHA: undefined },
+    'malformed workflow SHA': { GITHUB_WORKFLOW_SHA: 'main' },
+    'empty workflow SHA': { GITHUB_WORKFLOW_SHA: '   ' },
+    'unproven environment': { RELEASE_ENVIRONMENT_GATE: 'unverified' },
+    'environment 403-style state': { RELEASE_ENVIRONMENT_GATE: 'not-configured' },
+    'wrong tag commit': { TAG_COMMIT_SHA: 'not-a-commit' },
+    'unmatched phrase': { INPUT_CONFIRM: 'publish 0.0.1-dev.2' },
+    'non-dispatch event': { GITHUB_EVENT_NAME: 'push' },
+    'publish not requested': { INPUT_PUBLISH: 'false' },
+  };
+  for (const [name, overrides] of Object.entries(cases)) {
+    const reply = run('publish-draft', authorizedEnv(overrides));
+    assert.notEqual(reply.status, 0, name + ' must not reach the write');
+    assert.match(reply.output, /refusing to publish/, name + ': ' + reply.output);
+    assert.match(reply.output, /nothing was written/, name + ': ' + reply.output);
+    assert.ok(
+      !/gh api|HTTP \d{3}/.test(reply.output),
+      name + ' must fail before any GitHub call: ' + reply.output,
+    );
+  }
+});
+
+test('release CLI: guard-workflow refuses a missing or foreign workflow commit', () => {
+  // The post-approval guard reads the same GITHUB_WORKFLOW_SHA the authorization
+  // steps do. Losing it there is equally fatal: an unprovable provenance must
+  // stop the run, not silently pass.
+  const guardEnv = (overrides = {}) =>
+    authorizedEnv({
+      INPUT_ALLOW_FOREIGN: 'false',
+      GITHUB_WORKFLOW_REF: 'baicie/todo/.github/workflows/publish-dev.yml@refs/heads/main',
+      ...overrides,
+    });
+
+  const ok = run('guard-workflow', guardEnv());
+  assert.equal(ok.status, 0, ok.output);
+
+  for (const value of [undefined, '', 'main', SHA.slice(0, 39)]) {
+    const reply = run('guard-workflow', guardEnv({ GITHUB_WORKFLOW_SHA: value }));
+    assert.notEqual(reply.status, 0, JSON.stringify(value) + ' must not satisfy the guard');
+    assert.match(reply.output, /workflow commit|empty/i);
+  }
+
+  // A different, well-formed commit is refused unless it was acknowledged.
+  const foreign = run('guard-workflow', guardEnv({ GITHUB_WORKFLOW_SHA: OTHER_SHA }));
+  assert.notEqual(foreign.status, 0);
+  assert.match(foreign.output, /does not belong to the tag commit/);
+  const acknowledged = run(
+    'guard-workflow',
+    guardEnv({ GITHUB_WORKFLOW_SHA: OTHER_SHA, INPUT_ALLOW_FOREIGN: 'true' }),
   );
+  assert.equal(acknowledged.status, 0, acknowledged.output);
 });

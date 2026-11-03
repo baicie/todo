@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 import {
   DEV_IDENTIFIER,
@@ -1758,4 +1759,269 @@ test('publish workflow env: the read-only authorize job proves the same facts', 
     /steps\.gate\.outputs\.gate/,
     'the authorize job must record the gate it read',
   );
+});
+
+/* ---------------------------------------------------------------------------
+ * YAML contract for the real publish workflow.
+ *
+ * The hand-written parser above protects against substring drift, but GitHub
+ * reads YAML. These tests parse the real file and merge job/step `env` maps the
+ * way the runner does, so a step that shadows an authorization key or a job
+ * that loses one cannot pass by sharing a comment with a passing step.
+ * ------------------------------------------------------------------------- */
+
+function publishWorkflow() {
+  const workflow = parseYaml(workflowText(PUBLISH_DEV));
+  assert.equal(typeof workflow, 'object');
+  return workflow;
+}
+
+function commandSteps(job, command) {
+  const pattern = new RegExp('release-transaction\\.mjs\\s+' + command + '\\b');
+  return (job.steps ?? []).filter((step) => pattern.test(String(step.run ?? '')));
+}
+
+function effectiveEnv(job, step) {
+  // GitHub's runner merges job env first, then the step's own keys. Values are
+  // intentionally stringified so the contract compares what the shell sees.
+  return Object.fromEntries(
+    Object.entries({ ...(job.env ?? {}), ...(step.env ?? {}) }).map(([key, value]) => [
+      key,
+      String(value),
+    ]),
+  );
+}
+
+/**
+ * Resolve the small expression surface this workflow uses against fixed facts.
+ * Anything outside that surface is left as written, so a new expression fails
+ * the contract instead of being silently treated as a valid value.
+ */
+function resolveExpression(value, facts) {
+  return String(value).replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (whole, expression) => {
+    const text = expression.trim();
+    const direct = facts[text];
+    if (direct !== undefined) return String(direct);
+    const output = /^needs\.authorize\.outputs\.([A-Za-z0-9_-]+)$/.exec(text);
+    if (output) return String(facts['needs.authorize.outputs.' + output[1]] ?? whole);
+    const input = /^inputs\.([A-Za-z0-9_-]+)$/.exec(text);
+    if (input) return String(facts['inputs.' + input[1]] ?? whole);
+    return whole;
+  });
+}
+
+function publishFacts() {
+  return {
+    'github.event_name': 'workflow_dispatch',
+    'github.workflow_sha': TAG_SHA,
+    'github.workflow_ref':
+      'baicie/todo/.github/workflows/publish-dev.yml@refs/heads/feat/v1.1-rc1-integrated-closure',
+    'needs.authorize.outputs.ReleaseVersion': VERSION,
+    'needs.authorize.outputs.ReleaseTag': TAG,
+    'needs.authorize.outputs.ArtifactVersion': VERSION,
+    'needs.authorize.outputs.TagCommitSHA': TAG_SHA,
+    'needs.authorize.outputs.EnvironmentGate': GATE_ENFORCED,
+    'inputs.stage_manifest_sha256': hex('staged-manifest'),
+    'inputs.confirm': 'publish ' + TAG,
+    'inputs.allow_foreign_workflow': 'false',
+  };
+}
+
+function resolvedJobEnv(job, step, facts = publishFacts()) {
+  return Object.fromEntries(
+    Object.entries(effectiveEnv(job, step)).map(([key, value]) => [
+      key,
+      resolveExpression(value, facts),
+    ]),
+  );
+}
+
+function assertPublishAuthorizationEnvContract(workflow) {
+  const job = workflow.jobs?.publish;
+  assert.ok(job, 'publish-dev.yml must define the approval-gated publish job');
+  assert.equal(job.environment, ENVIRONMENT_NAME);
+
+  const authorize = commandSteps(job, 'authorize-publish');
+  const publish = commandSteps(job, 'publish-draft');
+  assert.equal(authorize.length, 1, 'the publish job must reauthorize exactly once');
+  assert.equal(publish.length, 1, 'the publish job must invoke publish-draft exactly once');
+
+  const required = {
+    GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_WORKFLOW_SHA: TAG_SHA,
+    RELEASE_TAG: TAG,
+    TAG_COMMIT_SHA: TAG_SHA,
+    RELEASE_ENVIRONMENT_GATE: GATE_ENFORCED,
+    INPUT_PUBLISH: 'true',
+    INPUT_CONFIRM: 'publish ' + TAG,
+  };
+  for (const step of [...authorize, ...publish]) {
+    const env = resolvedJobEnv(job, step);
+    for (const [key, value] of Object.entries(required)) {
+      assert.ok(env[key], step.name + ' must receive ' + key);
+      assert.equal(env[key], value, step.name + ' must receive the contract value for ' + key);
+    }
+    // The values come from the job env, not a step-local copy that can drift.
+    for (const key of Object.keys(required)) {
+      assert.ok(
+        !Object.hasOwn(step.env ?? {}, key),
+        step.name + ' must not shadow the job-level ' + key,
+      );
+    }
+  }
+}
+
+test('publish workflow YAML: both authorization steps inherit the full job env', () => {
+  assertPublishAuthorizationEnvContract(publishWorkflow());
+});
+
+test('publish workflow YAML: the retried publish path carries workflow SHA to every gate', () => {
+  const job = publishWorkflow().jobs?.publish;
+  assert.ok(job);
+  const guard = commandSteps(job, 'guard-workflow');
+  assert.equal(guard.length, 1, 'the publish job must re-guard workflow provenance');
+  const guardEnv = resolvedJobEnv(job, guard[0]);
+  assert.equal(guardEnv.GITHUB_WORKFLOW_SHA, TAG_SHA);
+  assert.equal(guardEnv.TAG_COMMIT_SHA, TAG_SHA);
+
+  const authorize = commandSteps(job, 'authorize-publish');
+  const publish = commandSteps(job, 'publish-draft');
+  for (const step of [...authorize, ...publish]) {
+    assert.equal(resolvedJobEnv(job, step).GITHUB_WORKFLOW_SHA, TAG_SHA);
+  }
+});
+
+test('publish workflow YAML: only workflow_dispatch may trigger publishing', () => {
+  const workflow = publishWorkflow();
+  // YAML 1.1 parsers can turn `on:` into the boolean true; YAML 1.2 (used by
+  // GitHub Actions) keeps it a string. Accept only the documented shape.
+  const triggers = workflow.on ?? workflow[true];
+  assert.ok(triggers && typeof triggers === 'object');
+  assert.deepEqual(Object.keys(triggers), ['workflow_dispatch']);
+});
+
+test('publish workflow YAML: the contract rejects a job missing GITHUB_WORKFLOW_SHA', () => {
+  const workflow = publishWorkflow();
+  // The mutation is applied to a structured copy so the on-disk workflow is
+  // untouched, but it runs the exact same contract as the real file above.
+  const mutated = structuredClone(workflow);
+  delete mutated.jobs.publish.env.GITHUB_WORKFLOW_SHA;
+  assert.throws(
+    () => assertPublishAuthorizationEnvContract(mutated),
+    /must receive GITHUB_WORKFLOW_SHA/,
+  );
+});
+
+test('publish workflow YAML: the contract rejects a step-local copy that shadows the job env', () => {
+  // The reviewed bug was a step that carried its own partial `env:` block. The
+  // contract must fail on that shape even when the job env is complete, because
+  // the next edit to the copy silently desynchronises the two gates.
+  // The duplicate carries the SAME value on purpose, so only the shadowing rule
+  // can reject it - a drifting value would trip the value check first and the
+  // shadowing rule would go untested.
+  const shadowed = structuredClone(publishWorkflow());
+  const reauthorize = commandSteps(shadowed.jobs.publish, 'authorize-publish')[0];
+  reauthorize.env = { ...(reauthorize.env ?? {}), INPUT_CONFIRM: 'publish ' + TAG };
+  assert.throws(
+    () => assertPublishAuthorizationEnvContract(shadowed),
+    /must not shadow the job-level INPUT_CONFIRM/,
+  );
+
+  // And the same for the write command, which is the one that cannot be undone.
+  const writeShadowed = structuredClone(publishWorkflow());
+  const write = commandSteps(writeShadowed.jobs.publish, 'publish-draft')[0];
+  write.env = { ...(write.env ?? {}), GITHUB_WORKFLOW_SHA: '${{ github.workflow_sha }}' };
+  assert.throws(
+    () => assertPublishAuthorizationEnvContract(writeShadowed),
+    /must not shadow the job-level GITHUB_WORKFLOW_SHA/,
+  );
+});
+
+test('publish workflow YAML: the shipped workflow satisfies the full post-approval order', () => {
+  // Order is the security property: the re-guard and the second authorization
+  // must run after the approval and before the one PATCH. Reading the parsed
+  // steps (not the file text) keeps a comment from satisfying the check.
+  const job = publishWorkflow().jobs.publish;
+  const steps = job.steps ?? [];
+  const indexOf = (command) => {
+    const found = commandSteps(job, command);
+    assert.equal(found.length, 1, 'expected exactly one ' + command + ' step');
+    return steps.indexOf(found[0]);
+  };
+
+  const guard = indexOf('guard-workflow');
+  const adopt = indexOf('adopt-draft');
+  const verify = indexOf('verify-draft');
+  const authorize = indexOf('authorize-publish');
+  const publish = indexOf('publish-draft');
+
+  assert.ok(guard < adopt, 'the workflow provenance is re-guarded before the draft is adopted');
+  assert.ok(adopt < verify, 'the adopted identity is proven before the draft is verified');
+  assert.ok(verify < authorize, 'the draft is verified before the second authorization');
+  assert.ok(authorize < publish, 'the second authorization precedes the only write');
+  assert.equal(job.environment, ENVIRONMENT_NAME, 'the job must sit behind the approval');
+});
+
+test('publish workflow YAML: the authorize job runs before the approval-gated publish job', () => {
+  // The gate is read BEFORE the human approves, so an unconfigured environment
+  // fails without ever asking a reviewer to approve an unprovable publish.
+  const workflow = publishWorkflow();
+  const authorizeJob = workflow.jobs?.authorize;
+  assert.ok(authorizeJob, 'publish-dev.yml must keep the read-only authorize job');
+  assert.equal(
+    authorizeJob.environment,
+    undefined,
+    'the inspection job must NOT be approval-gated: it runs before the approval exists',
+  );
+  const gate = commandSteps(authorizeJob, 'environment-gate');
+  const decision = commandSteps(authorizeJob, 'authorize-publish');
+  assert.equal(gate.length, 1);
+  assert.equal(decision.length, 1);
+  assert.ok(
+    authorizeJob.steps.indexOf(gate[0]) < authorizeJob.steps.indexOf(decision[0]),
+    'the environment gate must be read before the authorization decision',
+  );
+  assert.equal(
+    workflow.jobs.publish.needs,
+    'authorize',
+    'the write job must depend on the gate that proved the environment',
+  );
+});
+
+test('publish workflow YAML: every authorization key resolves to a non-empty value', () => {
+  // A key present but empty is worse than a missing one: it looks wired. Every
+  // value the gate reads must resolve, from job env or runner context, to
+  // something non-empty for a real dispatch.
+  const job = publishWorkflow().jobs.publish;
+  for (const step of [
+    ...commandSteps(job, 'authorize-publish'),
+    ...commandSteps(job, 'publish-draft'),
+    ...commandSteps(job, 'guard-workflow'),
+  ]) {
+    const env = resolvedJobEnv(job, step);
+    for (const key of [
+      'GITHUB_EVENT_NAME',
+      'GITHUB_WORKFLOW_SHA',
+      'GITHUB_WORKFLOW_REF',
+      'RELEASE_TAG',
+      'TAG_COMMIT_SHA',
+      'RELEASE_ENVIRONMENT_GATE',
+      'INPUT_PUBLISH',
+      'INPUT_CONFIRM',
+      'STAGED_MANIFEST_SHA256',
+    ]) {
+      const value = env[key];
+      assert.equal(typeof value, 'string', step.name + ' must resolve ' + key);
+      assert.notEqual(value.trim(), '', step.name + ' resolved ' + key + ' to an empty value');
+      assert.ok(
+        !/^\$\{\{/.test(value),
+        step.name +
+          ' left ' +
+          key +
+          ' as an unresolved expression (' +
+          value +
+          '): the contract must model it',
+      );
+    }
+  }
 });
