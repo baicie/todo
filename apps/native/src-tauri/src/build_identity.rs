@@ -205,12 +205,18 @@ mod tests {
         );
         assert_ne!(
             qa_identifier,
-            field(&serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"), "/identifier"),
+            field(
+                &serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"),
+                "/identifier"
+            ),
             "QA must not share the Stable install identity"
         );
         assert_ne!(
             qa_identifier,
-            field(&serde_json::from_str::<serde_json::Value>(DEV_CONFIG).expect("dev json"), "/identifier"),
+            field(
+                &serde_json::from_str::<serde_json::Value>(DEV_CONFIG).expect("dev json"),
+                "/identifier"
+            ),
             "QA must not share the Dev install identity"
         );
         // The product name is the only identity that moves with the release
@@ -231,7 +237,10 @@ mod tests {
         );
         assert_ne!(
             qa_version,
-            field(&serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"), "/version"),
+            field(
+                &serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"),
+                "/version"
+            ),
             "QA must not advertise the shipping version"
         );
     }
