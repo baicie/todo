@@ -93,7 +93,10 @@ jobs:
         run: |
           $installer = Get-ChildItem -Path apps/native/src-tauri/target/release/bundle/nsis -Filter '*.exe' -Recurse
           if ($installer.Count -ne 1) { throw "expected one QA installer, found $($installer.Count)" }
-          ./scripts/qa/native/install-smoke.ps1 -Installer $installer[0].FullName -ExpectedCommit "$env:GITHUB_SHA"
+          ./scripts/qa/native/install-smoke.ps1 `
+            -Installer $installer[0].FullName `
+            -ExpectedCommit "$env:GITHUB_SHA" `
+            -CiAuthorization "github-actions:native-qa:install-smoke"
 
       - name: Hash QA installer
         shell: pwsh

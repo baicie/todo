@@ -1,9 +1,14 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Installer,
-  [Parameter(Mandatory = $true)][string]$ExpectedCommit,
+  [string]$Installer = "",
+  [string]$ExpectedCommit = "",
+  [string]$CiAuthorization = "",
   [string]$OutFile = "artifacts/native-qa-install-smoke.json",
   [int]$InstallTimeoutSeconds = 300,
-  [int]$LaunchSeconds = 20
+  [int]$LaunchSeconds = 20,
+  # Runs every precondition (including the clean-runner check) and stops before
+  # the installer. Used by the refusal tests so they can exercise a valid CI
+  # context without installing anything.
+  [switch]$PreflightOnly
 )
 
 # Non-interactive install / provenance / uninstall smoke for the QA NSIS.
@@ -14,6 +19,18 @@ param(
 # roots are never created, and that a silent uninstall removes the install
 # directory without touching them.
 #
+# It DOES install and uninstall software, so it must never run by accident on a
+# developer's machine. Access is therefore denied by default and requires ALL of
+# the following, checked before anything else happens:
+#   - the exact authorization marker that native-qa.yml passes explicitly
+#     (a present RUNNER_TEMP is NOT sufficient, and neither is any single env var);
+#   - Windows;
+#   - GITHUB_ACTIONS=true;
+#   - RUNNER_ENVIRONMENT=github-hosted (a self-hosted runner is refused);
+#   - the workflow ref names .github/workflows/native-qa.yml;
+#   - a non-empty, existing RUNNER_TEMP.
+# A missing, empty or wrong marker is BLOCKED and the installer is never started.
+#
 # It does NOT prove desktop behaviour: no human sees a toast, a banner or a
 # click here, and this script never asserts them. Those stay NOT_RUN.
 #
@@ -22,6 +39,11 @@ param(
 # a dirty runner cannot demonstrate isolation.
 
 $ErrorActionPreference = 'Stop'
+
+# The workflow passes this exact string. Kept here (not read from the
+# environment) so a stray GITHUB_ACTIONS=true on a laptop cannot authorize a
+# destructive run on its own.
+$RequiredAuthorization = 'github-actions:native-qa:install-smoke'
 
 function Get-Sha256([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
@@ -75,6 +97,51 @@ $result = [ordered]@{
 }
 
 try {
+  # ---- execution authorization: deny by default ----------------------------
+  # Everything in this block runs before the installer path is even hashed, let
+  # alone started. Each failure sets BLOCKED (not FAIL) and names the reason.
+  $result.checks.ciContext = $false
+  if ([string]::IsNullOrWhiteSpace($CiAuthorization)) {
+    $result.status = 'BLOCKED'
+    throw "install-smoke requires the native-qa CI authorization marker; refusing to install on an unverified host"
+  }
+  if ($CiAuthorization -cne $RequiredAuthorization) {
+    $result.status = 'BLOCKED'
+    throw "install-smoke authorization marker is not the one native-qa.yml passes; refusing to install"
+  }
+  $result.checks.ciAuthorization = $true
+
+  if ([System.Environment]::OSVersion.Platform.ToString() -ne 'Win32NT') {
+    $result.status = 'BLOCKED'
+    throw 'install-smoke only runs on Windows'
+  }
+  $result.checks.windowsPlatform = $true
+
+  if ($env:GITHUB_ACTIONS -ne 'true') {
+    $result.status = 'BLOCKED'
+    throw 'install-smoke only runs under GitHub Actions (GITHUB_ACTIONS=true); a local host is refused'
+  }
+  $result.checks.githubActions = $true
+
+  if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+    $result.status = 'BLOCKED'
+    throw "install-smoke requires a GitHub-hosted ephemeral runner (RUNNER_ENVIRONMENT=github-hosted); got '$($env:RUNNER_ENVIRONMENT)'"
+  }
+  $result.checks.githubHostedRunner = $true
+
+  if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKFLOW_REF) -or $env:GITHUB_WORKFLOW_REF -notmatch '/\.github/workflows/native-qa\.yml@') {
+    $result.status = 'BLOCKED'
+    throw "install-smoke must be invoked by .github/workflows/native-qa.yml; got '$($env:GITHUB_WORKFLOW_REF)'"
+  }
+  $result.checks.nativeQaWorkflow = $true
+
+  if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or -not (Test-Path -LiteralPath $env:RUNNER_TEMP -PathType Container)) {
+    $result.status = 'BLOCKED'
+    throw 'install-smoke requires an existing RUNNER_TEMP directory'
+  }
+  $result.checks.runnerTemp = $true
+  $result.checks.ciContext = $true
+
   $qa = node (Join-Path $PSScriptRoot 'qa-identity.mjs')
   $identity = $qa | ConvertFrom-Json
   $productName = $identity.productName
@@ -85,29 +152,66 @@ try {
   $installDir = Join-Path $env:LOCALAPPDATA $productName
   $result.installDir = $installDir
 
-  if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "installer not found: $Installer" }
+  if ([string]::IsNullOrWhiteSpace($Installer) -or -not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "installer not found: $Installer" }
   $result.installerSha256 = Get-Sha256 $Installer
+  if ([string]::IsNullOrWhiteSpace($ExpectedCommit) -or $ExpectedCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "ExpectedCommit must be a 40-hex commit, got '$ExpectedCommit'"
+  }
 
   # ---- preconditions: the runner must be clean -----------------------------
-  $existingInstalls = @(Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Filter 'Shishi*' -ErrorAction SilentlyContinue)
+  # Check every location a Shishi install can occupy, not just the QA one:
+  # per-user NSIS writes %LOCALAPPDATA%\<product> or %LOCALAPPDATA%\Programs\<product>,
+  # and an uninstall entry proves an install even if its files were moved.
+  $localRoots = @(
+    (Join-Path $env:LOCALAPPDATA 'Shishi*'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Shishi*')
+  )
+  $existingInstalls = @(
+    foreach ($pattern in $localRoots) {
+      Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue
+    }
+  )
+  $uninstallKeys = @(
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  )
+  $uninstallEntries = @(
+    foreach ($key in $uninstallKeys) {
+      Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like 'Shishi*' } |
+        ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }
+    }
+  )
   $result.dataRoots.before = [ordered]@{
     stable = (Test-Path -LiteralPath $stableRoot)
     dev = (Test-Path -LiteralPath $devRoot)
     qa = (Test-Path -LiteralPath $qaDataRoot)
-    existingInstalls = @($existingInstalls | ForEach-Object { $_.Name })
+    existingInstalls = @($existingInstalls | ForEach-Object { $_.FullName })
+    uninstallEntries = @($uninstallEntries)
+    installDir = (Test-Path -LiteralPath $installDir)
   }
   $dirty = @()
   if ($result.dataRoots.before.stable) { $dirty += "stable data root exists: $stableRoot" }
   if ($result.dataRoots.before.dev) { $dirty += "dev data root exists: $devRoot" }
   if ($result.dataRoots.before.qa) { $dirty += "qa data root exists: $qaDataRoot" }
-  if ($existingInstalls.Count -gt 0) { $dirty += "existing Shishi installs: $($existingInstalls.Name -join ', ')" }
-  if (Test-Path -LiteralPath $installDir) { $dirty += "install dir exists: $installDir" }
+  if ($existingInstalls.Count -gt 0) { $dirty += "existing Shishi installs: $(@($existingInstalls | ForEach-Object { $_.FullName }) -join ', ')" }
+  if ($uninstallEntries.Count -gt 0) { $dirty += "existing Shishi uninstall entries: $($uninstallEntries -join ', ')" }
+  if ($result.dataRoots.before.installDir) { $dirty += "install dir exists: $installDir" }
   if ($dirty.Count -gt 0) {
     $result.status = 'BLOCKED'
     $result.error = 'runner is not clean: ' + ($dirty -join '; ')
     throw $result.error
   }
   $result.checks.cleanRunner = $true
+
+  if ($PreflightOnly) {
+    # Every precondition passed, nothing was installed. Used by the refusal
+    # tests to exercise the authorized context without touching the host.
+    $result.status = 'PREFLIGHT_ONLY'
+    $result.checks.preflightOnly = $true
+    return
+  }
 
   # ---- install -------------------------------------------------------------
   $installerProcess = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
@@ -217,5 +321,5 @@ try {
   Get-Content -LiteralPath $OutFile -Raw | Write-Output
 }
 
-if ($result.status -ne 'PASS') { exit 1 }
+if ($result.status -notin @('PASS', 'PREFLIGHT_ONLY')) { exit 1 }
 exit 0
