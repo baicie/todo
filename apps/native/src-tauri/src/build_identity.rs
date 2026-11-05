@@ -179,11 +179,69 @@ mod tests {
 
     #[test]
     fn qa_credential_namespace_is_unchanged() {
+        // The QA credential service predates channel isolation; existing QA
+        // refresh tokens live under this exact target. Renaming the QA build
+        // must never move it.
         assert_eq!(
             resolve("app.shishi.todo.qa")
                 .expect("qa")
                 .credential_service(),
             "app.shishi.todo.rc2d-qa.secure-token"
+        );
+    }
+
+    #[test]
+    fn qa_identity_survives_a_release_candidate_bump() {
+        // The product name and version track the release candidate and change
+        // between QA builds; the identifier, data root, credential namespace and
+        // AUMID derive from the identifier and must not. This is the contract
+        // that lets `Shishi QA RC2D` become `Shishi QA V1.1-RC1` without
+        // orphaning the previous QA build's data.
+        let qa = serde_json::from_str::<serde_json::Value>(QA_CONFIG).expect("qa json");
+        let qa_identifier = field(&qa, "/identifier");
+        assert_eq!(
+            qa_identifier, "app.shishi.todo.qa",
+            "the QA identifier is an install/credential/AUMID namespace, not a display name"
+        );
+        assert_ne!(
+            qa_identifier,
+            field(
+                &serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"),
+                "/identifier"
+            ),
+            "QA must not share the Stable install identity"
+        );
+        assert_ne!(
+            qa_identifier,
+            field(
+                &serde_json::from_str::<serde_json::Value>(DEV_CONFIG).expect("dev json"),
+                "/identifier"
+            ),
+            "QA must not share the Dev install identity"
+        );
+        // The product name is the only identity that moves with the release
+        // candidate, and it must still be recognisably QA so the harness gate
+        // (ProductName must equal the configured QA name) cannot accept a
+        // production package.
+        let qa_product = field(&qa, "/productName");
+        assert!(
+            qa_product.starts_with("Shishi QA "),
+            "QA product name must keep the QA marker: {qa_product}"
+        );
+        assert_ne!(qa_product, "Shishi Dev");
+        assert_ne!(qa_product, "Shishi");
+        let qa_version = field(&qa, "/version");
+        assert!(
+            qa_version.contains("-rc"),
+            "QA version must name its release candidate: {qa_version}"
+        );
+        assert_ne!(
+            qa_version,
+            field(
+                &serde_json::from_str::<serde_json::Value>(STABLE_CONFIG).expect("stable json"),
+                "/version"
+            ),
+            "QA must not advertise the shipping version"
         );
     }
 

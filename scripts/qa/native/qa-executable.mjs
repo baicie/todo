@@ -7,12 +7,11 @@ import {
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
-const QA_PRODUCT = 'Shishi QA RC2D';
-const QA_IDENTIFIER = 'app.shishi.todo.qa';
+import { QA_IDENTIFIER, QA_PRODUCT_NAME as QA_PRODUCT, qaInstallRoots } from './qa-identity.mjs';
 
 export class QaExecutableError extends Error {
   constructor(message) {
@@ -39,17 +38,31 @@ function canonical(path, context) {
 }
 
 function defaultQaRoots() {
-  const roots = [resolve('apps/native/src-tauri/target/release')];
-  if (process.env.LOCALAPPDATA) {
-    roots.push(resolve(process.env.LOCALAPPDATA, 'Shishi QA RC2D'));
-    roots.push(resolve(process.env.LOCALAPPDATA, 'Programs', 'Shishi QA RC2D'));
-  }
-  return roots;
+  return [
+    resolve('apps/native/src-tauri/target/release'),
+    ...qaInstallRoots(process.env.LOCALAPPDATA),
+  ];
+}
+
+/**
+ * Pure containment predicate for a `path.relative()` result.
+ *
+ * `relative` uses the HOST separator, so an escape is `..` followed by `sep`:
+ * `\` on Windows, `/` everywhere else. The original hardcoded the Windows form,
+ * which made this check always TRUE on the Linux CI runner - every path counted
+ * as inside every root, disabling the allowed-roots gate entirely.
+ *
+ * Takes `sep` as a parameter so the POSIX shape stays testable on Windows and
+ * vice versa; `inside` passes the host separator.
+ */
+export function isContained(rel, sep) {
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`);
 }
 
 function inside(root, target) {
   const rel = relative(resolve(root), resolve(target));
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..\\`) && !isAbsolute(rel);
+  // `isAbsolute` covers the other escape shape (a different drive or root).
+  return isContained(rel, sep) && !isAbsolute(rel);
 }
 
 function readPeProductName(exePath) {

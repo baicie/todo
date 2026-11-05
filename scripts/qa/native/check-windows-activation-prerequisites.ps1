@@ -41,7 +41,12 @@ try {
     [void][Microsoft.Windows.AppNotifications.AppNotificationManager, Microsoft.Windows.AppNotifications, ContentType = WindowsRuntime]
     $result.appNotificationWinRT = $true
   } catch {}
-  $shortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Shishi QA RC2D.lnk"
+  # The product name comes from tauri.qa.conf.json via qa-identity.mjs; a
+  # hardcoded copy here silently stopped matching the build after a rename.
+  $qaProduct = (& node (Join-Path $PSScriptRoot "qa-identity.mjs") --field productName 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+  if ([string]::IsNullOrWhiteSpace($qaProduct)) { throw "could not resolve the QA product name" }
+  $result.qaProductName = $qaProduct
+  $shortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$qaProduct.lnk"
   $result.qaShortcut = Test-Path -LiteralPath $shortcut
   $result.qaAumidSettings = Test-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\app.shishi.todo.qa"
   if (-not $result.dotnetAvailable) {

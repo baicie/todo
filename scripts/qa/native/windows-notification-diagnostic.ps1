@@ -32,8 +32,14 @@ try {
     $result.windowsBuild = "$($os.BuildNumber)"
   }
   $result.explorerRunning = [bool](Get-Process explorer -ErrorAction SilentlyContinue)
-  $shortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Shishi QA RC2D.lnk"
-  $result.startMenuShortcut = Test-Path -LiteralPath $shortcut
+  # Resolved from tauri.qa.conf.json so a QA rename cannot leave this probe
+  # looking for a shortcut that no longer exists (a false NOT_RUN).
+  $qaProduct = (& node (Join-Path $PSScriptRoot "qa-identity.mjs") --field productName 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+  $result.qaProductName = $qaProduct
+  if (-not [string]::IsNullOrWhiteSpace($qaProduct)) {
+    $shortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$qaProduct.lnk"
+    $result.startMenuShortcut = Test-Path -LiteralPath $shortcut
+  }
   $globalPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings"
   if (Test-Path -LiteralPath $globalPath) {
     $global = Get-ItemProperty -LiteralPath $globalPath -ErrorAction SilentlyContinue

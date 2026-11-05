@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { QaExecutableError, verifyQaExecutable } from './qa-executable.mjs';
+import { QaExecutableError, isContained, verifyQaExecutable } from './qa-executable.mjs';
+import { QA_PRODUCT_NAME } from './qa-identity.mjs';
 
 const HEAD = 'a'.repeat(40);
 const temps = [];
@@ -44,7 +45,7 @@ function verify(f, overrides = {}) {
     artifactRoot: f.root,
     expectedHead: HEAD,
     allowedRoots: [f.qaRoot],
-    productReader: () => 'Shishi QA RC2D',
+    productReader: () => QA_PRODUCT_NAME,
     ...overrides,
   });
 }
@@ -57,7 +58,7 @@ test('accepts a matching QA executable before any spawn', () => {
   const f = fixture();
   const result = verify(f);
   assert.equal(result.realPath.toLowerCase(), f.exe.toLowerCase());
-  assert.equal(result.productName, 'Shishi QA RC2D');
+  assert.equal(result.productName, QA_PRODUCT_NAME);
 });
 
 test('rejects hash mismatch', () => {
@@ -129,4 +130,37 @@ test('rejects QА/production data-root collision', () => {
   f.environment.qaDataRoot = f.environment.productionDataRoot;
   writeFileSync(join(f.root, 'environment.json'), JSON.stringify(f.environment));
   assert.throws(() => verify(f), /not isolated/);
+});
+
+test('containment uses the host separator, not a hardcoded Windows one', () => {
+  // Regression: `inside()` used to test `rel.startsWith('..' + '\\')`, so on
+  // the Linux CI runner every path looked contained and the allowed-roots gate
+  // let escapes through. Both separator shapes are asserted here so the bug
+  // cannot come back on either platform.
+  const posix = '/';
+  const windows = '\\';
+  assert.equal(isContained('todo-native.exe', posix), true);
+  assert.equal(isContained('sub/todo-native.exe', posix), true);
+  assert.equal(isContained('../outside.exe', posix), false);
+  assert.equal(isContained('..', posix), false);
+  assert.equal(isContained('', posix), false);
+
+  assert.equal(isContained('todo-native.exe', windows), true);
+  assert.equal(isContained('sub\\todo-native.exe', windows), true);
+  assert.equal(isContained('..\\outside.exe', windows), false);
+  assert.equal(isContained('..', windows), false);
+  assert.equal(isContained('', windows), false);
+
+  // A POSIX escape must not pass the Windows rule and vice versa: these are
+  // the two cases the hardcoded separator got wrong.
+  assert.equal(
+    isContained('../outside.exe', windows),
+    true,
+    'a POSIX escape is not a Windows escape',
+  );
+  assert.equal(
+    isContained('..\\outside.exe', posix),
+    true,
+    'a Windows escape is not a POSIX escape',
+  );
 });

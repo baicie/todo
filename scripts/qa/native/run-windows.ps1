@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $Timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = "rc2d-$Timestamp" }
+if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = "qa-$Timestamp" }
 if ($RunId -match '[^A-Za-z0-9._-]' -or $RunId.Contains('..')) { throw "RunId contains unsafe characters: $RunId" }
 
 $ArtifactRoot = Join-Path $RepoRoot "artifacts\native-qa\$RunId"
@@ -200,9 +200,14 @@ try {
   $decisionPath = Join-Path $ArtifactRoot "harness-target.decision.json"
   $bundleDir = Join-Path $RepoRoot "apps\native\src-tauri\target\release\bundle\nsis"
   $releaseExe = Join-Path $RepoRoot "apps\native\src-tauri\target\release\todo-native.exe"
+  # The QA product name comes from tauri.qa.conf.json through qa-identity.mjs.
+  # A hardcoded copy silently stopped matching the installed directory as soon
+  # as the QA build was renamed for a new release candidate.
+  $qaProductName = (& node (Join-Path $PSScriptRoot "qa-identity.mjs") --field productName 2>&1 | Select-Object -Last 1 | Out-String).Trim()
+  if ([string]::IsNullOrWhiteSpace($qaProductName)) { throw "could not resolve the QA product name from qa-identity.mjs" }
   $installedExes = @(
-    (Join-Path $env:LOCALAPPDATA "Shishi QA RC2D\todo-native.exe"),
-    (Join-Path $env:LOCALAPPDATA "Programs\Shishi QA RC2D\todo-native.exe")
+    (Join-Path $env:LOCALAPPDATA "$qaProductName\todo-native.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\$qaProductName\todo-native.exe")
   )
   function Get-TargetDecision([string]$Phase) {
     $appCandidates = New-Object System.Collections.Generic.List[object]
@@ -210,7 +215,7 @@ try {
       $appCandidates.Add((Get-ExeProbe $AppExe "explicit"))
     }
     # Cargo package name is todo-native, so the release build and the
-    # NSIS-installed app share the file name (ProductName stays Shishi QA RC2D).
+    # NSIS-installed app share the file name (only the ProductName differs).
     $appCandidates.Add((Get-ExeProbe $releaseExe "release-build"))
     foreach ($installedExe in $installedExes) {
       $appCandidates.Add((Get-ExeProbe $installedExe "installed"))
@@ -300,8 +305,8 @@ try {
   }
   $PartialExitCode = [int]$decision.exitCodes.partial
   $appProduct = $decision.appExeProductName
-  if ($appProduct -ne "Shishi QA RC2D") {
-    throw "refusing non-QA app ProductName=$appProduct; QA harness never runs against production"
+  if ($appProduct -ne $qaProductName) {
+    throw "refusing non-QA app ProductName=$appProduct (expected $qaProductName); QA harness never runs against production"
   }
   if ($DiscoverOnly) {
     Write-Output "Policy: $($decision.policyVersion) selection=$($decision.selection)"
@@ -347,6 +352,8 @@ try {
     tauriCli = $tauriCliVersion
     webview2 = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" -ErrorAction SilentlyContinue).pv
     qaIdentifier = "app.shishi.todo.qa"
+    qaProductName = $qaProductName
+    qaProductVersion = $decision.expectedVersion
     qaDataRoot = $qaDataRoot
     productionDataRoot = $productionDataRoot
     productionDataRootPresent = (Test-Path -LiteralPath $productionDataRoot)

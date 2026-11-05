@@ -14,15 +14,16 @@
  * Selection policy (fail closed - a doubtful target is never a silent pass):
  *
  *   1. Installer gate (always evaluated, -Install or not):
- *        explicit -Installer   -> ProductName must be "Shishi QA RC2D", plus the
- *                                 optional -ExpectedInstallerSha256.
+ *        explicit -Installer   -> ProductName must be the QA name from
+ *                                 qa-identity.mjs, plus the optional
+ *                                 -ExpectedInstallerSha256.
  *        -Install only         -> exactly one QA package in the bundle dir; zero
  *                                 is INSTALLER_REQUIRED, two or more is
  *                                 INSTALLER_AMBIGUOUS (never "newest wins").
  *      A Dev/Stable/production package is refused, never installed.
  *   2. Target:
- *        explicit -AppExe     -> wins, but must exist, must be ProductName
- *                                 "Shishi QA RC2D", must satisfy the optional
+ *        explicit -AppExe     -> wins, but must exist, must carry the QA
+ *                                 ProductName, must satisfy the optional
  *                                 -ExpectedSha256 / -ExpectedVersion.
  *        -Install (no -AppExe)-> the freshly installed QA executable is the
  *                                 target; a missing installed executable is
@@ -69,14 +70,29 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+  PRODUCTION_DATA_ROOT_DIRNAME,
+  QA_DATA_ROOT_DIRNAME,
+  QA_IDENTIFIER,
+  QA_PRODUCT_NAME,
+  QA_PRODUCT_VERSION,
+} from './qa-identity.mjs';
 
 // v2 adds the commit binding gate: a decision now records whether the selected
 // binary was built from the commit the run claims to validate.
 export const POLICY_VERSION = 'harness-target/v2';
-export const QA_PRODUCT_NAME = 'Shishi QA RC2D';
-export const QA_IDENTIFIER = 'app.shishi.todo.qa';
-export const QA_DATA_ROOT_DIRNAME = 'app.shishi.todo.qa';
-export const PRODUCTION_DATA_ROOT_DIRNAME = 'app.shishi.todo';
+// The QA identity is defined once in qa-identity.mjs, which reads the real
+// tauri.qa.conf.json - a release-candidate bump cannot leave the harness
+// looking for a product name the build no longer produces.
+export {
+  PRODUCTION_DATA_ROOT_DIRNAME,
+  QA_CREDENTIAL_SERVICE,
+  QA_DATA_ROOT_DIRNAME,
+  QA_IDENTIFIER,
+  QA_PRODUCT_NAME,
+  QA_PRODUCT_VERSION,
+  QA_RELEASE_CANDIDATE,
+} from './qa-identity.mjs';
 export const QA_EVIDENCE_DIRNAME = 'evidence';
 
 /** Shared with run-windows.ps1: 0 ok, 1 failure, 2 PARTIAL/NOT_RUN evidence. */
@@ -437,7 +453,9 @@ function resolveInstaller(context) {
       message:
         '-Install requires an NSIS installer path: no QA (' +
         QA_PRODUCT_NAME +
-        ') package was found.\nPass -Installer "<path to Shishi QA RC2D setup.exe>". Packages examined:\n' +
+        ') package was found.\nPass -Installer "<path to ' +
+        QA_PRODUCT_NAME +
+        ' setup.exe>". Packages examined:\n' +
         renderCandidateTable(candidates),
     };
   }
