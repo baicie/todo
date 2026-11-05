@@ -47,7 +47,19 @@ $RequiredAuthorization = 'github-actions:native-qa:install-smoke'
 
 function Get-Sha256([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
-  (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  # .NET directly instead of Get-FileHash: that cmdlet lives in a module, and
+  # under a host with an inherited PowerShell 7 PSModulePath the autoload can
+  # fail with "Get-FileHash is not recognized" (observed on the Windows runner
+  # when this script was invoked from Windows PowerShell 5.1 by the tests).
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $bytes = $sha.ComputeHash($stream)
+  } finally {
+    $stream.Dispose()
+    $sha.Dispose()
+  }
+  ([System.BitConverter]::ToString($bytes)).Replace('-', '').ToLowerInvariant()
 }
 
 function Get-EmbeddedCommit([string]$Path) {

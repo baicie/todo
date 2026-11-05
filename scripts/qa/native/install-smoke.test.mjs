@@ -49,6 +49,10 @@ function run({ args = [], ci = {}, temp = true } = {}) {
     'RUNNER_TEMP',
     'RUNNER_OS',
     'RUNNER_NAME',
+    // The runner exports a PowerShell 7 PSModulePath. Windows PowerShell 5.1
+    // inherits it, cannot find its own modules, and fails on cmdlets such as
+    // Get-FileHash. Removing it lets the child compute its default.
+    'PSModulePath',
   ]) {
     delete env[key];
   }
